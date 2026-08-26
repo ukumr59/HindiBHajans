@@ -9,7 +9,7 @@ on:
 # Zero-cost architecture: GitHub runner only. No Kaggle, no paid GPU, no paid API.
 # CPU-only and never falls back to the user's computer or a paid service.
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: bhajan-aabha-daily
@@ -53,18 +53,25 @@ jobs:
           test "${COUNT}" -le 4
           cat output/run_state.json
 
-      - name: Upload generated videos
-        uses: actions/upload-artifact@v4
-        with:
-          name: bhajan-aabha-${{ github.run_id }}
-          path: |
-            output/videos/*.mp4
-            output/*.json
-            output/*.srt
-          if-no-files-found: error
-          retention-days: 7
+      - name: Publish latest videos to GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -e
+          TAG="bhajan-aabha-latest"
+          echo "Replacing previous $TAG release so storage does not grow indefinitely."
+          gh release delete "$TAG" --repo "$REPO" --cleanup-tag --yes 2>/dev/null || true
+          gh release create "$TAG" \
+            --repo "$REPO" \
+            --title "Bhajan Aabha — Latest Output" \
+            --notes "Latest automatically generated Bhajan Aabha videos. Previous release is replaced on each successful run." \
+            --prerelease \
+            output/videos/*.mp4 output/*.json output/*.srt
+          echo "Release published: https://github.com/$REPO/releases/tag/$TAG"
 
       - name: Publish status
         run: |
-          echo 'Publishing is intentionally gated until YouTube/Facebook OAuth credentials are configured.'
-          echo 'No paid API or paid publishing service is used by this workflow.'
+          echo 'Publishing to YouTube/Facebook is intentionally gated until channel OAuth credentials are configured.'
+          echo 'No paid API, paid GPU, Kaggle, or Actions artifact storage is used.'
+          echo 'Video delivery is through the latest GitHub release.'
