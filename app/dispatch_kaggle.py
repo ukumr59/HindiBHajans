@@ -38,11 +38,13 @@ def main() -> None:
             'code_file': 'bhajan-aabha-worker.ipynb',
             'language': 'python',
             'kernel_type': 'notebook',
-            'is_private': True,
+            # Public visibility is intentional: Kaggle currently returns 403
+            # for kernel-session output on private notebooks, including owner
+            # access in some API paths. The notebook contains no credentials.
+            'is_private': False,
             'enable_gpu': True,
             'enable_internet': True,
-            # T4 is explicitly supported by the current Kaggle CLI image and
-            # avoids the current PyTorch/Pascal compatibility issue on P100.
+            # Avoid P100/Pascal incompatibility with the current Kaggle PyTorch image.
             'machine_shape': 'NvidiaTeslaT4',
             'dataset_sources': [],
             'competition_sources': [],
