@@ -37,7 +37,6 @@ jobs:
       - name: Wait for Kaggle output and download MP4
         env:
           KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
-          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
           KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
           KERNEL_ID: ${{ steps.dispatch.outputs.kernel_id }}
         run: |
@@ -48,8 +47,8 @@ jobs:
           for attempt in $(seq 1 60); do
             echo "--- output check ${attempt}/60 ---"
             rm -rf kaggle_output/*
-            if kaggle kernels output "${KERNEL_ID}" -p kaggle_output -o -q; then
-              echo "Kaggle output endpoint responded."
+            if env -u KAGGLE_API_TOKEN kaggle kernels output "${KERNEL_ID}" -p kaggle_output -o -q; then
+              echo "Kaggle output endpoint responded using legacy API key."
             else
               echo "Output not ready yet."
             fi
