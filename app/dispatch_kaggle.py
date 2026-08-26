@@ -19,14 +19,16 @@ def main() -> None:
         print('SETUP_PENDING: KAGGLE_USERNAME/KAGGLE_API_TOKEN are not configured.')
         return
 
-    # Use a fresh private Kaggle kernel for every GitHub run. This avoids
-    # SaveKernel 409 conflicts from re-versioning a kernel that is still
-    # queued/running/finalizing, and avoids the GetKernelSessionStatus 403
-    # that this account received from the older status endpoint.
     run_id = ''.join(ch for ch in os.getenv('GITHUB_RUN_ID', '') if ch.isalnum()) or str(int(time.time()))
     slug = f'bhajan-aabha-worker-{run_id.lower()}'
     kernel_id = f'{username}/{slug}'
     print(f'KAGGLE_WORKER_ID: {kernel_id}')
+
+    # Make the unique worker ID available to subsequent GitHub Actions steps.
+    github_output = os.getenv('GITHUB_OUTPUT', '').strip()
+    if github_output:
+        with open(github_output, 'a', encoding='utf-8') as f:
+            f.write(f'kernel_id={kernel_id}\n')
 
     with tempfile.TemporaryDirectory() as td:
         d = Path(td)
