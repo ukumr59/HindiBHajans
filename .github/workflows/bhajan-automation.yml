@@ -31,12 +31,14 @@ jobs:
         env:
           KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
           KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
         run: python -m app.dispatch_kaggle
 
       - name: Wait for Kaggle output and download MP4
         env:
           KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
           KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
           KERNEL_ID: ${{ steps.dispatch.outputs.kernel_id }}
         run: |
           set -e
