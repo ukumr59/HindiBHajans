@@ -35,44 +35,27 @@ jobs:
           KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
         run: python -m app.dispatch_kaggle
 
-      - name: Wait for Kaggle dataset output and download MP4
+      - name: Wait for public Kaggle dataset and download MP4
         env:
-          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
-          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
-          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
           DATASET_ID: ${{ steps.dispatch.outputs.dataset_id }}
           RUN_ID: ${{ github.run_id }}
         run: |
           set -e
-          rm -rf kaggle_output
+          rm -rf kaggle_output kaggle_dataset.zip
           mkdir -p kaggle_output
-          echo "Waiting for remote worker dataset: ${DATASET_ID}"
+          echo "Waiting for public remote worker dataset: ${DATASET_ID}"
 
-          if [ -n "${KAGGLE_API_TOKEN}" ]; then
-            export KAGGLE_API_TOKEN
-            unset KAGGLE_KEY
-          else
-            KAGGLE_CONFIG_DIR_PATH="${RUNNER_TEMP}/kaggle-config"
-            mkdir -p "${KAGGLE_CONFIG_DIR_PATH}"
-            python - <<'PY'
-          import json, os
-          from pathlib import Path
-          p = Path(os.environ['RUNNER_TEMP']) / 'kaggle-config' / 'kaggle.json'
-          p.write_text(json.dumps({
-              'username': os.environ['KAGGLE_USERNAME'],
-              'key': os.environ['KAGGLE_KEY'],
-          }), encoding='utf-8')
-          p.chmod(0o600)
-          PY
-            export KAGGLE_CONFIG_DIR="${KAGGLE_CONFIG_DIR_PATH}"
-            unset KAGGLE_KEY
-          fi
-
+          DOWNLOAD_URL="https://www.kaggle.com/api/v1/datasets/download/${DATASET_ID}"
           for attempt in $(seq 1 60); do
-            echo "--- dataset check ${attempt}/60 ---"
-            rm -rf kaggle_output/*
-            if kaggle datasets download "${DATASET_ID}" -p kaggle_output --unzip -o -q; then
-              echo "Dataset download endpoint responded."
+            echo "--- public dataset check ${attempt}/60 ---"
+            rm -rf kaggle_output/* kaggle_dataset.zip
+            if curl -fL --retry 1 --connect-timeout 20 --max-time 120 -sS "${DOWNLOAD_URL}" -o kaggle_dataset.zip; then
+              if unzip -tq kaggle_dataset.zip >/dev/null 2>&1; then
+                unzip -oq kaggle_dataset.zip -d kaggle_output
+                echo "Public dataset download succeeded."
+              else
+                echo "Dataset archive is not ready yet."
+              fi
             else
               echo "Dataset not ready yet."
             fi
@@ -97,7 +80,7 @@ jobs:
             fi
 
             if [ "$attempt" -eq 60 ]; then
-              echo "KAGGLE_OUTPUT_TIMEOUT: no matching MP4 dataset produced within 30 minutes."
+              echo "KAGGLE_OUTPUT_TIMEOUT: no matching public MP4 dataset produced within 30 minutes."
               find kaggle_output -maxdepth 3 -type f -print || true
               exit 1
             fi
