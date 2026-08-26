@@ -10,10 +10,6 @@ permissions:
 
 jobs:
   dispatch-cloud-worker:
-    # Use the standard Ubuntu runner for the controller. ubuntu-slim is
-    # intentionally avoided here: it is a lightweight 1-vCPU container with
-    # a 15-minute job limit, while this controller can wait up to 30 minutes
-    # for the remote Kaggle worker output.
     runs-on: ubuntu-latest
     timeout-minutes: 60
     outputs:
@@ -41,6 +37,7 @@ jobs:
       - name: Wait for Kaggle output and download MP4
         env:
           KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
           KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
           KERNEL_ID: ${{ steps.dispatch.outputs.kernel_id }}
         run: |
@@ -49,29 +46,34 @@ jobs:
           mkdir -p kaggle_output
           echo "Waiting for remote worker: ${KERNEL_ID}"
 
-          # Kaggle CLI 2.x does not treat KAGGLE_KEY as an authentication
-          # variable. Build the documented legacy kaggle.json explicitly.
-          KAGGLE_CONFIG_DIR_PATH="${RUNNER_TEMP}/kaggle-config"
-          mkdir -p "${KAGGLE_CONFIG_DIR_PATH}"
-          export KAGGLE_CONFIG_DIR_PATH
-          python - <<'PY'
+          # Prefer the same API token that successfully authenticated the
+          # worker push. Fall back to the documented legacy kaggle.json only
+          # if the API token is absent.
+          if [ -n "${KAGGLE_API_TOKEN}" ]; then
+            echo "Using Kaggle API token authentication for output retrieval."
+            unset KAGGLE_KEY
+          else
+            KAGGLE_CONFIG_DIR_PATH="${RUNNER_TEMP}/kaggle-config"
+            mkdir -p "${KAGGLE_CONFIG_DIR_PATH}"
+            python - <<'PY'
           import json, os
           from pathlib import Path
-          p = Path(os.environ['KAGGLE_CONFIG_DIR_PATH']) / 'kaggle.json'
+          p = Path(os.environ['RUNNER_TEMP']) / 'kaggle-config' / 'kaggle.json'
           p.write_text(json.dumps({
               'username': os.environ['KAGGLE_USERNAME'],
               'key': os.environ['KAGGLE_KEY'],
           }), encoding='utf-8')
           p.chmod(0o600)
           PY
-          export KAGGLE_CONFIG_DIR="${KAGGLE_CONFIG_DIR_PATH}"
-          unset KAGGLE_API_TOKEN KAGGLE_KEY
+            export KAGGLE_CONFIG_DIR="${KAGGLE_CONFIG_DIR_PATH}"
+            unset KAGGLE_KEY
+          fi
 
           for attempt in $(seq 1 60); do
             echo "--- output check ${attempt}/60 ---"
             rm -rf kaggle_output/*
             if kaggle kernels output "${KERNEL_ID}" -p kaggle_output -o -q; then
-              echo "Kaggle output endpoint responded using legacy kaggle.json."
+              echo "Kaggle output endpoint responded."
             else
               echo "Output not ready yet."
             fi
