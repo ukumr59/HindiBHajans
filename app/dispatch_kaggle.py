@@ -12,16 +12,6 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKER = ROOT / 'worker' / 'kaggle_worker.ipynb'
 
 
-def run(cmd: list[str], cwd: Path | None = None) -> str:
-    print('+', ' '.join(cmd))
-    p = subprocess.run(cmd, cwd=cwd, text=True, capture_output=True)
-    print(p.stdout)
-    if p.returncode:
-        print(p.stderr)
-        raise SystemExit(p.returncode)
-    return p.stdout
-
-
 def main() -> None:
     username = os.getenv('KAGGLE_USERNAME', '').strip()
     token = os.getenv('KAGGLE_API_TOKEN', '').strip()
@@ -50,11 +40,34 @@ def main() -> None:
         (d / 'kernel-metadata.json').write_text(json.dumps(metadata, indent=2), encoding='utf-8')
         env = os.environ.copy()
         env['KAGGLE_API_TOKEN'] = token
-        p = subprocess.run(['kaggle', 'kernels', 'push', '-p', str(d)], env=env, text=True, capture_output=True)
-        print(p.stdout)
-        if p.returncode:
-            print(p.stderr)
-            raise SystemExit(p.returncode)
+
+        # Kaggle may return HTTP 409 while the previous version of this
+        # notebook is still being registered/finalized. Retry only that
+        # transient condition; fail immediately for other errors.
+        for attempt in range(1, 5):
+            p = subprocess.run(
+                ['kaggle', 'kernels', 'push', '-p', str(d)],
+                env=env,
+                text=True,
+                capture_output=True,
+            )
+            if p.stdout:
+                print(p.stdout)
+            if p.returncode == 0:
+                break
+
+            combined = f'{p.stdout}\n{p.stderr}'
+            if p.stderr:
+                print(p.stderr)
+            if '409' not in combined and 'Conflict' not in combined:
+                raise SystemExit(p.returncode)
+            if attempt == 4:
+                print('KAGGLE_DISPATCH_FAILED: persistent 409 Conflict after 4 attempts.')
+                raise SystemExit(p.returncode)
+
+            wait_seconds = 30 * attempt
+            print(f'KAGGLE_DISPATCH_RETRY: transient 409; waiting {wait_seconds}s before attempt {attempt + 1}/4.')
+            time.sleep(wait_seconds)
 
     print(f'Dispatched Kaggle worker: {username}/{slug}')
 
