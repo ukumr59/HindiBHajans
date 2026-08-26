@@ -48,11 +48,30 @@ jobs:
           rm -rf kaggle_output
           mkdir -p kaggle_output
           echo "Waiting for remote worker: ${KERNEL_ID}"
+
+          # Kaggle CLI 2.x does not treat KAGGLE_KEY as an authentication
+          # variable. Build the documented legacy kaggle.json explicitly.
+          KAGGLE_CONFIG_DIR_PATH="${RUNNER_TEMP}/kaggle-config"
+          mkdir -p "${KAGGLE_CONFIG_DIR_PATH}"
+          export KAGGLE_CONFIG_DIR_PATH
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          p = Path(os.environ['KAGGLE_CONFIG_DIR_PATH']) / 'kaggle.json'
+          p.write_text(json.dumps({
+              'username': os.environ['KAGGLE_USERNAME'],
+              'key': os.environ['KAGGLE_KEY'],
+          }), encoding='utf-8')
+          p.chmod(0o600)
+          PY
+          export KAGGLE_CONFIG_DIR="${KAGGLE_CONFIG_DIR_PATH}"
+          unset KAGGLE_API_TOKEN KAGGLE_KEY
+
           for attempt in $(seq 1 60); do
             echo "--- output check ${attempt}/60 ---"
             rm -rf kaggle_output/*
-            if env -u KAGGLE_API_TOKEN kaggle kernels output "${KERNEL_ID}" -p kaggle_output -o -q; then
-              echo "Kaggle output endpoint responded using legacy API key."
+            if kaggle kernels output "${KERNEL_ID}" -p kaggle_output -o -q; then
+              echo "Kaggle output endpoint responded using legacy kaggle.json."
             else
               echo "Output not ready yet."
             fi
