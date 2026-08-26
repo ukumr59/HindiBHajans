@@ -15,8 +15,9 @@ WORKER = ROOT / 'worker' / 'kaggle_worker.ipynb'
 def main() -> None:
     username = os.getenv('KAGGLE_USERNAME', '').strip()
     token = os.getenv('KAGGLE_API_TOKEN', '').strip()
-    if not username or not token:
-        print('SETUP_PENDING: KAGGLE_USERNAME/KAGGLE_API_TOKEN are not configured.')
+    legacy_key = os.getenv('KAGGLE_KEY', '').strip()
+    if not username or not (token or legacy_key):
+        print('SETUP_PENDING: Kaggle username and credentials are not configured.')
         return
 
     run_id = ''.join(ch for ch in os.getenv('GITHUB_RUN_ID', '') if ch.isalnum()) or str(int(time.time()))
@@ -38,13 +39,9 @@ def main() -> None:
             'code_file': 'bhajan-aabha-worker.ipynb',
             'language': 'python',
             'kernel_type': 'notebook',
-            # Public visibility is intentional: Kaggle currently returns 403
-            # for kernel-session output on private notebooks, including owner
-            # access in some API paths. The notebook contains no credentials.
             'is_private': False,
             'enable_gpu': True,
             'enable_internet': True,
-            # Avoid P100/Pascal incompatibility with the current Kaggle PyTorch image.
             'machine_shape': 'NvidiaTeslaT4',
             'dataset_sources': [],
             'competition_sources': [],
@@ -53,7 +50,11 @@ def main() -> None:
         }
         (d / 'kernel-metadata.json').write_text(json.dumps(metadata, indent=2), encoding='utf-8')
         env = os.environ.copy()
-        env['KAGGLE_API_TOKEN'] = token
+        if legacy_key:
+            env.pop('KAGGLE_API_TOKEN', None)
+            env['KAGGLE_KEY'] = legacy_key
+        else:
+            env['KAGGLE_API_TOKEN'] = token
 
         for attempt in range(1, 4):
             p = subprocess.run(
