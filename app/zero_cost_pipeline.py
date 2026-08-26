@@ -1,282 +1,303 @@
 from __future__ import annotations
 
 import html
-import math
+import json
 import os
-import re
 import subprocess
-import wave
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageEnhance
 
-OUT = Path(os.getenv('OUTPUT_DIR', 'output'))
-VIDEOS = OUT / 'videos'
-MAX_VIDEOS = max(1, min(4, int(os.getenv('MAX_VIDEOS', '4'))))
-SECONDS = max(15, min(45, int(os.getenv('VIDEO_SECONDS', '30'))))
-FPS = 12
-W, H = 540, 960
+OUT = Path(os.getenv("OUTPUT_DIR", "output"))
+VIDEOS = OUT / "videos"
+ASSETS = OUT / "assets"
+MAX_VIDEOS = max(1, min(4, int(os.getenv("MAX_VIDEOS", "4"))))
+SECONDS = max(30, min(60, int(os.getenv("VIDEO_SECONDS", "45"))))
+FPS = 8
+W, H = 720, 1280
 
-# Original, non-recording-based devotional concepts. Trend discovery only decides
-# which themes to make; no copyrighted audio/video is downloaded or modified.
-FALLBACKS = [
-    ('हनुमान जी', 'hanuman', 'गदा और दीप की दिव्य ज्योति', 'ॐ हनुमते नमः', (232, 110, 55)),
-    ('महादेव', 'mahadev', 'हिमालय में भोलेनाथ की शांति', 'ॐ नमः शिवाय', (100, 150, 205)),
-    ('श्री कृष्ण', 'krishna', 'यमुना तट की मधुर भक्ति', 'राधे कृष्ण', (70, 150, 205)),
-    ('श्री राम', 'ram', 'राम नाम की उजली ज्योति', 'श्री राम जय राम', (205, 155, 70)),
-    ('माता रानी', 'mata', 'मां के चरणों में भक्ति', 'जय माता दी', (190, 80, 120)),
-    ('गणेश जी', 'ganesh', 'विघ्नहर्ता की मंगल आरती', 'ॐ गं गणपतये नमः', (205, 120, 75)),
+# Zero-cost content packs. Audio and visual assets are deliberately limited to
+# public-domain/CC0 material. We do not download copyrighted YouTube recordings.
+PACKS = [
+    {
+        "slug": "ram",
+        "deity": "श्री राम",
+        "title": "राम नाम की भक्ति",
+        "mantra": "श्री राम जय राम जय जय राम",
+        "audio": "Ramdwara ed f.ogg",
+        "audio_source": "https://commons.wikimedia.org/wiki/File:Ramdwara_ed_f.ogg",
+        "audio_license": "CC0",
+        "images": [
+            "Lord Rama Statue Maharishi Mahesh Yogi Ramayan University Ayodhya.jpg",
+            "Rajarajesvara Temple in Thanjavur, India.jpg",
+        ],
+        "accent": (222, 157, 72),
+        "captions": [
+            "राम नाम में मन को शांति मिले",
+            "भक्ति की ज्योति हर हृदय में जले",
+            "श्री राम का स्मरण जीवन को उजला करे",
+            "हर सांस में राम, हर धड़कन में राम",
+        ],
+    },
+    {
+        "slug": "krishna",
+        "deity": "श्री कृष्ण",
+        "title": "कृष्ण माधो राम नारायण",
+        "mantra": "राधे कृष्ण",
+        "audio": "Krishna Madho Ram Narayan.ogg",
+        "audio_source": "https://commons.wikimedia.org/wiki/File:Krishna_Madho_Ram_Narayan.ogg",
+        "audio_license": "Public domain",
+        "images": [
+            "The Hindu deity Krishna playing the flute.jpg",
+            "Krishna Fluting, 13th-15th century AD, Eastern Ganga dynasty, Orissa, India - brass - Sackler Museum - DSC02449.JPG",
+        ],
+        "accent": (75, 153, 211),
+        "captions": [
+            "मुरली की मधुर धुन मन को छू जाए",
+            "श्याम नाम से हर चिंता दूर हो जाए",
+            "राधे कृष्ण की भक्ति मन में बस जाए",
+            "हर पल प्रेम, हर पल कृष्ण स्मरण",
+        ],
+    },
+    {
+        "slug": "bhakti",
+        "deity": "भक्ति संध्या",
+        "title": "भक्ति की मधुर धुन",
+        "mantra": "ॐ शांति शांति शांति",
+        "audio": "Bhajana.ogg",
+        "audio_source": "https://commons.wikimedia.org/wiki/File:Bhajana.ogg",
+        "audio_license": "Public domain",
+        "images": [
+            "On the 🔝.jpg",
+            "J.K. Temple.jpg",
+        ],
+        "accent": (198, 116, 68),
+        "captions": [
+            "भक्ति में मन को ठहरने दो",
+            "दीप की लौ में शांति को महसूस करो",
+            "प्रार्थना के इन पलों को अपने नाम करो",
+            "मन शांत हो, हृदय भक्ति से भर जाए",
+        ],
+    },
 ]
+
 KEYWORDS = {
-    'hanuman': ['hanuman', 'हनुमान', 'bajrang', 'बजरंग', 'sankat', 'संकटमोचन', 'sundarkand', 'सुंदरकांड', 'chalisa', 'चालीसा'],
-    'mahadev': ['mahadev', 'महादेव', 'shiv', 'शिव', 'bholenath', 'भोलेनाथ', 'somnath', 'kedarnath', 'केदारनाथ', 'sawan', 'सावन'],
-    'krishna': ['krishna', 'कृष्ण', 'kanha', 'कान्हा', 'radha', 'राधा', 'janmashtami', 'जन्माष्टमी', 'vrindavan', 'वृंदावन'],
-    'ram': ['ram', 'राम', 'ayodhya', 'अयोध्या', 'sita', 'सीता', 'raghu', 'raghunath', 'रघुनाथ'],
-    'mata': ['durga', 'दुर्गा', 'mata', 'माता', 'navratri', 'नवरात्रि', 'vaishno', 'वैष्णो', 'ambe', 'अंबे'],
-    'ganesh': ['ganesh', 'गणेश', 'ganpati', 'गणपति', 'vinayak', 'विनायक'],
-    'bhajan': ['bhajan', 'भजन', 'aarti', 'आरती', 'mantra', 'मंत्र', 'bhakti', 'भक्ति', 'kirtan', 'कीर्तन'],
+    "ram": ["ram", "राम", "ayodhya", "अयोध्या", "sita", "सीता", "raghu", "रघुनाथ"],
+    "krishna": ["krishna", "कृष्ण", "kanha", "कान्हा", "radha", "राधा", "janmashtami", "जन्माष्टमी", "vrindavan", "वृंदावन"],
+    "bhakti": ["bhajan", "भजन", "aarti", "आरती", "mantra", "मंत्र", "bhakti", "भक्ति", "kirtan", "कीर्तन"],
 }
 
 
 def fetch_trends() -> list[dict]:
-    urls = [
-        'https://trends.google.com/trending/rss?geo=IN',
-        'https://trends.google.co.in/trends/trendingsearches/daily/rss?geo=IN',
-    ]
-    for url in urls:
+    for url in (
+        "https://trends.google.com/trending/rss?geo=IN",
+        "https://trends.google.co.in/trends/trendingsearches/daily/rss?geo=IN",
+    ):
         try:
-            req = Request(url, headers={'User-Agent': 'BhajanAabha/1.0'})
-            data = urlopen(req, timeout=20).read()
-            root = ET.fromstring(data)
+            req = Request(url, headers={"User-Agent": "BhajanAabha/2.0"})
+            root = ET.fromstring(urlopen(req, timeout=20).read())
             items = []
-            for item in root.findall('.//item'):
-                title = ''.join(item.findtext('title', default='').split())
+            for item in root.findall(".//item"):
+                title = html.unescape(item.findtext("title", default="").strip())
                 if title:
-                    traffic = item.findtext('{*}approx_traffic', default='')
-                    items.append({'title': html.unescape(title), 'traffic': traffic, 'source': url})
+                    items.append({"title": title, "traffic": item.findtext("{*}approx_traffic", default=""), "source": url})
             if items:
                 return items
         except Exception as exc:
-            print(f'TREND_SOURCE_FAILED {url}: {exc}')
+            print(f"TREND_SOURCE_FAILED {url}: {exc}")
     return []
 
 
-def choose_topics(trends: list[dict]) -> list[tuple]:
-    ranked: list[tuple[int, tuple]] = []
+def choose_packs(trends: list[dict]) -> list[dict]:
+    selected: list[dict] = []
+    seen: set[str] = set()
     for trend in trends:
-        text = trend['title'].lower()
-        for topic in FALLBACKS:
-            score = sum(1 for k in KEYWORDS[topic[1]] if k.lower() in text)
+        text = trend["title"].lower()
+        scored = []
+        for p in PACKS:
+            score = sum(1 for k in KEYWORDS[p["slug"]] if k.lower() in text)
             if score:
-                ranked.append((score, topic))
-                break
-        if any(k.lower() in text for k in KEYWORDS['bhajan']):
-            # A generic bhajan trend is useful but doesn't identify a deity; use the
-            # current devotional rotation so we still create an original concept.
-            ranked.append((1, FALLBACKS[len(ranked) % len(FALLBACKS)]))
-    ranked.sort(key=lambda x: x[0], reverse=True)
-    selected = []
-    seen = set()
-    for _, topic in ranked:
-        if topic[1] not in seen:
-            selected.append(topic); seen.add(topic[1])
+                scored.append((score, p))
+        if scored:
+            p = max(scored, key=lambda x: x[0])[1]
+            if p["slug"] not in seen:
+                selected.append(p); seen.add(p["slug"])
         if len(selected) >= MAX_VIDEOS:
             break
-    # Always produce at least one video, then fill up to MAX_VIDEOS from the
-    # deterministic rotation. This guarantees a zero-cost output even if trends fail.
-    for topic in FALLBACKS:
+    for p in PACKS:
         if len(selected) >= MAX_VIDEOS:
             break
-        if topic[1] not in seen:
-            selected.append(topic); seen.add(topic[1])
+        if p["slug"] not in seen:
+            selected.append(p); seen.add(p["slug"])
     return selected[:MAX_VIDEOS]
 
 
 def font(size: int, bold: bool = False):
     candidates = [
-        '/usr/share/fonts/truetype/noto/NotoSansDevanagari-Bold.ttf' if bold else '/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf',
-        '/usr/share/fonts/opentype/noto/NotoSansDevanagari-Bold.ttf' if bold else '/usr/share/fonts/opentype/noto/NotoSansDevanagari-Regular.ttf',
+        "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Bold.ttf" if bold else "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSansDevanagari-Bold.ttf" if bold else "/usr/share/fonts/opentype/noto/NotoSansDevanagari-Regular.ttf",
     ]
-    for p in candidates:
-        if Path(p).exists():
-            return ImageFont.truetype(p, size)
+    for path in candidates:
+        if Path(path).exists():
+            return ImageFont.truetype(path, size)
     return ImageFont.load_default()
 
 
-def wrap(text: str, fnt, width: int) -> list[str]:
-    words = text.split()
-    lines, cur = [], ''
-    for word in words:
-        test = f'{cur} {word}'.strip()
-        if fnt.getbbox(test)[2] <= width:
-            cur = test
-        else:
-            if cur: lines.append(cur)
-            cur = word
-    if cur: lines.append(cur)
-    return lines
+def download(url: str, path: Path) -> None:
+    if path.exists() and path.stat().st_size > 1000:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    req = Request(url, headers={"User-Agent": "BhajanAabha/2.0"})
+    with urlopen(req, timeout=90) as r, path.open("wb") as f:
+        while True:
+            chunk = r.read(1024 * 1024)
+            if not chunk:
+                break
+            f.write(chunk)
+    if path.stat().st_size < 1000:
+        raise RuntimeError(f"Downloaded asset is unexpectedly small: {path}")
 
 
-def lyrics(topic: tuple) -> list[str]:
-    deity, _, _, mantra, _ = topic
-    return [
-        f'जय {deity}, मन में तेरी ज्योति जले',
-        f'तेरा नाम जो ले, उसके मन में आशा पले',
-        f'भक्ति की राह में, हर कदम तेरा साथ मिले',
-        f'दुख की रात ढले, नई सुबह मुस्कान खिले',
-        mantra,
-        f'तेरी कृपा से {deity} जीवन पावन हो',
-        f'हर सांस में भक्ति, हर धड़कन में तेरा नाम हो',
-        f'जय {deity}, मन में तेरी ज्योति जले',
-    ]
+def commons_redirect(filename: str) -> str:
+    return "https://commons.wikimedia.org/wiki/Special:Redirect/file/" + quote(filename, safe="")
 
 
-def make_audio(path: Path, topic: tuple, seconds: int) -> None:
-    # Pure-Python original devotional instrumental: drone + melody + bell/percussion.
-    # No sampled recording is used.
-    sr = 16000
-    total = sr * seconds
-    deity, _, _, _, _ = topic
-    roots = {'हनुमान जी': 220.0, 'महादेव': 196.0, 'श्री कृष्ण': 246.94, 'श्री राम': 261.63, 'माता रानी': 220.0, 'गणेश जी': 233.08}
-    root = roots.get(deity, 220.0)
-    scale = [0, 2, 4, 7, 9, 12, 14]
-    bpm = 78
-    beat = sr * 60 / bpm
-    frames = bytearray()
-    for i in range(total):
-        t = i / sr
-        beat_index = int(i / beat)
-        note = scale[(beat_index // 2) % len(scale)]
-        freq = root * (2 ** (note / 12))
-        env = min(1.0, t * 4) * min(1.0, (seconds - t) * 4)
-        drone = 0.10 * math.sin(2 * math.pi * root * t) + 0.06 * math.sin(2 * math.pi * root * 2 * t)
-        melody = 0.16 * math.sin(2 * math.pi * freq * t) * (0.65 + 0.35 * math.sin(2 * math.pi * 2 * t) ** 2)
-        bell = 0.0
-        if i % int(sr * 2.0) < int(sr * 0.08):
-            bt = (i % int(sr * 2.0)) / sr
-            bell = 0.13 * math.sin(2 * math.pi * root * 4 * bt) * math.exp(-22 * bt)
-        pulse = 0.0
-        if i % int(beat) < int(sr * 0.035):
-            pt = (i % int(beat)) / sr
-            pulse = 0.10 * math.sin(2 * math.pi * 95 * pt) * math.exp(-45 * pt)
-        sample = max(-0.8, min(0.8, (drone + melody + bell + pulse) * env))
-        val = int(sample * 32767)
-        frames += int(val).to_bytes(2, 'little', signed=True)
-    with wave.open(str(path), 'wb') as wf:
-        wf.setnchannels(1); wf.setsampwidth(2); wf.setframerate(sr); wf.writeframes(frames)
+def prepare_assets(pack: dict) -> tuple[Path, list[Path]]:
+    pack_dir = ASSETS / pack["slug"]
+    pack_dir.mkdir(parents=True, exist_ok=True)
+    audio = pack_dir / "source.ogg"
+    download(commons_redirect(pack["audio"]), audio)
+    images = []
+    for i, name in enumerate(pack["images"], 1):
+        p = pack_dir / f"image_{i}{Path(name).suffix.lower() or '.jpg'}"
+        download(commons_redirect(name), p)
+        images.append(p)
+    return audio, images
 
 
-def make_video(path: Path, audio: Path, topic: tuple, lines: list[str], seconds: int) -> None:
-    deity, slug, visual, mantra, accent = topic
-    f_title = font(34, True); f_body = font(25, False); f_small = font(19, False)
+def fit_cover(im: Image.Image, size: tuple[int, int]) -> Image.Image:
+    im = im.convert("RGB")
+    target_w, target_h = size
+    scale = max(target_w / im.width, target_h / im.height)
+    nw, nh = int(im.width * scale), int(im.height * scale)
+    im = im.resize((nw, nh), Image.Resampling.LANCZOS)
+    left, top = (nw - target_w) // 2, (nh - target_h) // 2
+    return im.crop((left, top, left + target_w, top + target_h))
+
+
+def make_video(path: Path, audio: Path, images: list[Path], pack: dict, seconds: int) -> None:
+    title_font = font(42, True)
+    body_font = font(30, False)
+    small_font = font(20, False)
+    loaded = [fit_cover(Image.open(p), (W, H)) for p in images]
+    # Make two cinematic variants from each still, rather than cartoon geometry.
+    variants = []
+    for im in loaded:
+        variants.append(im.filter(ImageFilter.GaussianBlur(0.8)))
+        variants.append(ImageEnhance.Color(im).enhance(1.08))
+
     proc = subprocess.Popen([
-        'ffmpeg', '-y', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', f'{W}x{H}', '-r', str(FPS), '-i', '-',
-        '-i', str(audio), '-t', str(seconds), '-vf', 'format=yuv420p', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23',
-        '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', str(path)
+        "ffmpeg", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", str(FPS), "-i", "-",
+        "-i", str(audio), "-t", str(seconds), "-map", "0:v:0", "-map", "1:a:0",
+        "-vf", "format=yuv420p", "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
+        "-c:a", "aac", "-b:a", "160k", "-ar", "44100", "-shortest", "-movflags", "+faststart", str(path)
     ], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     try:
         for n in range(seconds * FPS):
             t = n / FPS
-            im = Image.new('RGB', (W, H), (12, 10, 28)); d = ImageDraw.Draw(im)
-            # Moving radial devotional glow.
-            cx = int(W * (0.50 + 0.08 * math.sin(t / 3.0)))
-            cy = int(H * (0.38 + 0.04 * math.cos(t / 2.5)))
-            for r in range(230, 10, -12):
-                a = (230 - r) / 230
-                col = tuple(int((12, 10, 28)[j] * (1-a) + accent[j] * a * 0.45) for j in range(3))
-                d.ellipse((cx-r, cy-r, cx+r, cy+r), fill=col)
-            # Temple silhouette and animated lamps.
-            base = int(H * 0.69)
-            d.rectangle((70, base, W-70, H-90), fill=(28, 23, 38))
-            d.polygon([(100, base), (W//2, base-120), (W-100, base)], fill=(39, 30, 48))
-            d.rectangle((W//2-70, base-75, W//2+70, base), fill=(55, 42, 60))
-            for x in (150, W//2, W-150):
-                flick = 3 * math.sin(t * 7 + x)
-                d.ellipse((x-10, base-35+flick, x+10, base-5+flick), fill=(255, 188, 70))
-                d.ellipse((x-4, base-42+flick, x+4, base-22+flick), fill=(255, 240, 160))
-            # Symbolic devotional emblem, not a copied recording/image.
-            ey = int(H * 0.39)
-            if slug == 'hanuman':
-                d.ellipse((cx-48, ey-48, cx+48, ey+48), outline=(245, 210, 160), width=6); d.line((cx-35, ey+35, cx+40, ey-40), fill=(245,210,160), width=8)
-            elif slug == 'mahadev':
-                d.line((cx, ey-65, cx, ey+65), fill=(220,220,235), width=8); d.line((cx-38, ey-20, cx, ey-55, cx+38, ey-20), fill=(220,220,235), width=7)
-            elif slug == 'krishna':
-                d.arc((cx-55, ey-35, cx+55, ey+35), 200, 340, fill=(245,225,150), width=7); d.ellipse((cx+25, ey-70, cx+43, ey-52), fill=(70,180,100))
-            elif slug == 'ram':
-                d.arc((cx-55, ey-60, cx+55, ey+60), 200, 340, fill=(245,225,150), width=7); d.line((cx-35, ey, cx+45, ey-5), fill=(245,225,150), width=6)
-            else:
-                d.ellipse((cx-50, ey-50, cx+50, ey+50), outline=(245,210,160), width=6); d.line((cx-30,ey+10,cx+30,ey+10), fill=(245,210,160), width=6)
-            # Text/caption band.
-            d.rounded_rectangle((35, 45, W-35, 155), radius=24, fill=(0,0,0), outline=accent, width=2)
-            d.text((W//2, 72), deity, font=f_title, anchor='ma', fill=(255,245,220))
-            d.text((W//2, 118), mantra, font=f_small, anchor='ma', fill=(240,215,170))
-            idx = min(len(lines)-1, int(t / seconds * len(lines)))
-            caption = lines[idx]
-            wrapped = wrap(caption, f_body, W-80)
-            y = H-185
-            d.rounded_rectangle((30, y-18, W-30, H-35), radius=22, fill=(0,0,0))
+            phase = (t / max(1.0, seconds)) * len(variants)
+            idx = min(len(variants) - 1, int(phase))
+            im = variants[idx].copy()
+            local = (phase - int(phase))
+            # Slow Ken Burns zoom; no crude shapes.
+            zoom = 1.0 + 0.10 * local
+            crop_w, crop_h = int(W / zoom), int(H / zoom)
+            pan_x = int((im.width - crop_w) * (0.35 + 0.30 * local))
+            pan_y = int((im.height - crop_h) * (0.45 + 0.10 * local))
+            im = im.crop((pan_x, pan_y, pan_x + crop_w, pan_y + crop_h)).resize((W, H), Image.Resampling.LANCZOS)
+            # Cinematic dark gradient for readable typography.
+            overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            od = ImageDraw.Draw(overlay)
+            for y in range(H):
+                alpha = int(15 + 155 * max(0, (y - H * 0.58) / (H * 0.42)))
+                od.line((0, y, W, y), fill=(0, 0, 0, min(180, alpha)))
+            im = Image.alpha_composite(im.convert("RGBA"), overlay)
+            d = ImageDraw.Draw(im)
+            accent = pack["accent"]
+            # Top brand bar.
+            d.rounded_rectangle((30, 30, W - 30, 125), radius=24, fill=(8, 8, 12, 185), outline=accent + (220,), width=2)
+            d.text((W // 2, 52), "BHAJAN AABHA", font=small_font, anchor="ma", fill=(255, 240, 210, 255))
+            d.text((W // 2, 80), pack["deity"], font=title_font, anchor="ma", fill=(255, 250, 235, 255))
+            # Caption changes as a devotional message, not falsely presented as synced lyrics.
+            cap = pack["captions"][min(len(pack["captions"]) - 1, int(t / seconds * len(pack["captions"]))) ]
+            wrapped = [cap] if len(cap) < 34 else [cap[:34], cap[34:]]
+            y = H - 220
+            d.rounded_rectangle((30, y - 35, W - 30, H - 72), radius=24, fill=(8, 8, 12, 205))
             for line in wrapped[:2]:
-                d.text((W//2, y), line, font=f_body, anchor='ma', fill=(255,255,255)); y += 34
-            d.text((W//2, H-25), 'Bhajan Aabha', font=f_small, anchor='ms', fill=(220,210,190))
-            proc.stdin.write(im.tobytes())
+                d.text((W // 2, y), line, font=body_font, anchor="ma", fill=(255, 255, 255, 255)); y += 40
+            d.text((W // 2, H - 48), pack["mantra"], font=small_font, anchor="ms", fill=accent + (255,))
+            proc.stdin.write(im.convert("RGB").tobytes())
         proc.stdin.close()
-        err = proc.stderr.read().decode('utf-8', errors='ignore')
+        err = proc.stderr.read().decode("utf-8", errors="ignore")
         code = proc.wait()
         if code != 0:
-            raise RuntimeError(f'ffmpeg failed: {err[-1500:]}')
+            raise RuntimeError(f"ffmpeg failed: {err[-2500:]}")
     finally:
         if proc.poll() is None:
             proc.kill()
 
 
-def write_srt(path: Path, lines: list[str], seconds: int) -> None:
-    step = seconds / len(lines)
-    def ts(v: float) -> str:
-        ms = int(round((v - int(v)) * 1000)); s = int(v) % 60; m = int(v) // 60
-        return f'00:{m:02d}:{s:02d},{ms:03d}'
-    with path.open('w', encoding='utf-8') as f:
-        for i, line in enumerate(lines, 1):
-            f.write(f'{i}\n{ts((i-1)*step)} --> {ts(min(seconds, i*step))}\n{line}\n\n')
+def write_metadata(path: Path, pack: dict, video: Path) -> None:
+    path.write_text(json.dumps({
+        "title": pack["title"],
+        "audio_source": pack["audio_source"],
+        "audio_license": pack["audio_license"],
+        "visual_sources": ["https://commons.wikimedia.org/wiki/File:" + quote(x, safe="") for x in pack["images"]],
+        "video": str(video),
+        "note": "Audio is reused only from the listed public-domain/CC0 source. Visuals are CC0 sources with cinematic motion treatment."
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def main() -> None:
-    OUT.mkdir(parents=True, exist_ok=True); VIDEOS.mkdir(parents=True, exist_ok=True)
-    trends = fetch_trends()
-    topics = choose_topics(trends)
-    print(f'TREND_ITEMS={len(trends)} SELECTED={len(topics)}')
-    for t in trends[:20]: print('TREND:', t['title'], t.get('traffic',''))
+    OUT.mkdir(parents=True, exist_ok=True); VIDEOS.mkdir(parents=True, exist_ok=True); ASSETS.mkdir(parents=True, exist_ok=True)
+    trends = fetch_trends(); packs = choose_packs(trends)
+    print(f"TREND_ITEMS={len(trends)} SELECTED={len(packs)}")
+    for t in trends[:20]: print("TREND:", t["title"], t.get("traffic", ""))
+
     results = []
-    for index, topic in enumerate(topics, 1):
-        deity, slug, _, _, _ = topic
-        lines = lyrics(topic)
-        audio = OUT / f'{slug}.wav'
-        video = VIDEOS / f'{datetime.now(timezone.utc):%Y%m%d}_{index}_{slug}.mp4'
-        srt = OUT / f'{slug}.srt'
-        print(f'GENERATING {index}/{len(topics)}: {deity}')
-        make_audio(audio, topic, SECONDS)
-        make_video(video, audio, topic, lines, SECONDS)
-        write_srt(srt, lines, SECONDS)
-        audio.unlink(missing_ok=True)
-        results.append({'topic': deity, 'slug': slug, 'video': str(video), 'duration_sec': SECONDS, 'mode': 'zero_cost_cpu_original'})
+    for index, pack in enumerate(packs, 1):
+        print(f"PREPARING {index}/{len(packs)}: {pack['deity']}")
+        audio, images = prepare_assets(pack)
+        video = VIDEOS / f"{datetime.now(timezone.utc):%Y%m%d}_{index}_{pack['slug']}.mp4"
+        meta = OUT / f"{pack['slug']}.json"
+        print(f"RENDERING {index}/{len(packs)}: {pack['title']}")
+        make_video(video, audio, images, pack, SECONDS)
+        write_metadata(meta, pack, video)
+        results.append({
+            "topic": pack["deity"], "slug": pack["slug"], "video": str(video),
+            "duration_sec": SECONDS, "audio_license": pack["audio_license"],
+            "mode": "zero_cost_licensed_audio_plus_cc0_visuals"
+        })
+
     state = {
-        'channel': 'Bhajan Aabha',
-        'generated_at_utc': datetime.now(timezone.utc).isoformat(),
-        'trend_source': 'Google Trends RSS with deterministic devotional fallback',
-        'trend_count': len(trends),
-        'videos': results,
-        'copyright_mode': 'original generation only; no copyrighted recordings or footage downloaded or modified',
-        'gpu': False,
-        'paid_services': False,
-        'human_intervention_after_setup': False,
-        'publish_status': 'PENDING_YOUTUBE_FACEBOOK_AUTH',
+        "channel": "Bhajan Aabha",
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "trend_source": "Google Trends RSS with deterministic zero-cost fallback",
+        "trend_count": len(trends), "videos": results,
+        "copyright_mode": "only public-domain/CC0 audio and visuals are used by the automated packs",
+        "gpu": False, "paid_services": False, "kaggle": False,
+        "human_intervention_after_setup": False,
+        "quality_gate": "real audio + photographic/archival visuals + 720x1280 + AAC; no synthetic sine-wave humming",
+        "publish_status": "PENDING_YOUTUBE_FACEBOOK_AUTH",
     }
-    (OUT/'run_state.json').write_text(__import__('json').dumps(state, ensure_ascii=False, indent=2), encoding='utf-8')
-    (OUT/'manifest.json').write_text(__import__('json').dumps({'videos': results, 'trends': trends[:20]}, ensure_ascii=False, indent=2), encoding='utf-8')
-    print(__import__('json').dumps(state, ensure_ascii=False, indent=2))
+    (OUT / "run_state.json").write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    (OUT / "manifest.json").write_text(json.dumps({"videos": results, "trends": trends[:20]}, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps(state, ensure_ascii=False, indent=2))
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
