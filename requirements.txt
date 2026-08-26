@@ -4,3 +4,4 @@ google-auth-oauthlib>=1.2,<2
 google-auth-httplib2>=0.2,<1
 gradio_client>=1.13,<2
 PyYAML>=6,<7
+kaggle>=1.7.4,<2
