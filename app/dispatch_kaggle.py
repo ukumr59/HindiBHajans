@@ -50,10 +50,14 @@ def main() -> None:
         }
         (d / 'kernel-metadata.json').write_text(json.dumps(metadata, indent=2), encoding='utf-8')
         env = os.environ.copy()
-        if legacy_key:
-            # The current Kaggle CLI does not consume KAGGLE_KEY directly.
-            # Provide the legacy kaggle.json format explicitly and remove the
-            # newer token so the CLI cannot select the wrong credential path.
+
+        # Prefer the API token: it is the credential already proven to work
+        # for kernel push in this repository. Use legacy credentials only as
+        # a fallback when the token is absent.
+        if token:
+            env['KAGGLE_API_TOKEN'] = token
+            env.pop('KAGGLE_KEY', None)
+        else:
             config_dir = d / 'kaggle-config'
             config_dir.mkdir(mode=0o700)
             (config_dir / 'kaggle.json').write_text(
@@ -62,10 +66,7 @@ def main() -> None:
             )
             (config_dir / 'kaggle.json').chmod(0o600)
             env.pop('KAGGLE_API_TOKEN', None)
-            env.pop('KAGGLE_KEY', None)
             env['KAGGLE_CONFIG_DIR'] = str(config_dir)
-        else:
-            env['KAGGLE_API_TOKEN'] = token
 
         for attempt in range(1, 4):
             p = subprocess.run(
