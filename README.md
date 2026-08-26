@@ -17,17 +17,19 @@ Zero-cost-first autonomous devotional media system for the **Bhajan Aabha** YouT
 
 ## Current cloud architecture
 
-**GitHub Actions** = zero/low-cost control-plane scheduler.
+**GitHub Actions** = control-plane scheduler and remote-worker dispatcher.
 
 **Kaggle GPU Notebook** = remote compute worker; the user's PC is never a worker.
 
-**Trend engine** = YouTube Data API/public signals, with quota-aware discovery.
+**Trend engine** = YouTube/public signals, with quota-aware discovery. The first production prototype uses a small seeded opportunity list; live trend discovery is the next controller stage.
 
-**Music engine** = planned around ACE-Step 1.5 because its current model card states commercial-ready use, MIT licensing and 50+ language support. Do not use Meta MusicGen weights for production because those weights are CC-BY-NC 4.0.
+**Music engine** = ACE-Step 1.5 Turbo Diffusers. Its current model documentation lists MIT licensing, optional lyrics, Hindi/50+ language support and 8-step turbo inference. citehttps://huggingface.co/docs/diffusers/api/pipelines/ace_step
 
-**Visual engine** = open/licensed image-generation models plus deterministic cinematic motion/animation and FFmpeg assembly.
+**Visual engine** = CogVideoX-2B for short original devotional animation. Its current model card lists Apache 2.0 licensing. citehttps://huggingface.co/zai-org/CogVideoX-2b
 
-**Publishing** = YouTube Data API + Meta Page publishing APIs.
+**Assembly/QA** = FFmpeg with Hindi subtitles, vertical 1080x1920 output and stream/duration/file-integrity checks.
+
+**Publishing** = YouTube Data API + Meta Page publishing APIs; publishing remains gated until one-time channel authorization is completed.
 
 ## Pipeline
 
@@ -48,11 +50,14 @@ Zero-cost-first autonomous devotional media system for the **Bhajan Aabha** YouT
 ## Current implementation status
 
 - Repository renamed to `HindiBHajans`.
-- GitHub Actions control-plane smoke test completed successfully.
-- Daily cloud-worker dispatcher added.
-- Kaggle GPU worker scaffold added at `worker/kaggle_worker.ipynb`.
-- Headless Kaggle dispatcher added at `app/dispatch_kaggle.py`.
-- The worker is currently a **safe GPU/setup smoke test**; production generation is deliberately not enabled until the remote GPU path and credentials are verified.
+- GitHub Actions cloud-worker dispatch proven successfully.
+- Kaggle account phone verification completed.
+- Kaggle API token connected to GitHub Actions.
+- Kaggle P100 GPU execution proven successfully.
+- First end-to-end generation prototype is now implemented in `worker/kaggle_worker.ipynb`.
+- Prototype generates original Hindi devotional lyrics/music, a short original AI animation, a vertical MP4, subtitles and QA state.
+- Publishing is deliberately gated until YouTube/Facebook authorization is configured.
+- Next stage: replace seeded topic selection with live trend discovery, expand the prototype from 10 seconds to production-length videos, then enable automatic publishing and scale to 1–4/day within free compute quotas.
 
 ## Zero-cost policy
 
