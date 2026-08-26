@@ -34,7 +34,7 @@ jobs:
           KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
           KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
           KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
-          GITHUB_UPLOAD_TOKEN: ${{ secrets.GITHUB_UPLOAD_TOKEN }}
+          GITHUB_UPLOAD_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_RUN_ID: ${{ github.run_id }}
         run: python -m app.dispatch_kaggle
