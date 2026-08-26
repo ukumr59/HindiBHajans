@@ -10,6 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKER = ROOT / 'worker' / 'kaggle_worker.ipynb'
+DATASET_SLUG = 'bhajan-aabha-output'
 
 
 def main() -> None:
@@ -23,12 +24,15 @@ def main() -> None:
     run_id = ''.join(ch for ch in os.getenv('GITHUB_RUN_ID', '') if ch.isalnum()) or str(int(time.time()))
     slug = f'bhajan-aabha-worker-{run_id.lower()}'
     kernel_id = f'{username}/{slug}'
+    dataset_id = f'{username}/{DATASET_SLUG}'
     print(f'KAGGLE_WORKER_ID: {kernel_id}')
+    print(f'KAGGLE_OUTPUT_DATASET: {dataset_id}')
 
     github_output = os.getenv('GITHUB_OUTPUT', '').strip()
     if github_output:
         with open(github_output, 'a', encoding='utf-8') as f:
             f.write(f'kernel_id={kernel_id}\n')
+            f.write(f'dataset_id={dataset_id}\n')
 
     with tempfile.TemporaryDirectory() as td:
         d = Path(td)
@@ -39,7 +43,7 @@ def main() -> None:
             'code_file': 'bhajan-aabha-worker.ipynb',
             'language': 'python',
             'kernel_type': 'notebook',
-            'is_private': False,
+            'is_private': True,
             'enable_gpu': True,
             'enable_internet': True,
             'machine_shape': 'NvidiaTeslaT4',
@@ -51,9 +55,6 @@ def main() -> None:
         (d / 'kernel-metadata.json').write_text(json.dumps(metadata, indent=2), encoding='utf-8')
         env = os.environ.copy()
 
-        # Prefer the API token: it is the credential already proven to work
-        # for kernel push in this repository. Use legacy credentials only as
-        # a fallback when the token is absent.
         if token:
             env['KAGGLE_API_TOKEN'] = token
             env.pop('KAGGLE_KEY', None)
