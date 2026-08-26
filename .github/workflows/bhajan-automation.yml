@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   dispatch-cloud-worker:
@@ -14,7 +14,8 @@ jobs:
     timeout-minutes: 60
     outputs:
       kernel_id: ${{ steps.dispatch.outputs.kernel_id }}
-      dataset_id: ${{ steps.dispatch.outputs.dataset_id }}
+      release_tag: ${{ steps.dispatch.outputs.release_tag }}
+      secret_dataset_id: ${{ steps.dispatch.outputs.secret_dataset_id }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -33,82 +34,78 @@ jobs:
           KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
           KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
           KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+          GITHUB_UPLOAD_TOKEN: ${{ secrets.GITHUB_UPLOAD_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
         run: python -m app.dispatch_kaggle
 
-      - name: Wait for public Kaggle dataset and download MP4
+      - name: Wait for GitHub release asset from Kaggle worker
         env:
-          DATASET_ID: ${{ steps.dispatch.outputs.dataset_id }}
+          RELEASE_TAG: ${{ steps.dispatch.outputs.release_tag }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
           RUN_ID: ${{ github.run_id }}
         run: |
           set -e
-          rm -rf kaggle_output kaggle_dataset.zip
-          mkdir -p kaggle_output
-          echo "Waiting for public remote worker dataset: ${DATASET_ID}"
+          rm -rf release_output
+          mkdir -p release_output
+          echo "Waiting for GitHub release asset: ${RELEASE_TAG}"
 
-          DOWNLOAD_URL="https://www.kaggle.com/api/v1/datasets/download/${DATASET_ID}"
           for attempt in $(seq 1 60); do
-            echo "--- public dataset check ${attempt}/60 ---"
-            rm -rf kaggle_output/* kaggle_dataset.zip
-            if curl -fL --retry 1 --connect-timeout 20 --max-time 120 -sS "${DOWNLOAD_URL}" -o kaggle_dataset.zip; then
-              if unzip -tq kaggle_dataset.zip >/dev/null 2>&1; then
-                unzip -oq kaggle_dataset.zip -d kaggle_output
-                echo "Public dataset download succeeded."
-              else
-                echo "Dataset archive is not ready yet."
+            echo "--- release check ${attempt}/60 ---"
+            rm -rf release_output/*
+            if gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+              if gh release download "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --pattern '*.mp4' --dir release_output --clobber >/dev/null 2>&1; then
+                MP4="$(find release_output -maxdepth 1 -type f -iname '*.mp4' -print -quit)"
+                if [ -n "${MP4}" ]; then
+                  echo "GitHub release asset received: ${MP4}"
+                  cp "${MP4}" bhajan-aabha-${RUN_ID}.mp4
+                  break
+                fi
               fi
-            else
-              echo "Dataset not ready yet."
-            fi
-
-            if [ -f kaggle_output/manifest.json ] && [ -f kaggle_output/run_state.json ]; then
-              python - <<'PY'
-          import json, os
-          from pathlib import Path
-          p = Path('kaggle_output/manifest.json')
-          try:
-              data = json.loads(p.read_text(encoding='utf-8'))
-              ok = str(data.get('run_id')) == str(os.environ['RUN_ID'])
-          except Exception:
-              ok = False
-          Path('kaggle_output/.correct_run').write_text('yes' if ok else 'no', encoding='utf-8')
-          PY
-            fi
-
-            if [ -f kaggle_output/.correct_run ] && grep -qx 'yes' kaggle_output/.correct_run && find kaggle_output -type f -iname '*.mp4' -print -quit | grep -q .; then
-              echo "Correct MP4 found for this GitHub run."
-              break
             fi
 
             if [ "$attempt" -eq 60 ]; then
-              echo "KAGGLE_OUTPUT_TIMEOUT: no matching public MP4 dataset produced within 30 minutes."
-              find kaggle_output -maxdepth 3 -type f -print || true
+              echo "GITHUB_RELEASE_TIMEOUT: no MP4 release asset received within 30 minutes."
               exit 1
             fi
             sleep 30
           done
 
-          echo "Downloaded Kaggle output:"
-          find kaggle_output -type f -maxdepth 4 -printf '%p %s bytes\n'
-          mkdir -p artifacts
-          find kaggle_output -type f \( -iname '*.mp4' -o -iname 'run_state.json' -o -iname '*.srt' -o -iname 'manifest.json' \) -exec cp --parents {} artifacts/ \;
+          ls -lh bhajan-aabha-${RUN_ID}.mp4
 
       - name: Upload generated video artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bhajan-aabha-${{ github.run_id }}
-          path: artifacts/
+          path: bhajan-aabha-${{ github.run_id }}.mp4
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 1
+          compression-level: 0
+          archive: false
 
-      - name: Delete temporary Kaggle output dataset
+      - name: Delete temporary GitHub release
+        if: always()
+        continue-on-error: true
+        env:
+          RELEASE_TAG: ${{ steps.dispatch.outputs.release_tag }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -n "${RELEASE_TAG}" ]; then
+            gh release delete "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --cleanup-tag --yes || true
+          fi
+
+      - name: Delete temporary Kaggle secret dataset
         if: always()
         continue-on-error: true
         env:
           KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
           KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
           KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
-          DATASET_ID: ${{ steps.dispatch.outputs.dataset_id }}
+          DATASET_ID: ${{ steps.dispatch.outputs.secret_dataset_id }}
         run: |
+          if [ -z "${DATASET_ID}" ]; then exit 0; fi
           if [ -n "${KAGGLE_API_TOKEN}" ]; then
             export KAGGLE_API_TOKEN
             unset KAGGLE_KEY
