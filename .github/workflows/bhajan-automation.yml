@@ -2,124 +2,69 @@ name: Bhajan Automation
 
 on:
   schedule:
-    - cron: '17 18 * * *'
+    - cron: '0 23 * * *'
+      timezone: 'Asia/Kolkata'
   workflow_dispatch:
 
+# Zero-cost architecture: GitHub runner only. No Kaggle, no paid GPU, no paid API.
+# CPU-only and never falls back to the user's computer or a paid service.
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: bhajan-aabha-daily
+  cancel-in-progress: false
 
 jobs:
-  dispatch-cloud-worker:
+  generate-bhajans:
+    name: Generate 1-4 Bhajan Aabha videos
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-    outputs:
-      kernel_id: ${{ steps.dispatch.outputs.kernel_id }}
-      release_tag: ${{ steps.dispatch.outputs.release_tag }}
-      secret_dataset_id: ${{ steps.dispatch.outputs.secret_dataset_id }}
+    timeout-minutes: 55
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Install system tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg fonts-noto-core
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      - name: Install dispatcher
+      - name: Install zero-cost generator dependencies
         run: pip install -r requirements.txt
 
-      - name: Dispatch remote Kaggle GPU worker
-        id: dispatch
+      - name: Discover trends and generate videos
         env:
-          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
-          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
-          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
-          GITHUB_UPLOAD_TOKEN: ${{ github.token }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          GITHUB_RUN_ID: ${{ github.run_id }}
-        run: python -m app.dispatch_kaggle
+          MAX_VIDEOS: '4'
+          VIDEO_SECONDS: '30'
+          OUTPUT_DIR: output
+        run: python -m app.zero_cost_pipeline
 
-      - name: Wait for GitHub release asset from Kaggle worker
-        env:
-          RELEASE_TAG: ${{ steps.dispatch.outputs.release_tag }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          GH_TOKEN: ${{ github.token }}
-          RUN_ID: ${{ github.run_id }}
+      - name: Validate generated outputs
         run: |
-          set -e
-          rm -rf release_output
-          mkdir -p release_output
-          echo "Waiting for GitHub release asset: ${RELEASE_TAG}"
+          test -s output/run_state.json
+          COUNT=$(find output/videos -maxdepth 1 -type f -name '*.mp4' | wc -l)
+          echo "Generated videos: ${COUNT}"
+          test "${COUNT}" -ge 1
+          test "${COUNT}" -le 4
+          cat output/run_state.json
 
-          for attempt in $(seq 1 60); do
-            echo "--- release check ${attempt}/60 ---"
-            rm -rf release_output/*
-            if gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
-              if gh release download "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --pattern '*.mp4' --dir release_output --clobber >/dev/null 2>&1; then
-                MP4="$(find release_output -maxdepth 1 -type f -iname '*.mp4' -print -quit)"
-                if [ -n "${MP4}" ]; then
-                  echo "GitHub release asset received: ${MP4}"
-                  cp "${MP4}" bhajan-aabha-${RUN_ID}.mp4
-                  break
-                fi
-              fi
-            fi
-
-            if [ "$attempt" -eq 60 ]; then
-              echo "GITHUB_RELEASE_TIMEOUT: no MP4 release asset received within 30 minutes."
-              exit 1
-            fi
-            sleep 30
-          done
-
-          ls -lh bhajan-aabha-${RUN_ID}.mp4
-
-      - name: Upload generated video artifact
-        uses: actions/upload-artifact@v7
+      - name: Upload generated videos
+        uses: actions/upload-artifact@v4
         with:
           name: bhajan-aabha-${{ github.run_id }}
-          path: bhajan-aabha-${{ github.run_id }}.mp4
+          path: |
+            output/videos/*.mp4
+            output/*.json
+            output/*.srt
           if-no-files-found: error
-          retention-days: 1
-          compression-level: 0
-          archive: false
+          retention-days: 7
 
-      - name: Delete temporary GitHub release
-        if: always()
-        continue-on-error: true
-        env:
-          RELEASE_TAG: ${{ steps.dispatch.outputs.release_tag }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          GH_TOKEN: ${{ github.token }}
+      - name: Publish status
         run: |
-          if [ -n "${RELEASE_TAG}" ]; then
-            gh release delete "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --cleanup-tag --yes || true
-          fi
-
-      - name: Delete temporary Kaggle secret dataset
-        if: always()
-        continue-on-error: true
-        env:
-          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
-          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
-          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
-          DATASET_ID: ${{ steps.dispatch.outputs.secret_dataset_id }}
-        run: |
-          if [ -z "${DATASET_ID}" ]; then exit 0; fi
-          if [ -n "${KAGGLE_API_TOKEN}" ]; then
-            export KAGGLE_API_TOKEN
-            unset KAGGLE_KEY
-          else
-            KAGGLE_CONFIG_DIR_PATH="${RUNNER_TEMP}/kaggle-config-delete"
-            mkdir -p "${KAGGLE_CONFIG_DIR_PATH}"
-            python - <<'PY'
-          import json, os
-          from pathlib import Path
-          p = Path(os.environ['RUNNER_TEMP']) / 'kaggle-config-delete' / 'kaggle.json'
-          p.write_text(json.dumps({'username': os.environ['KAGGLE_USERNAME'], 'key': os.environ['KAGGLE_KEY']}), encoding='utf-8')
-          p.chmod(0o600)
-          PY
-            export KAGGLE_CONFIG_DIR="${KAGGLE_CONFIG_DIR_PATH}"
-            unset KAGGLE_KEY
-          fi
-          kaggle datasets delete "${DATASET_ID}" -y || true
+          echo 'Publishing is intentionally gated until YouTube/Facebook OAuth credentials are configured.'
+          echo 'No paid API or paid publishing service is used by this workflow.'
