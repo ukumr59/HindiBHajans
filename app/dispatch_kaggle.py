@@ -10,7 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKER = ROOT / 'worker' / 'kaggle_worker.ipynb'
-DATASET_SLUG = 'bhajan-aabha-output'
+DATASET_SLUG_PREFIX = 'bhajan-aabha-output'
 
 
 def main() -> None:
@@ -24,7 +24,8 @@ def main() -> None:
     run_id = ''.join(ch for ch in os.getenv('GITHUB_RUN_ID', '') if ch.isalnum()) or str(int(time.time()))
     slug = f'bhajan-aabha-worker-{run_id.lower()}'
     kernel_id = f'{username}/{slug}'
-    dataset_id = f'{username}/{DATASET_SLUG}'
+    dataset_slug = f'{DATASET_SLUG_PREFIX}-{run_id.lower()}'
+    dataset_id = f'{username}/{dataset_slug}'
     print(f'KAGGLE_WORKER_ID: {kernel_id}')
     print(f'KAGGLE_OUTPUT_DATASET: {dataset_id}')
 
@@ -36,7 +37,38 @@ def main() -> None:
 
     with tempfile.TemporaryDirectory() as td:
         d = Path(td)
-        shutil.copy2(WORKER, d / 'bhajan-aabha-worker.ipynb')
+        notebook_path = d / 'bhajan-aabha-worker.ipynb'
+        shutil.copy2(WORKER, notebook_path)
+
+        # Kaggle's kernel-output API currently has a server-side permission
+        # defect for some owner notebooks. Do not depend on it. Instead,
+        # append a final cell that publishes the generated files as a private
+        # Kaggle Dataset. The GitHub controller downloads that dataset, then
+        # deletes it after the GitHub artifact is created.
+        notebook = json.loads(notebook_path.read_text(encoding='utf-8'))
+        notebook.setdefault('cells', []).append({
+            'cell_type': 'code',
+            'metadata': {},
+            'execution_count': None,
+            'outputs': [],
+            'source': [
+                'import json, shutil, subprocess, sys\n',
+                'from pathlib import Path\n',
+                "try:\n    import kagglehub\nexcept ImportError:\n    subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', '-U', 'kagglehub'], check=True)\n    import kagglehub\n",
+                f"dataset_id = {dataset_id!r}\n",
+                "dataset_dir = WORK / 'dataset_upload'\n",
+                "if dataset_dir.exists(): shutil.rmtree(dataset_dir)\n",
+                "dataset_dir.mkdir(parents=True)\n",
+                "shutil.copy2(final_path, dataset_dir / final_path.name)\n",
+                "shutil.copy2(srt_path, dataset_dir / 'lyrics.srt')\n",
+                "shutil.copy2(OUT / 'run_state.json', dataset_dir / 'run_state.json')\n",
+                "(dataset_dir / 'manifest.json').write_text(json.dumps({'run_id': " + repr(run_id) + ", 'dataset_id': dataset_id, 'video': final_path.name}, ensure_ascii=False, indent=2), encoding='utf-8')\n",
+                "kagglehub.dataset_upload(dataset_id, str(dataset_dir), version_notes=f'Bhajan Aabha output for GitHub run {" + repr(run_id) + "}')\n",
+                "print('DATASET_UPLOAD_COMPLETE:', dataset_id)\n",
+            ],
+        })
+        notebook_path.write_text(json.dumps(notebook, ensure_ascii=False), encoding='utf-8')
+
         metadata = {
             'id': kernel_id,
             'title': f'Bhajan Aabha Worker {run_id}',
