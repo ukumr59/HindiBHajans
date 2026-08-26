@@ -11,18 +11,67 @@ permissions:
 jobs:
   dispatch-cloud-worker:
     runs-on: ubuntu-slim
-    timeout-minutes: 10
+    timeout-minutes: 60
+    outputs:
+      kernel_id: ${{ steps.dispatch.outputs.kernel_id }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
       - name: Install dispatcher
         run: pip install -r requirements.txt
+
       - name: Dispatch remote Kaggle GPU worker
+        id: dispatch
         env:
           KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
           KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
         run: python -m app.dispatch_kaggle
+
+      - name: Wait for Kaggle output and download MP4
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+          KERNEL_ID: ${{ steps.dispatch.outputs.kernel_id }}
+        run: |
+          set -e
+          rm -rf kaggle_output
+          mkdir -p kaggle_output
+          echo "Waiting for remote worker: ${KERNEL_ID}"
+          for attempt in $(seq 1 60); do
+            echo "--- output check ${attempt}/60 ---"
+            rm -rf kaggle_output/*
+            if kaggle kernels output "${KERNEL_ID}" -p kaggle_output -o -q; then
+              echo "Kaggle output endpoint responded."
+            else
+              echo "Output not ready yet."
+            fi
+            if find kaggle_output -type f -iname '*.mp4' -print -quit | grep -q .; then
+              echo "MP4 found."
+              break
+            fi
+            if [ "$attempt" -eq 60 ]; then
+              echo "KAGGLE_OUTPUT_TIMEOUT: no MP4 produced within 30 minutes."
+              find kaggle_output -maxdepth 3 -type f -print || true
+              exit 1
+            fi
+            sleep 30
+          done
+
+          echo "Downloaded Kaggle output:"
+          find kaggle_output -type f -maxdepth 4 -printf '%p %s bytes\n'
+          mkdir -p artifacts
+          find kaggle_output -type f \( -iname '*.mp4' -o -iname 'run_state.json' -o -iname '*.srt' \) -exec cp --parents {} artifacts/ \;
+
+      - name: Upload generated video artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bhajan-aabha-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 7
