@@ -40,11 +40,9 @@ def main() -> None:
         notebook_path = d / 'bhajan-aabha-worker.ipynb'
         shutil.copy2(WORKER, notebook_path)
 
-        # Kaggle's kernel-output API currently has a server-side permission
-        # defect for some owner notebooks. Do not depend on it. Instead,
-        # append a final cell that publishes the generated files as a private
-        # Kaggle Dataset. The GitHub controller downloads that dataset, then
-        # deletes it after the GitHub artifact is created.
+        # Publish the generated original media as a unique PUBLIC Kaggle Dataset.
+        # GitHub downloads it through the public dataset download URL, avoiding
+        # the Kaggle metadata/session endpoints that return 403 for this account.
         notebook = json.loads(notebook_path.read_text(encoding='utf-8'))
         notebook.setdefault('cells', []).append({
             'cell_type': 'code',
@@ -53,8 +51,6 @@ def main() -> None:
             'outputs': [],
             'source': [
                 'import json, shutil, subprocess, sys\n',
-                'from pathlib import Path\n',
-                "try:\n    import kagglehub\nexcept ImportError:\n    subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', '-U', 'kagglehub'], check=True)\n    import kagglehub\n",
                 f"dataset_id = {dataset_id!r}\n",
                 "dataset_dir = WORK / 'dataset_upload'\n",
                 "if dataset_dir.exists(): shutil.rmtree(dataset_dir)\n",
@@ -63,8 +59,14 @@ def main() -> None:
                 "shutil.copy2(srt_path, dataset_dir / 'lyrics.srt')\n",
                 "shutil.copy2(OUT / 'run_state.json', dataset_dir / 'run_state.json')\n",
                 "(dataset_dir / 'manifest.json').write_text(json.dumps({'run_id': " + repr(run_id) + ", 'dataset_id': dataset_id, 'video': final_path.name}, ensure_ascii=False, indent=2), encoding='utf-8')\n",
-                "kagglehub.dataset_upload(dataset_id, str(dataset_dir), version_notes=f'Bhajan Aabha output for GitHub run {" + repr(run_id) + "}')\n",
-                "print('DATASET_UPLOAD_COMPLETE:', dataset_id)\n",
+                "metadata = {'title': 'Bhajan Aabha Output " + repr(run_id) + "', 'id': dataset_id, 'licenses': [{'name': 'other'}], 'description': 'Temporary original Bhajan Aabha generation output.'}\n",
+                "(dataset_dir / 'dataset-metadata.json').write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding='utf-8')\n",
+                "subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', '-U', 'kaggle'], check=False)\n",
+                "p = subprocess.run(['kaggle', 'datasets', 'create', '-p', str(dataset_dir), '--public', '--quiet', '--keep-tabular', '--dir-mode', 'skip'], text=True, capture_output=True)\n",
+                "print(p.stdout)\n",
+                "print(p.stderr)\n",
+                "if p.returncode != 0: raise RuntimeError('KAGGLE_PUBLIC_DATASET_CREATE_FAILED')\n",
+                "print('PUBLIC_DATASET_UPLOAD_COMPLETE:', dataset_id)\n",
             ],
         })
         notebook_path.write_text(json.dumps(notebook, ensure_ascii=False), encoding='utf-8')
@@ -112,7 +114,6 @@ def main() -> None:
                 print(p.stdout)
             if p.returncode == 0:
                 break
-
             combined = f'{p.stdout}\n{p.stderr}'
             if p.stderr:
                 print(p.stderr)
