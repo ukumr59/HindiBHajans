@@ -24,7 +24,6 @@ def main() -> None:
     kernel_id = f'{username}/{slug}'
     print(f'KAGGLE_WORKER_ID: {kernel_id}')
 
-    # Make the unique worker ID available to subsequent GitHub Actions steps.
     github_output = os.getenv('GITHUB_OUTPUT', '').strip()
     if github_output:
         with open(github_output, 'a', encoding='utf-8') as f:
@@ -42,6 +41,9 @@ def main() -> None:
             'is_private': True,
             'enable_gpu': True,
             'enable_internet': True,
+            # T4 is explicitly supported by the current Kaggle CLI image and
+            # avoids the current PyTorch/Pascal compatibility issue on P100.
+            'machine_shape': 'NvidiaTeslaT4',
             'dataset_sources': [],
             'competition_sources': [],
             'kernel_sources': [],
