@@ -10,7 +10,11 @@ permissions:
 
 jobs:
   dispatch-cloud-worker:
-    runs-on: ubuntu-slim
+    # Use the standard Ubuntu runner for the controller. ubuntu-slim is
+    # intentionally avoided here: it is a lightweight 1-vCPU container with
+    # a 15-minute job limit, while this controller can wait up to 30 minutes
+    # for the remote Kaggle worker output.
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     outputs:
       kernel_id: ${{ steps.dispatch.outputs.kernel_id }}
