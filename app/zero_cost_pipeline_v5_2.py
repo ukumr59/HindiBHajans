@@ -1,127 +1,188 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import time
 from pathlib import Path
-from urllib.parse import urljoin
-
-import requests
 
 import app.zero_cost_pipeline_v5 as base
 
-# IMPORTANT: the public ACE-Step 1.5 Hugging Face Space uses the classic
-# asynchronous API: POST /release_task -> POST /query_result -> GET /v1/audio.
-# /v1/music/generate is NOT exposed by this public Space and returns HTTP 405.
-ACESTEP_API = base.ACESTEP_ROOT
+# ACE-Step's official public HF deployment is a Gradio ZeroGPU Space, not the
+# standalone FastAPI server. The standalone /release_task API exists in the
+# ACE-Step source, but the public Space serves the Gradio application. Calling
+# /release_task on the public .hf.space host therefore returns HTTP 405.
+# Use the supported Gradio client against the actual public Space instead.
+ACE_STEP_SPACE = "ACE-Step/Ace-Step-v1.5"
 
-DJ_MUSIC_PROMPT = """Modern high-energy Hindi devotional bhajan made like a current YouTube DJ devotional song, 128 BPM, 4/4, loud polished commercial stereo production, powerful sung Hindi male lead vocal clearly singing every lyric with natural emotion and pronunciation, catchy devotional melody, huge memorable chorus, energetic EDM arrangement, punchy four-on-the-floor kick, deep controlled sub bass, modern synth bass, bright synth leads, wide pads, electronic percussion, claps, dhol and dholak layered with tabla, cinematic risers, tasteful temple bells, bansuri accents, harmonium texture, short instrumental intro, strong verse build, massive chorus/drop, rhythmic instrumental break, final chorus with layered backing vocals, professional radio/YouTube loudness and DJ playback energy. The devotional identity must remain unmistakable while the production feels contemporary, energetic and danceable. NOT meditation music, NOT sleepy, NOT ambient, NOT acoustic-only, NOT spoken narration, NOT chanting without melody, NOT humming, NOT a cappella, NOT background music, NOT an instrumental-only track."""
-
-
-def _extract_task_id(data):
-    if isinstance(data, dict):
-        if data.get("task_id"):
-            return data["task_id"]
-        inner = data.get("data")
-        if isinstance(inner, dict) and inner.get("task_id"):
-            return inner["task_id"]
-    raise RuntimeError(f"MUSIC_FATAL: ACE-Step task id missing: {data}")
+DJ_MUSIC_PROMPT = """Modern high-energy Hindi devotional bhajan made like a current YouTube DJ devotional song, 128 BPM, 4/4, loud polished commercial stereo production, powerful expressive Hindi male lead vocal clearly singing every lyric with natural emotion and clean pronunciation, catchy devotional melody, huge memorable chorus, energetic EDM arrangement, punchy four-on-the-floor kick, deep controlled sub bass, modern synth bass, bright synth leads, wide pads, electronic percussion, claps, dhol and dholak layered with tabla, cinematic risers, tasteful temple bells, bansuri accents, harmonium texture, short instrumental intro, strong verse build, massive chorus/drop, rhythmic instrumental break, final chorus with layered backing vocals, professional YouTube/radio loudness and DJ playback energy. The devotional identity must remain unmistakable while the production feels contemporary, energetic and danceable. NOT meditation music, NOT sleepy, NOT ambient, NOT acoustic-only, NOT spoken narration, NOT chanting without melody, NOT humming, NOT a cappella, NOT background music, NOT an instrumental-only track."""
 
 
-def _result_audio_ref(item):
-    raw = item.get("result", "[]") if isinstance(item, dict) else "[]"
-    try:
-        results = json.loads(raw) if isinstance(raw, str) else raw
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"MUSIC_FATAL: invalid ACE-Step result JSON: {raw}") from exc
-    if not results:
+def _norm(value: object) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _endpoint_parameters(info: dict) -> list[dict]:
+    return list(info.get("parameters") or [])
+
+
+def _find_generation_endpoint(api: dict) -> tuple[str, dict]:
+    named = api.get("named_endpoints") or {}
+    candidates = []
+    for name, info in named.items():
+        text = _norm(name) + " " + " ".join(_norm(p.get("label")) for p in _endpoint_parameters(info))
+        score = 0
+        if "generate" in text:
+            score += 10
+        if "music" in text:
+            score += 8
+        if "caption" in text:
+            score += 2
+        if "lyrics" in text:
+            score += 2
+        if score:
+            candidates.append((score, name, info))
+    if not candidates:
+        raise RuntimeError(f"MUSIC_FATAL: public ACE-Step Gradio API has no generation endpoint. API={api}")
+    candidates.sort(reverse=True, key=lambda x: x[0])
+    return candidates[0][1], candidates[0][2]
+
+
+def _choose_value(param: dict):
+    name = _norm(param.get("parameter_name") or param.get("label"))
+    label = _norm(param.get("label"))
+    text = f"{name} {label}"
+    default = param.get("parameter_default")
+    has_default = bool(param.get("parameter_has_default"))
+
+    # Preserve harmless defaults for parameters that are not relevant to this
+    # song. Required fields are still explicitly populated below.
+    if "caption" in text or "prompt" in text and "negative" not in text:
+        return DJ_MUSIC_PROMPT
+    if "lyrics" in text:
+        return base.PACK["lyrics"]
+    if "vocal_language" in text or ("language" in text and "negative" not in text):
+        return "hi"
+    if text.strip() in {"bpm", "tempo"} or "bpm" in text:
+        return 128
+    if "key_scale" in text or "keyscale" in text:
+        return "C Major"
+    if "time_signature" in text or "timesignature" in text:
+        return "4"
+    if "audio_duration" in text or ("duration" in text and "audio" in text):
+        return int(base.VIDEO_SECONDS)
+    if "inference_steps" in text:
+        return 8
+    if "guidance_scale" in text:
+        return 7.0
+    if "batch_size" in text:
+        return 1
+    if "audio_format" in text:
+        return "mp3"
+    if "task_type" in text:
+        return "text2music"
+    if "model" in text and "lm_" not in text and "negative" not in text:
+        return "acestep-v15-turbo"
+    if text == "thinking" or text.endswith("_thinking") or "think" in text:
+        return True
+    if "use_format" in text:
+        return True
+    if "random_seed" in text or "use_random_seed" in text:
+        return True
+    if text == "seed" or text.endswith("_seed"):
+        return -1
+    if "shift" in text:
+        return 3.0
+    if "infer_method" in text:
+        return "ode"
+    if "instrumental" in text:
+        return False
+    if "negative_prompt" in text or "negative" in text:
+        return "sleepy ambient, meditation, humming, spoken narration, a cappella, weak vocals, acoustic-only, muddy bass, distorted clipping"
+    if "sample_mode" in text:
+        return False
+    if "src_audio" in text or "reference_audio" in text or "audio_file" in text:
         return None
-    first = results[0] if isinstance(results, list) else results
-    if not isinstance(first, dict):
+    if "state" in text:
         return None
-    return first.get("file") or first.get("url")
+    if has_default:
+        return default
+    return None
 
 
-def generate_music_http(session: requests.Session) -> Path:
-    duration = int(base.VIDEO_SECONDS)
-    print("MUSIC: ACE-Step 1.5 public Hugging Face Space asynchronous API")
-    print("MUSIC: endpoint=POST /release_task then POST /query_result")
+def _extract_audio(value, seen=None) -> str | None:
+    if seen is None:
+        seen = set()
+    if id(value) in seen:
+        return None
+    seen.add(id(value))
+    if isinstance(value, str):
+        low = value.lower()
+        if low.endswith((".mp3", ".wav", ".flac", ".ogg", ".m4a")):
+            return value
+        return None
+    if isinstance(value, dict):
+        for key in ("path", "url", "name"):
+            if key in value:
+                found = _extract_audio(value[key], seen)
+                if found:
+                    return found
+        for v in value.values():
+            found = _extract_audio(v, seen)
+            if found:
+                return found
+    if isinstance(value, (list, tuple)):
+        for v in value:
+            found = _extract_audio(v, seen)
+            if found:
+                return found
+    return None
+
+
+def generate_music_gradio() -> Path:
+    from gradio_client import Client
+
+    print("MUSIC: connecting to official ACE-Step v1.5 public ZeroGPU Space")
+    print("MUSIC: using Gradio Client API — not the Space's nonexistent REST endpoint")
     print("MUSIC: style=LOUD_MODERN_DEVOTIONAL_EDM_DJ_READY bpm=128")
 
-    payload = {
-        "prompt": DJ_MUSIC_PROMPT,
-        "lyrics": base.PACK["lyrics"],
-        "vocal_language": "hi",
-        "audio_duration": duration,
-        "model": "acestep-v15-turbo",
-        "thinking": True,
-        "sample_mode": False,
-        "use_format": True,
-        "inference_steps": 8,
-        "batch_size": 1,
-        "use_random_seed": True,
-        "task_type": "text2music",
-        "bpm": 128,
-        "time_signature": "4",
-        "key_scale": "C Major",
-        "audio_format": "mp3",
-    }
+    client = Client(ACE_STEP_SPACE, max_workers=1)
+    api = client.view_api(print_info=False, return_format="dict")
+    endpoint, endpoint_info = _find_generation_endpoint(api)
+    params = _endpoint_parameters(endpoint_info)
+    print(f"MUSIC: selected Gradio endpoint={endpoint}")
+    print("MUSIC: endpoint parameters=" + ", ".join(str(p.get("parameter_name") or p.get("label")) for p in params))
 
-    data = base.http_json(
-        session,
-        "POST",
-        f"{ACESTEP_API}/release_task",
-        headers={"Content-Type": "application/json"},
-        body=payload,
-        timeout=120,
-        retries=5,
-    )
-    task_id = _extract_task_id(data)
-    print("MUSIC_TASK", task_id)
+    kwargs = {}
+    for p in params:
+        key = p.get("parameter_name") or p.get("label")
+        if key:
+            kwargs[key] = _choose_value(p)
 
-    deadline = time.time() + 30 * 60
-    last_status = None
-    while time.time() < deadline:
-        result = base.http_json(
-            session,
-            "POST",
-            f"{ACESTEP_API}/query_result",
-            headers={"Content-Type": "application/json"},
-            body={"task_id_list": [task_id]},
-            timeout=60,
-            retries=3,
-        )
-        items = result.get("data") if isinstance(result, dict) else result
-        if isinstance(items, dict):
-            items = items.get("data") or items.get("results") or []
-        if not isinstance(items, list) or not items:
-            time.sleep(5)
-            continue
+    # Let Gradio validate the live endpoint schema. This is deliberately a
+    # keyword call so changes in UI input order do not silently corrupt values.
+    job = client.submit(api_name=endpoint, **kwargs)
+    result = job.result()
+    print("MUSIC: Gradio generation completed")
+    audio_ref = _extract_audio(result)
+    if not audio_ref:
+        raise RuntimeError(f"MUSIC_FATAL: Gradio generation returned no downloadable audio: {result}")
 
-        item = items[0]
-        status = int(item.get("status", 0))
-        if status != last_status:
-            print(f"MUSIC: task={task_id} status={status}")
-            last_status = status
-
-        if status == 2:
-            raise RuntimeError(f"MUSIC_FATAL: ACE-Step generation failed: {item.get('result', item)}")
-        if status == 1:
-            audio_ref = _result_audio_ref(item)
-            if not audio_ref:
-                raise RuntimeError(f"MUSIC_FATAL: successful task has no audio file: {item}")
-            audio_url = audio_ref if str(audio_ref).startswith("http") else urljoin(ACESTEP_API + "/", str(audio_ref).lstrip("/"))
-            target = base.AUDIO / "bhajan_source.mp3"
-            base.download(session, audio_url, target, min_bytes=20000)
-            print("MUSIC_OK", target, target.stat().st_size)
-            return target
-        time.sleep(5)
-
-    raise RuntimeError(f"MUSIC_FATAL: ACE-Step task timed out after 30 minutes: {task_id}")
+    target = base.AUDIO / "bhajan_source.mp3"
+    source = Path(audio_ref)
+    if source.exists():
+        shutil.copy2(source, target)
+    elif str(audio_ref).startswith("http"):
+        base.download(client.session if hasattr(client, "session") else __import__("requests").Session(), str(audio_ref), target, min_bytes=20000)
+    else:
+        raise RuntimeError(f"MUSIC_FATAL: returned audio path is not accessible: {audio_ref}")
+    if target.stat().st_size < 20000:
+        raise RuntimeError("MUSIC_FATAL: generated audio is suspiciously small")
+    print("MUSIC_OK", target, target.stat().st_size)
+    return target
 
 
 def make_dj_master(final_video: Path) -> Path:
-    """Extract and master the generated song as a standalone DJ-friendly MP3."""
     target = base.AUDIO / "bhajan_aabha_dj_master.mp3"
     cmd = [
         "ffmpeg", "-y", "-i", str(final_video), "-vn",
@@ -137,8 +198,11 @@ def make_dj_master(final_video: Path) -> Path:
     return target
 
 
-base.generate_music = generate_music_http
-base.ACESTEP_ROOT = ACESTEP_API
+# base.main() resolves generate_music from the base module, so patch that
+# symbol rather than creating an unused local implementation.
+base.generate_music = lambda session: generate_music_gradio()
+base.ACESTEP_ROOT = "gradio://ACE-Step/Ace-Step-v1.5"
+
 
 if __name__ == "__main__":
     base.main()
@@ -149,8 +213,8 @@ if __name__ == "__main__":
     state_path = base.OUT / "run_state.json"
     if state_path.exists():
         state = json.loads(state_path.read_text(encoding="utf-8"))
-        state["music_backend"] = "ACE-Step 1.5 public ZeroGPU Space /release_task + /query_result"
-        state["music_api_mode"] = "http_async_release_task_query_result"
+        state["music_backend"] = "ACE-Step v1.5 official Hugging Face ZeroGPU Space via Gradio Client"
+        state["music_api_mode"] = "gradio_client_live_api"
         state["music_style"] = "LOUD_MODERN_DEVOTIONAL_EDM_DJ_READY"
         state["bpm"] = 128
         state["time_signature"] = "4/4"
@@ -159,4 +223,4 @@ if __name__ == "__main__":
         state["dj_master_sample_rate"] = 48000
         state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
         (base.OUT / "manifest.json").write_text(json.dumps({"videos": [state]}, ensure_ascii=False, indent=2), encoding="utf-8")
-        print("STATE_OK music_backend=ACE-Step public Space release_task/query_result")
+        print("STATE_OK music_backend=ACE-Step official ZeroGPU Space via Gradio Client")
