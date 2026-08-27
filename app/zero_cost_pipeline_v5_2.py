@@ -13,21 +13,20 @@ ACE_STEP_SPACE = "ACE-Step/Ace-Step-v1.5"
 
 DJ_MUSIC_PROMPT = """Modern high-energy Hindi devotional bhajan made like a current YouTube DJ devotional song, 128 BPM, 4/4, loud polished commercial stereo production, powerful expressive Hindi male lead vocal clearly singing every lyric with natural emotion and clean pronunciation, catchy devotional melody, huge memorable chorus, energetic EDM arrangement, punchy four-on-the-floor kick, deep controlled sub bass, modern synth bass, bright synth leads, wide pads, electronic percussion, claps, dhol and dholak layered with tabla, cinematic risers, tasteful temple bells, bansuri accents, harmonium texture, short instrumental intro, strong verse build, massive chorus/drop, rhythmic instrumental break, final chorus with layered backing vocals, professional YouTube/radio loudness and DJ playback energy. NOT meditation music, NOT sleepy, NOT ambient, NOT acoustic-only, NOT spoken narration, NOT humming, NOT a cappella, NOT instrumental-only."""
 
-# The live ACE-Step Gradio generation_wrapper has four front parameters followed
-# by the 45 generation parameters below. Gradio names the latter generically as
-# param_4...param_49, so they MUST be passed positionally. Passing kwargs by the
-# generic names caused valid-looking requests to reach ACE-Step with mostly None
-# values and ended in "GPU task aborted".
+# Live ACE-Step v1.5 generation_wrapper: 4 wrapper inputs + 45 generation inputs.
+# The generation inputs are positional because the live Gradio endpoint exposes
+# generic param_* names. Keep this list exactly aligned with the live endpoint.
 GENERATION_ARGS = [
     "captions", "lyrics", "bpm", "key_scale", "time_signature", "vocal_language",
     "inference_steps", "guidance_scale", "random_seed_checkbox", "seed", "reference_audio",
     "audio_duration", "batch_size_input", "src_audio", "text2music_audio_code_string",
     "repainting_start", "repainting_end", "instruction_display_gen", "audio_cover_strength",
-    "task_type", "use_adg", "cfg_interval_start", "cfg_interval_end", "shift", "infer_method",
-    "custom_timesteps", "audio_format", "lm_temperature", "think_checkbox", "lm_cfg_scale",
-    "lm_top_k", "lm_top_p", "lm_negative_prompt", "use_cot_metas", "use_cot_caption",
-    "use_cot_language", "is_format_caption_state", "constrained_decoding_debug", "allow_lm_batch",
-    "auto_score", "auto_lrc", "score_scale", "lm_batch_chunk_size", "track_name", "complete_track_classes",
+    "cover_noise_strength", "task_type", "no_fsq", "use_adg", "cfg_interval_start",
+    "cfg_interval_end", "shift", "infer_method", "sampler_mode", "velocity_norm_threshold",
+    "velocity_ema_factor", "dcw_enabled", "dcw_mode", "dcw_scaler", "dcw_high_scaler",
+    "dcw_wavelet", "custom_timesteps", "audio_format", "mp3_bitrate", "mp3_sample_rate",
+    "lm_temperature", "think_checkbox", "lm_cfg_scale", "lm_top_k", "lm_top_p",
+    "lm_negative_prompt",
 ]
 
 
@@ -47,9 +46,12 @@ def _find_generation_endpoint(api: dict):
         if any(x in n for x in blocked):
             continue
         score = 0
-        if n == "/generation_wrapper" or n == "generation_wrapper": score += 1000
-        elif "generation_wrapper" in n: score += 900
-        elif "generate" in n: score += 100
+        if n in ("/generation_wrapper", "generation_wrapper"):
+            score += 1000
+        elif "generation_wrapper" in n:
+            score += 900
+        elif "generate" in n:
+            score += 100
         if score:
             candidates.append((score, str(name), info))
     if not candidates:
@@ -103,9 +105,7 @@ def _save_audio(ref: str, target: Path):
 
 
 def _generation_values() -> list[object]:
-    # Keep the generated song deterministic in structure while disabling the
-    # optional 5Hz thinking pass. We already supply lyrics, BPM, language and
-    # duration; disabling the extra LM pass materially reduces ZeroGPU memory/time.
+    # Values correspond one-for-one with GENERATION_ARGS above.
     return [
         DJ_MUSIC_PROMPT,
         base.PACK["lyrics"],
@@ -126,32 +126,32 @@ def _generation_values() -> list[object]:
         -1.0,
         "Fill the audio semantic mask based on the given conditions:",
         1.0,
+        0.0,
         "text2music",
+        False,
         False,
         0.0,
         1.0,
         3.0,
         "ode",
+        "euler",
+        0.0,
+        0.0,
+        True,
+        "double",
+        0.05,
+        0.02,
+        "haar",
         "",
         "mp3",
+        "320k",
+        48000,
         0.85,
         False,
         2.0,
         0,
         0.9,
         "sleepy ambient, meditation, humming, spoken narration, a cappella, weak vocals, acoustic-only",
-        False,
-        False,
-        False,
-        False,
-        False,
-        False,
-        False,
-        False,
-        0.5,
-        1,
-        None,
-        [],
     ]
 
 
@@ -177,8 +177,6 @@ def generate_music_gradio() -> Path:
                 raise RuntimeError(f"MUSIC_FATAL: unexpected live generation_wrapper parameter count={len(params)}; refusing unsafe positional call")
             print(f"MUSIC: selected endpoint={endpoint}")
             print("MUSIC: positional contract=4 wrapper args + 45 generation args")
-            # The first four live inputs are: selected_model, generation_mode,
-            # simple_query_input, simple_vocal_language.
             wrapper_values = ["acestep-v15-turbo", "custom", "", "hi"] + values
             result = client.predict(*wrapper_values, api_name=endpoint)
             print("MUSIC: Gradio generation completed")
@@ -214,7 +212,6 @@ def make_dj_master(final_video: Path) -> Path:
         raise RuntimeError("DJ_MASTER_FATAL: master file is suspiciously small")
     print("DJ_MASTER_OK", target, target.stat().st_size)
     return target
-
 
 base.generate_music = lambda session: generate_music_gradio()
 base.ACESTEP_ROOT = "gradio://ACE-Step/Ace-Step-v1.5"
