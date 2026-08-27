@@ -12,8 +12,12 @@ import app.zero_cost_pipeline_v5_4 as longform
 import app.zero_cost_pipeline_v5_2 as music
 
 base = longform.base
-KAGGLE_KERNEL_SLUG = os.getenv('KAGGLE_KERNEL_SLUG', 'bhajan-aabha-ace-step')
+# Kaggle requires the metadata id slug to resolve to the kernel title slug.
+# "Bhajan Aabha ACE-Step GPU Worker" resolves to this exact slug.
+DEFAULT_KAGGLE_KERNEL_SLUG = 'bhajan-aabha-ace-step-gpu-worker'
+KAGGLE_KERNEL_SLUG = os.getenv('KAGGLE_KERNEL_SLUG', DEFAULT_KAGGLE_KERNEL_SLUG).strip()
 KAGGLE_USERNAME = os.getenv('KAGGLE_USERNAME', '').strip()
+KAGGLE_KERNEL_TITLE = 'Bhajan Aabha ACE-Step GPU Worker'
 
 
 def _run(*args, cwd=None, check=True, capture=False):
@@ -46,7 +50,7 @@ def _prepare_kernel():
     (root / 'bhajan_request.json').write_text(json.dumps(request, ensure_ascii=False, indent=2), encoding='utf-8')
     metadata = {
         'id': f'{KAGGLE_USERNAME}/{KAGGLE_KERNEL_SLUG}',
-        'title': 'Bhajan Aabha ACE-Step GPU Worker',
+        'title': KAGGLE_KERNEL_TITLE,
         'code_file': 'worker.py',
         'language': 'python',
         'kernel_type': 'script',
@@ -60,6 +64,7 @@ def _prepare_kernel():
         'model_sources': [],
     }
     (root / 'kernel-metadata.json').write_text(json.dumps(metadata, indent=2), encoding='utf-8')
+    print(f'KAGGLE_METADATA_OK: id={metadata["id"]} title={metadata["title"]} accelerator={metadata["machine_shape"]}', flush=True)
     return root
 
 
@@ -75,7 +80,6 @@ def _kernel_status(kernel_id: str) -> str:
     match = re.search(r'(?im)^\s*(?:status|state)\s*[:=]\s*([A-Za-z_]+)', text)
     if match:
         return match.group(1).upper()
-    # Current CLI variants sometimes print the state without a label.
     for state in ('COMPLETE', 'ERROR', 'CANCELLED', 'CANCELED', 'FAILED', 'RUNNING', 'QUEUED', 'INITIALIZING'):
         if re.search(rf'\b{state}\b', text.upper()):
             return state
@@ -125,9 +129,6 @@ def generate_music_kaggle() -> Path:
     return target
 
 
-# v5.4 keeps the production-grade 180-300s lyrics, 12-scene visual plan,
-# SRT generation, validation and final assembly. Replace only its ACE-Step
-# Gradio call with the zero-cost Kaggle GPU worker.
 music.generate_music_gradio = generate_music_kaggle
 base.ACESTEP_ROOT = 'kaggle://ACE-Step-1.5'
 
@@ -143,6 +144,7 @@ if __name__ == '__main__':
         'music_model': 'acestep-v15-turbo',
         'music_lm_model': 'acestep-5Hz-lm-0.6B',
         'kaggle': True,
+        'kaggle_kernel': f'{KAGGLE_USERNAME}/{KAGGLE_KERNEL_SLUG}',
         'huggingface_zero_gpu': False,
         'paid_services': False,
         'paid_gpu': False,
