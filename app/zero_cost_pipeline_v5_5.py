@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -69,11 +70,14 @@ def _configure_kaggle_cli():
 
 def _kernel_status(kernel_id: str) -> str:
     p = _run('kaggle', 'kernels', 'status', kernel_id, capture=True)
-    text = (p.stdout + '\n' + p.stderr).upper()
-    print('KAGGLE_STATUS:', text[-1200:], flush=True)
-    # Match explicit status lines first; avoid false positives from URLs/logs.
+    text = (p.stdout + '\n' + p.stderr).strip()
+    print('KAGGLE_STATUS:', text[-1600:], flush=True)
+    match = re.search(r'(?im)^\s*(?:status|state)\s*[:=]\s*([A-Za-z_]+)', text)
+    if match:
+        return match.group(1).upper()
+    # Current CLI variants sometimes print the state without a label.
     for state in ('COMPLETE', 'ERROR', 'CANCELLED', 'CANCELED', 'FAILED', 'RUNNING', 'QUEUED', 'INITIALIZING'):
-        if state in text:
+        if re.search(rf'\b{state}\b', text.upper()):
             return state
     return 'UNKNOWN'
 
