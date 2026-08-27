@@ -1,4 +1,4 @@
-name: Bhajan Aabha v6 — Long-form 4-minute Production
+name: Bhajan Aabha — 3-5 Minute Production
 
 on:
   workflow_dispatch:
@@ -11,8 +11,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  generate-v6:
-    name: Generate Bhajan Aabha v6 long-form video
+  generate-longform:
+    name: Generate Bhajan Aabha 3-5 minute video
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
@@ -26,12 +26,11 @@ jobs:
           set -e
           test -n "$AGNES_API_KEY" || { echo 'SETUP_REQUIRED: add AGNES_API_KEY as a repository secret.'; exit 2; }
           test -s app/zero_cost_pipeline_v5.py
-          test -s app/zero_cost_pipeline_v5_2_fix.py
-          test -s app/zero_cost_pipeline_v6.py
-          test -s app/zero_cost_pipeline_v6_runner.py
-          python3 -m py_compile app/zero_cost_pipeline_v5.py app/zero_cost_pipeline_v5_2_fix.py app/zero_cost_pipeline_v6.py app/zero_cost_pipeline_v6_runner.py
+          test -s app/zero_cost_pipeline_v5_2.py
+          test -s app/zero_cost_pipeline_v5_3.py
+          python3 -m py_compile app/zero_cost_pipeline_v5.py app/zero_cost_pipeline_v5_2.py app/zero_cost_pipeline_v5_3.py
           grep -q 'gradio_client' requirements.txt
-          echo 'PRECHECK_OK: zero-cost long-form architecture; ACE-Step official public ZeroGPU Space; 240s target; Python syntax valid.'
+          echo 'PRECHECK_OK: zero-cost 3-5 minute architecture; no Kaggle; ACE-Step official public ZeroGPU Space; Agnes visuals.'
 
       - name: Install zero-cost media tools
         run: |
@@ -49,12 +48,12 @@ jobs:
       - name: Install Python dependencies
         run: pip install -r requirements.txt
 
-      - name: Generate v6 long-form bhajan
+      - name: Generate full-length bhajan video
         env:
           AGNES_API_KEY: ${{ secrets.AGNES_API_KEY }}
           VIDEO_SECONDS: '240'
           OUTPUT_DIR: output
-        run: python -m app.zero_cost_pipeline_v6_runner
+        run: python -m app.zero_cost_pipeline_v5_3
 
       - name: Validate output
         run: |
@@ -69,25 +68,25 @@ jobs:
           ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "$VIDEO" | grep -q '720,1280'
           ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$VIDEO" | grep -q 'aac'
           ffprobe -v error -select_streams a:0 -show_entries stream=codec_name,sample_rate,channels -of csv=p=0 output/audio/bhajan_aabha_dj_master.mp3 | grep -q 'mp3,48000,2'
-          ffprobe -v error -show_entries format=duration -of csv=p=0 "$VIDEO" | awk '$1+0 >= 178 && $1+0 <= 302 {ok=1} END {exit !(ok)}'
+          DURATION=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$VIDEO")
+          awk -v d="$DURATION" 'BEGIN {exit !(d >= 178 && d <= 302)}'
           grep -q '"zero_cost": true' output/run_state.json
           grep -q '"kaggle": false' output/run_state.json
-          grep -q '"target_duration_sec": 240' output/run_state.json
-          grep -q '"music_duration_sec": 240' output/run_state.json
-          grep -q '"visual_chapters": 8' output/run_state.json
-          grep -q '"music_contract": "full-length 240s ACE-Step generation; not a 30s loop"' output/run_state.json
+          grep -q '"full_length_song": true' output/run_state.json
+          grep -q '"scene_count": 16' output/run_state.json
+          grep -q '"target_duration_range_sec": "180-300"' output/run_state.json
           cat output/run_state.json
 
-      - name: Publish long-form production release
+      - name: Publish 3-5 minute production release
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
           set -e
-          TAG="bhajan-aabha-v6-longform"
+          TAG="bhajan-aabha-longform"
           gh release delete "$TAG" --repo "$REPO" --cleanup-tag --yes 2>/dev/null || true
           gh release create "$TAG" --repo "$REPO" \
-            --title "Bhajan Aabha v6 — Long-form 4-minute Production" \
-            --notes "4-minute production architecture: full-length ACE-Step devotional music + 3 x 30s source visual scenes assembled into 8 visual chapters + synchronized SRT + standalone 320k DJ master. Zero-cost: no Kaggle, paid GPU, paid API, or Actions artifact storage." \
+            --title "Bhajan Aabha — 3-5 Minute Production" \
+            --notes "Full-length 3-5 minute devotional video. Default production target is 240 seconds: one full-length ACE-Step song, 16 x 15-second canonical-deity visual scenes, synchronized Hindi lyrics, and standalone 320k DJ master. Zero-cost architecture: no Kaggle, paid GPU, paid API, or Actions artifact storage." \
             --prerelease output/videos/*.mp4 output/audio/bhajan_aabha_dj_master.mp3 output/run_state.json output/manifest.json output/lyrics.srt
           echo "LONGFORM_RELEASE=https://github.com/$REPO/releases/tag/$TAG"
