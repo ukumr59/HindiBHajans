@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+import io
 import json
 import os
 import re
@@ -13,12 +15,9 @@ import app.zero_cost_pipeline_v5_2 as music
 
 base = longform.base
 KAGGLE_USERNAME = os.getenv('KAGGLE_USERNAME', '').strip()
-KAGGLE_KERNEL_TITLE = 'Bhajan Aabha ACE-Step GPU Worker'
 REQUESTED_SLUG = os.getenv('KAGGLE_KERNEL_SLUG', '').strip()
-CANDIDATE_SLUGS = []
-for _slug in (REQUESTED_SLUG, 'bhajan-aabha-ace-step-gpu-worker', 'bhajan-aabha-ace-step'):
-    if _slug and _slug not in CANDIDATE_SLUGS:
-        CANDIDATE_SLUGS.append(_slug)
+BASE_SLUG = 'bhajan-aabha-ace-step-gpu-worker'
+KAGGLE_KERNEL_TITLE = 'Bhajan Aabha ACE-Step GPU Worker'
 
 
 def _run(*args, cwd=None, check=True, capture=False):
@@ -33,19 +32,60 @@ def _require_kaggle():
         raise RuntimeError('SETUP_REQUIRED: KAGGLE_KEY or KAGGLE_API_TOKEN repository secret is missing')
 
 
+def _csv_kernel_refs(search_term: str) -> list[str]:
+    p = _run('kaggle', 'kernels', 'list', '--mine', '--search', search_term, '--page-size', '100', '-v', check=False, capture=True)
+    text = (p.stdout + '\n' + p.stderr).strip()
+    if p.returncode != 0:
+        print(f'KAGGLE_DISCOVERY: kernels list failed for {search_term!r}: {text[-900:]}', flush=True)
+        return []
+    refs: list[str] = []
+    try:
+        rows = list(csv.DictReader(io.StringIO(p.stdout)))
+        for row in rows:
+            ref = (row.get('ref') or row.get('Ref') or '').strip()
+            if ref and '/' in ref:
+                refs.append(ref)
+    except Exception as exc:
+        print(f'KAGGLE_DISCOVERY: CSV parse failed: {exc}', flush=True)
+    return refs
+
+
+def _discover_owned_kernel() -> str | None:
+    """Find the real kernel ref from Kaggle's own-kernel listing.
+
+    Pulling a guessed private slug can return 403 even when a conflicting
+    kernel exists. The owned-kernel list is the authoritative discovery path.
+    """
+    terms = [
+        KAGGLE_KERNEL_TITLE,
+        BASE_SLUG,
+        'Bhajan Aabha',
+    ]
+    seen: set[str] = set()
+    for term in terms:
+        for ref in _csv_kernel_refs(term):
+            if ref in seen:
+                continue
+            seen.add(ref)
+            owner, _, slug = ref.partition('/')
+            if owner == KAGGLE_USERNAME and ('bhajan' in slug.lower() or 'ace-step' in slug.lower()):
+                print(f'KAGGLE_DISCOVERY: owned kernel found via list: {ref}', flush=True)
+                return ref
+    print('KAGGLE_DISCOVERY: no owned Bhajan/ACE-Step kernel found in --mine listing', flush=True)
+    return None
+
+
 def _try_pull_existing(kernel_id: str) -> bool:
     probe = Path('.kaggle_kernel_probe')
     if probe.exists():
         shutil.rmtree(probe)
     try:
-        # IMPORTANT: current Kaggle CLI expects OWNER/KERNEL as the positional
-        # argument. `-k/--kernel` is NOT a valid option for `kernels pull`.
         p = _run('kaggle', 'kernels', 'pull', kernel_id, '-p', str(probe), '-m', check=False, capture=True)
         text = (p.stdout + '\n' + p.stderr).strip()
         if p.returncode == 0 and (probe / 'kernel-metadata.json').exists():
             print(f'KAGGLE_DISCOVERY: existing kernel confirmed by pull: {kernel_id}', flush=True)
             return True
-        print(f'KAGGLE_DISCOVERY: cannot pull {kernel_id}: {text[-700:]}', flush=True)
+        print(f'KAGGLE_DISCOVERY: pull unavailable for {kernel_id}: {text[-700:]}', flush=True)
         return False
     finally:
         if probe.exists():
@@ -53,16 +93,19 @@ def _try_pull_existing(kernel_id: str) -> bool:
 
 
 def _select_kernel() -> tuple[str, bool]:
-    # Do not use `kernels status` as existence detection. Private kernels can
-    # legitimately return Permission denied there even when the owner can
-    # update them. Pulling metadata is the reliable ownership check.
-    for slug in CANDIDATE_SLUGS:
-        kernel_id = f'{KAGGLE_USERNAME}/{slug}'
-        if _try_pull_existing(kernel_id):
-            return kernel_id, True
+    # First discover the actual owned kernel rather than guessing a slug.
+    discovered = _discover_owned_kernel()
+    if discovered and _try_pull_existing(discovered):
+        return discovered, True
 
-    # No accessible existing worker. Create one stable, slug-matching kernel.
-    slug = 'bhajan-aabha-ace-step-gpu-worker'
+    # If no accessible owned kernel exists, create a NEW slug that cannot
+    # collide with the old broken/ghost kernel. The title and slug are kept in
+    # sync because Kaggle links them and rejects conflicting metadata.
+    slug = REQUESTED_SLUG or f'{BASE_SLUG}-v2'
+    title = 'Bhajan Aabha ACE-Step GPU Worker V2' if slug.endswith('-v2') else KAGGLE_KERNEL_TITLE
+    global KAGGLE_KERNEL_TITLE
+    KAGGLE_KERNEL_TITLE = title
+    print(f'KAGGLE_DISCOVERY: creating isolated fallback kernel slug={slug}', flush=True)
     return f'{KAGGLE_USERNAME}/{slug}', False
 
 
@@ -73,12 +116,8 @@ def _prepare_kernel(kernel_id: str, existing: bool):
     root.mkdir(parents=True)
 
     if existing:
-        # Pull the existing kernel metadata/code before updating it. Preserve
-        # its exact title/slug relationship to avoid a new-kernel 409.
         _run('kaggle', 'kernels', 'pull', kernel_id, '-p', str(root), '-m')
         print(f'KAGGLE_METADATA_OK: pulled existing kernel {kernel_id}', flush=True)
-    else:
-        print(f'KAGGLE_METADATA_OK: creating new kernel {kernel_id}', flush=True)
 
     shutil.copy2(Path(__file__).with_name('kaggle_ace_step_worker.py'), root / 'worker.py')
     request = {
@@ -95,7 +134,6 @@ def _prepare_kernel(kernel_id: str, existing: bool):
     metadata_path = root / 'kernel-metadata.json'
     if existing and metadata_path.exists():
         metadata = json.loads(metadata_path.read_text(encoding='utf-8'))
-        metadata['id'] = kernel_id
         metadata['code_file'] = 'worker.py'
         metadata['language'] = 'python'
         metadata['kernel_type'] = metadata.get('kernel_type', 'script')
@@ -103,8 +141,8 @@ def _prepare_kernel(kernel_id: str, existing: bool):
         metadata['enable_gpu'] = True
         metadata['enable_internet'] = True
         metadata['machine_shape'] = 'NvidiaTeslaT4'
-        # Preserve the pulled title exactly; do not rename an existing kernel.
     else:
+        slug = kernel_id.split('/', 1)[1]
         metadata = {
             'id': kernel_id,
             'title': KAGGLE_KERNEL_TITLE,
@@ -121,7 +159,7 @@ def _prepare_kernel(kernel_id: str, existing: bool):
             'model_sources': [],
         }
     metadata_path.write_text(json.dumps(metadata, indent=2), encoding='utf-8')
-    print(f'KAGGLE_METADATA_READY: id={kernel_id} existing={existing} gpu=NvidiaTeslaT4 title={metadata.get("title", "<preserved-existing>")}', flush=True)
+    print(f'KAGGLE_METADATA_READY: id={kernel_id} existing={existing} gpu=NvidiaTeslaT4 title={metadata.get("title")}', flush=True)
     return root
 
 
@@ -144,8 +182,6 @@ def _kernel_status(kernel_id: str) -> str:
 
 
 def _push_kernel(root: Path, kernel_id: str):
-    # A 409 can mean a stale/active kernel version. Retry, but only after
-    # first confirming we are updating the correct existing kernel.
     for attempt in range(1, 4):
         print(f'KAGGLE_LAUNCH: push attempt {attempt}/3 kernel={kernel_id}', flush=True)
         p = _run('kaggle', 'kernels', 'push', '-p', str(root), check=False, capture=True)
@@ -191,9 +227,7 @@ def generate_music_kaggle() -> Path:
         shutil.rmtree(out_dir)
     out_dir.mkdir()
     _run('kaggle', 'kernels', 'output', kernel_id, '-p', str(out_dir), '-o', '-q')
-    candidates = list(out_dir.rglob('bhajan_source.mp3'))
-    if not candidates:
-        candidates = list(out_dir.rglob('*.mp3'))
+    candidates = list(out_dir.rglob('bhajan_source.mp3')) or list(out_dir.rglob('*.mp3'))
     if not candidates:
         raise RuntimeError(f'KAGGLE_ACE_FATAL: no MP3 returned by kernel. Files={list(out_dir.rglob("*"))}')
     source = candidates[0]
@@ -221,7 +255,7 @@ if __name__ == '__main__':
         'music_model': 'acestep-v15-turbo',
         'music_lm_model': 'acestep-5Hz-lm-0.6B',
         'kaggle': True,
-        'kaggle_kernel': f'{KAGGLE_USERNAME}/{REQUESTED_SLUG or "bhajan-aabha-ace-step-gpu-worker"}',
+        'kaggle_kernel': f'{KAGGLE_USERNAME}/{REQUESTED_SLUG or BASE_SLUG}',
         'huggingface_zero_gpu': False,
         'paid_services': False,
         'paid_gpu': False,
