@@ -13,12 +13,10 @@ import requests
 OUT = Path(os.getenv("OUTPUT_DIR", "output"))
 VIDEOS = OUT / "videos"
 AUDIO = OUT / "audio"
-
 AGNES_ROOT = os.getenv("AGNES_ROOT", "https://apihub.agnes-ai.com").rstrip("/")
 AGNES_API_KEY = os.getenv("AGNES_API_KEY", "").strip()
 ACESTEP_ROOT = os.getenv("ACESTEP_ROOT", "https://ace-step-ace-step-v1-5.hf.space").rstrip("/")
-
-VIDEO_SECONDS = max(30, min(60, int(os.getenv("VIDEO_SECONDS", "45"))))
+VIDEO_SECONDS = 45
 SCENE_SECONDS = 15
 FPS = 24
 WIDTH, HEIGHT = 720, 1280
@@ -27,51 +25,22 @@ PACK = {
     "slug": "ram",
     "deity": "श्री राम",
     "title": "श्री राम — भक्ति की मधुर धुन",
-    "lyrics": """[Intro]\n\n\n[Verse 1]\nमन में बसो रघुनंदन, चरणों में मेरा ध्यान\nराम नाम की ज्योति जले, रोशन हो हर प्राण\n\n[Chorus]\nश्री राम जय राम, जय जय राम\nमेरे मन के दीप में, बसते श्री राम\n\n[Verse 2]\nदुख की घड़ी में साथ दो, हे दीनदयाल भगवान\nतेरा नाम ही आसरा, तेरा नाम ही सम्मान\n\n[Chorus]\nश्री राम जय राम, जय जय राम\nमेरे मन के दीप में, बसते श्री राम\n\n[Outro]\nश्री राम... जय राम... जय जय राम...""",
-    "music_prompt": (
-        "A modern cinematic Hindi devotional bhajan for YouTube, warm expressive male lead singing, "
-        "clear Hindi pronunciation, devotional melody with memorable chorus, harmonium, tabla, dholak, "
-        "bansuri flute, tanpura drone, soft temple bells, subtle acoustic strings, tasteful bass, "
-        "polished contemporary devotional production, emotional but peaceful, natural human-like singing, "
-        "strong melodic phrasing, dynamic intro-verse-chorus structure, professional stereo mix, "
-        "NOT spoken word, NOT narration, NOT humming, NOT a cappella."
-    ),
-    "image_prompt": (
-        "Lord Rama as a revered Hindu deity, serene compassionate divine face, blue-tinted skin, "
-        "golden crown, traditional yellow silk dhoti, ornate jewelry, bow resting beside him, "
-        "subtle divine aura, standing in a magnificent Ayodhya-inspired temple courtyard at dawn, "
-        "warm golden sunlight, marigold flowers, oil lamps, soft incense haze, cinematic devotional "
-        "photorealistic sacred art, highly detailed face and hands, dignified traditional iconography, "
-        "vertical composition, no text, no watermark, no modern clothing"
-    ),
+    "lyrics": """[Intro]\n\n[Verse 1]\nमन में बसो रघुनंदन, चरणों में मेरा ध्यान\nराम नाम की ज्योति जले, रोशन हो हर प्राण\n\n[Chorus]\nश्री राम जय राम, जय जय राम\nमेरे मन के दीप में, बसते श्री राम\n\n[Verse 2]\nदुख की घड़ी में साथ दो, हे दीनदयाल भगवान\nतेरा नाम ही आसरा, तेरा नाम ही सम्मान\n\n[Chorus]\nश्री राम जय राम, जय जय राम\nमेरे मन के दीप में, बसते श्री राम\n\n[Outro]\nश्री राम... जय राम... जय जय राम...""",
+    "music_prompt": "Modern cinematic Hindi devotional bhajan for YouTube, expressive natural male lead vocal singing in clear Hindi, memorable devotional melody, harmonium, tabla, dholak, bansuri flute, tanpura drone, soft temple bells, subtle acoustic strings, tasteful bass, polished contemporary stereo production, emotional and peaceful, strong verse and chorus dynamics, natural breaths and phrasing, NOT spoken word, NOT narration, NOT humming, NOT a cappella.",
+    "image_prompt": "Lord Rama as a revered Hindu deity, serene compassionate divine face, blue-tinted skin, golden crown, traditional yellow silk dhoti, ornate jewelry, bow beside him, subtle divine aura, magnificent Ayodhya-inspired temple courtyard at dawn, warm golden sunlight, marigold flowers, oil lamps, soft incense haze, cinematic devotional sacred art, highly detailed face and hands, dignified traditional Hindu iconography, vertical composition, no text, no watermark, no modern clothing.",
     "scene_prompts": [
-        "Slow cinematic push-in toward the deity, gentle golden light rays, subtle flowing cloth and aura, floating flower petals, calm devotional atmosphere, natural camera motion, preserve deity identity and facial details.",
-        "Slow lateral camera movement around the deity in the temple courtyard, lamps flickering softly, incense drifting, gentle breeze moving garments, subtle divine glow, cinematic depth of field, preserve deity identity and facial details.",
-        "Gradual upward camera move from the lamps toward the deity's peaceful face, warm sunrise brightening the temple, petals drifting through the air, serene divine aura, cinematic devotional climax, preserve deity identity and facial details.",
+        "Cinematic slow push toward Lord Rama in the temple courtyard, warm dawn rays, gently moving garments and flower petals, flickering diyas and incense haze, serene devotional atmosphere, realistic natural motion, preserve the deity's face, hands and identity exactly.",
+        "Cinematic lateral camera movement around Lord Rama, temple lamps flickering, incense drifting, petals floating, subtle movement of cloth and jewelry, warm golden light, shallow depth of field, reverent devotional mood, preserve the same deity identity and facial details.",
+        "Cinematic gradual rise from foreground diyas toward Lord Rama's peaceful face as sunrise brightens the temple, petals drifting, soft divine aura, emotional devotional climax, realistic camera movement, preserve the same deity identity and facial details.",
     ],
 }
 
 
-def require_env() -> None:
-    if not AGNES_API_KEY:
-        raise RuntimeError(
-            "SETUP_REQUIRED: repository secret AGNES_API_KEY is missing. "
-            "Create a free Agnes AI API key and add it to GitHub repository secrets as AGNES_API_KEY. "
-            "This pipeline does not use paid APIs, paid GPU, Kaggle, or Actions artifacts."
-        )
-
-
-def session() -> requests.Session:
-    s = requests.Session()
-    s.headers.update({"User-Agent": "BhajanAabha/5.0"})
-    return s
-
-
-def request_json(s: requests.Session, method: str, url: str, *, headers=None, json_body=None, timeout=60, retries=4):
+def http_json(session: requests.Session, method: str, url: str, *, headers=None, body=None, timeout=90, retries=4):
     last = None
     for attempt in range(retries):
         try:
-            r = s.request(method, url, headers=headers, json=json_body, timeout=timeout)
+            r = session.request(method, url, headers=headers, json=body, timeout=timeout)
             if r.status_code in (429, 500, 502, 503, 504):
                 last = f"HTTP {r.status_code}: {r.text[:500]}"
                 time.sleep(min(60, 5 * (attempt + 1)))
@@ -85,265 +54,185 @@ def request_json(s: requests.Session, method: str, url: str, *, headers=None, js
     raise RuntimeError(f"HTTP request failed after retries: {url} | {last}")
 
 
-def generate_image(s: requests.Session) -> str:
-    print("IMAGE: generating a single canonical deity reference...")
-    body = {
-        "model": "agnes-image-2.1-flash",
-        "prompt": PACK["image_prompt"],
-        "n": 1,
-        "size": "576x1024",
-        "extra_body": {"response_format": "url"},
-    }
-    data = request_json(
-        s,
-        "POST",
-        f"{AGNES_ROOT}/v1/images/generations",
-        headers={"Authorization": f"Bearer {AGNES_API_KEY}", "Content-Type": "application/json"},
-        json_body=body,
-        timeout=120,
-    )
-    try:
-        url = data["data"][0]["url"]
-    except (KeyError, IndexError, TypeError) as exc:
-        raise RuntimeError(f"IMAGE_FATAL: unexpected Agnes image response: {data}") from exc
-    print("IMAGE_OK", url[:100])
-    return url
-
-
-def download_binary(s: requests.Session, url: str, path: Path) -> None:
-    with s.get(url, stream=True, timeout=120) as r:
+def download(session: requests.Session, url: str, path: Path, *, min_bytes=10000):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with session.get(url, stream=True, timeout=180) as r:
         r.raise_for_status()
-        path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("wb") as f:
             for chunk in r.iter_content(1024 * 1024):
                 if chunk:
                     f.write(chunk)
-    if path.stat().st_size < 10_000:
+    if path.stat().st_size < min_bytes:
         raise RuntimeError(f"DOWNLOAD_FATAL: suspiciously small file: {path}")
 
 
-def generate_video_clip(s: requests.Session, image_url: str, prompt: str, index: int) -> Path:
-    # Free/default Agnes video access is currently documented at 1 actual request/minute.
-    # Generation itself usually takes longer, but this guard prevents rapid 429 retries.
-    if index > 1:
-        print("VIDEO: respecting Agnes free-tier RPM; waiting 65 seconds before next scene...")
-        time.sleep(65)
-    body = {
-        "model": "agnes-video-v2.0",
-        "prompt": prompt,
-        "image": image_url,
-        "width": WIDTH,
-        "height": HEIGHT,
-        "num_frames": SCENE_SECONDS * FPS + 1,
-        "frame_rate": FPS,
-        "negative_prompt": "deformed face, extra fingers, extra limbs, duplicate deity, distorted hands, text, watermark, logo, flicker, jitter, cartoon, low detail",
-    }
-    print(f"VIDEO: submitting scene {index}/3...")
-    data = request_json(
-        s,
-        "POST",
-        f"{AGNES_ROOT}/v1/videos",
-        headers={"Authorization": f"Bearer {AGNES_API_KEY}", "Content-Type": "application/json"},
-        json_body=body,
-        timeout=90,
-    )
-    video_id = data.get("video_id") or data.get("task_id")
-    if not video_id:
-        raise RuntimeError(f"VIDEO_FATAL: Agnes returned no video_id: {data}")
+def require_env():
+    if not AGNES_API_KEY:
+        raise RuntimeError("SETUP_REQUIRED: AGNES_API_KEY repository secret is missing")
 
-    deadline = time.time() + 20 * 60
+
+def generate_image(session: requests.Session) -> str:
+    print("IMAGE: generating canonical deity reference")
+    data = http_json(session, "POST", f"{AGNES_ROOT}/v1/images/generations", headers={"Authorization": f"Bearer {AGNES_API_KEY}", "Content-Type": "application/json"}, body={"model": "agnes-image-2.1-flash", "prompt": PACK["image_prompt"], "n": 1, "size": "576x1024"}, timeout=180)
+    try:
+        url = data["data"][0]["url"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise RuntimeError(f"IMAGE_FATAL: unexpected Agnes response: {data}") from exc
+    if not str(url).startswith("http"):
+        raise RuntimeError(f"IMAGE_FATAL: invalid image URL: {url}")
+    print("IMAGE_OK")
+    return url
+
+
+def generate_video_clip(session: requests.Session, image_url: str, prompt: str, index: int) -> Path:
+    if index > 1:
+        print("VIDEO: free Agnes RPM guard — waiting 65 seconds")
+        time.sleep(65)
+    payload = {"model": "agnes-video-v2.0", "prompt": prompt, "image": image_url, "width": WIDTH, "height": HEIGHT, "num_frames": SCENE_SECONDS * FPS + 1, "frame_rate": FPS, "negative_prompt": "deformed face, extra fingers, extra limbs, duplicate deity, distorted hands, text, watermark, logo, flicker, jitter, cartoon, low detail"}
+    print(f"VIDEO: submitting scene {index}/3")
+    data = http_json(session, "POST", f"{AGNES_ROOT}/v1/videos", headers={"Authorization": f"Bearer {AGNES_API_KEY}", "Content-Type": "application/json"}, body=payload, timeout=120)
+    video_id = data.get("video_id") or data.get("id")
+    if not video_id:
+        raise RuntimeError(f"VIDEO_FATAL: no video_id in response: {data}")
+    deadline = time.time() + 25 * 60
     while time.time() < deadline:
-        r = s.get(
-            f"{AGNES_ROOT}/agnesapi",
-            params={"video_id": video_id, "model_name": "agnes-video-v2.0"},
-            headers={"Authorization": f"Bearer {AGNES_API_KEY}"},
-            timeout=30,
-        )
+        r = session.get(f"{AGNES_ROOT}/agnesapi", params={"video_id": video_id, "model_name": "agnes-video-v2.0"}, headers={"Authorization": f"Bearer {AGNES_API_KEY}"}, timeout=45)
         if r.status_code in (429, 500, 502, 503, 504):
             time.sleep(20)
             continue
         r.raise_for_status()
         status = r.json()
         state = str(status.get("status", "")).lower()
-        print(f"VIDEO: scene {index} status={state} progress={status.get('progress', 0)}%")
+        print(f"VIDEO: scene={index} status={state} progress={status.get('progress', 0)}%")
         if state == "completed":
-            url = status.get("url") or status.get("video_url")
-            if not url or not str(url).startswith("http"):
-                raise RuntimeError(f"VIDEO_FATAL: completed response has no downloadable URL: {status}")
+            url = status.get("url")
+            if not url:
+                raise RuntimeError(f"VIDEO_FATAL: completed response has no URL: {status}")
             path = VIDEOS / f"scene_{index}.mp4"
-            download_binary(s, str(url), path)
-            print("VIDEO_OK", path)
+            download(session, url, path, min_bytes=50000)
             return path
         if state == "failed":
             raise RuntimeError(f"VIDEO_FATAL: scene {index} failed: {status.get('error')}")
         time.sleep(20)
-    raise RuntimeError(f"VIDEO_FATAL: scene {index} timed out after 20 minutes")
+    raise RuntimeError(f"VIDEO_FATAL: scene {index} timed out")
 
 
-def generate_music(s: requests.Session) -> Path:
-    print("MUSIC: submitting Hindi singing + instrumental music to ACE-Step 1.5 ZeroGPU Space...")
-    body = {
-        "caption": PACK["music_prompt"],
-        "lyrics": PACK["lyrics"],
-        "vocal_language": "hi",
-        "audio_format": "mp3",
-        "audio_duration": VIDEO_SECONDS,
-        "model": "acestep-v15-turbo",
-        "thinking": True,
-        "use_format": True,
-        "inference_steps": 8,
-        "batch_size": 1,
-        "use_random_seed": True,
-    }
-    data = request_json(
-        s,
-        "POST",
-        f"{ACESTEP_ROOT}/v1/music/generate",
-        headers={"Content-Type": "application/json"},
-        json_body=body,
-        timeout=120,
-        retries=5,
-    )
-    job_id = data.get("job_id")
-    if not job_id:
-        raise RuntimeError(f"MUSIC_FATAL: ACE-Step returned no job_id: {data}")
+def _extract_task_id(data):
+    if isinstance(data, dict):
+        if data.get("task_id"):
+            return data["task_id"]
+        inner = data.get("data")
+        if isinstance(inner, dict) and inner.get("task_id"):
+            return inner["task_id"]
+    raise RuntimeError(f"MUSIC_FATAL: ACE-Step task id missing: {data}")
 
-    deadline = time.time() + 20 * 60
+
+def generate_music(session: requests.Session) -> Path:
+    print("MUSIC: submitting Hindi sung bhajan to public ACE-Step 1.5 ZeroGPU Space")
+    payload = {"prompt": PACK["music_prompt"], "lyrics": PACK["lyrics"], "vocal_language": "hi", "audio_duration": VIDEO_SECONDS, "model": "acestep-v15-turbo", "thinking": False, "sample_mode": False, "use_format": False, "inference_steps": 8, "batch_size": 1, "use_random_seed": True}
+    data = http_json(session, "POST", f"{ACESTEP_ROOT}/release_task", body=payload, timeout=120, retries=5)
+    task_id = _extract_task_id(data)
+    print("MUSIC_TASK", task_id)
+    deadline = time.time() + 25 * 60
     while time.time() < deadline:
-        r = s.get(f"{ACESTEP_ROOT}/v1/jobs/{job_id}", timeout=30)
-        if r.status_code in (429, 500, 502, 503, 504):
-            time.sleep(10)
+        try:
+            result = http_json(session, "POST", f"{ACESTEP_ROOT}/query_result", body={"task_id_list": [task_id]}, timeout=60, retries=2)
+        except RuntimeError as exc:
+            print("MUSIC: transient query error:", exc)
+            time.sleep(15)
             continue
-        r.raise_for_status()
-        status = r.json()
-        state = str(status.get("status", "")).lower()
-        print(f"MUSIC: status={state} queue={status.get('queue_position')} eta={status.get('eta_seconds')}")
-        if state == "succeeded":
-            result = status.get("result") or {}
-            audio_path = result.get("first_audio_path")
-            if not audio_path:
-                paths = result.get("audio_paths") or []
-                audio_path = paths[0] if paths else None
-            if not audio_path:
-                raise RuntimeError(f"MUSIC_FATAL: no audio path in success response: {status}")
-            url = audio_path if audio_path.startswith("http") else urljoin(ACESTEP_ROOT + "/", audio_path.lstrip("/"))
-            path = AUDIO / "bhajan_master.mp3"
-            download_binary(s, url, path)
-            print("MUSIC_OK", path)
-            return path
-        if state == "failed":
-            raise RuntimeError(f"MUSIC_FATAL: ACE-Step generation failed: {status.get('error')}")
-        time.sleep(10)
-    raise RuntimeError("MUSIC_FATAL: ACE-Step generation timed out after 20 minutes")
+        items = result.get("data") if isinstance(result, dict) else result
+        if isinstance(items, dict):
+            items = items.get("data") or items.get("results") or []
+        if not isinstance(items, list) or not items:
+            time.sleep(15)
+            continue
+        item = items[0]
+        status = int(item.get("status", 0))
+        if status == 2:
+            raise RuntimeError(f"MUSIC_FATAL: ACE-Step failed: {item.get('result', item)}")
+        if status != 1:
+            print(f"MUSIC: still running status={status}")
+            time.sleep(15)
+            continue
+        raw = item.get("result", "[]")
+        try:
+            results = json.loads(raw) if isinstance(raw, str) else raw
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"MUSIC_FATAL: invalid result JSON: {raw}") from exc
+        if not results:
+            raise RuntimeError(f"MUSIC_FATAL: successful task returned no audio: {item}")
+        audio_ref = results[0].get("file")
+        if not audio_ref:
+            raise RuntimeError(f"MUSIC_FATAL: result contains no audio file: {results[0]}")
+        audio_url = audio_ref if str(audio_ref).startswith("http") else urljoin(ACESTEP_ROOT + "/", str(audio_ref).lstrip("/"))
+        path = AUDIO / "bhajan_source.mp3"
+        download(session, audio_url, path, min_bytes=20000)
+        print("MUSIC_OK", path)
+        return path
+    raise RuntimeError("MUSIC_FATAL: ACE-Step task timed out")
 
 
-def make_lyrics_srt(path: Path) -> None:
-    entries = [
-        (1, 6, "मन में बसो रघुनंदन, चरणों में मेरा ध्यान"),
-        (6, 11, "राम नाम की ज्योति जले, रोशन हो हर प्राण"),
-        (12, 17, "श्री राम जय राम, जय जय राम"),
-        (17, 22, "मेरे मन के दीप में, बसते श्री राम"),
-        (23, 28, "दुख की घड़ी में साथ दो, हे दीनदयाल भगवान"),
-        (28, 33, "तेरा नाम ही आसरा, तेरा नाम ही सम्मान"),
-        (34, 39, "श्री राम जय राम, जय जय राम"),
-        (39, 44, "मेरे मन के दीप में, बसते श्री राम"),
-        (44, 45, "श्री राम... जय राम... जय जय राम..."),
-    ]
-    def ts(sec: float) -> str:
-        h = int(sec // 3600)
-        m = int((sec % 3600) // 60)
-        s = int(sec % 60)
-        ms = int(round((sec - int(sec)) * 1000))
-        return f"{h:02}:{m:02}:{s:02},{ms:03}"
+def ffmpeg(*args: str):
+    p = subprocess.run(["ffmpeg", "-y", *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if p.returncode:
+        raise RuntimeError("FFMPEG_FATAL: " + p.stderr[-4000:])
+
+
+def make_srt(path: Path):
+    entries = [(1, 6, "मन में बसो रघुनंदन, चरणों में मेरा ध्यान"), (6, 11, "राम नाम की ज्योति जले, रोशन हो हर प्राण"), (12, 17, "श्री राम जय राम, जय जय राम"), (17, 22, "मेरे मन के दीप में, बसते श्री राम"), (23, 28, "दुख की घड़ी में साथ दो, हे दीनदयाल भगवान"), (28, 33, "तेरा नाम ही आसरा, तेरा नाम ही सम्मान"), (34, 39, "श्री राम जय राम, जय जय राम"), (39, 44, "मेरे मन के दीप में, बसते श्री राम"), (44, 45, "श्री राम... जय राम... जय जय राम...")]
+    def stamp(sec): return f"00:00:{sec:02},000"
     lines = []
-    for i, (a, b, text) in enumerate(entries, 1):
-        lines += [str(i), f"{ts(a)} --> {ts(b)}", text, ""]
+    for i, (start, end, text) in enumerate(entries, 1):
+        lines += [str(i), f"{stamp(start)} --> {stamp(end)}", text, ""]
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
-def ffmpeg(*args: str) -> None:
-    p = subprocess.run(["ffmpeg", "-y", *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    if p.returncode:
-        raise RuntimeError("FFMPEG_FATAL: " + p.stderr[-3000:])
-
-
-def assemble(scene_paths: list[Path], music: Path, final_path: Path) -> None:
+def assemble(scene_paths: list[Path], music: Path, final_path: Path):
     concat = OUT / "scenes.txt"
     concat.write_text("\n".join(f"file '{p.resolve()}'" for p in scene_paths) + "\n", encoding="utf-8")
-    silent = OUT / "visual.mp4"
-    ffmpeg("-f", "concat", "-safe", "0", "-i", str(concat), "-c", "copy", str(silent))
+    visual = OUT / "visual.mp4"
+    ffmpeg("-f", "concat", "-safe", "0", "-i", str(concat), "-c", "copy", str(visual))
     srt = OUT / "lyrics.srt"
-    make_lyrics_srt(srt)
-    ffmpeg(
-        "-i", str(silent), "-i", str(music), "-t", str(VIDEO_SECONDS),
-        "-filter_complex", f"[0:v]scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2,format=yuv420p[v];[v]subtitles={srt.as_posix()}:force_style='FontName=Noto Sans Devanagari,FontSize=20,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=90'[v2]",
-        "-map", "[v2]", "-map", "1:a:0", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-shortest", "-movflags", "+faststart", str(final_path),
-    )
-    if final_path.stat().st_size < 100_000:
-        raise RuntimeError("OUTPUT_FATAL: final MP4 is unexpectedly small")
+    make_srt(srt)
+    subtitle_filter = "subtitles=" + str(srt.resolve()).replace("\\", "/").replace(":", "\\:")
+    ffmpeg("-i", str(visual), "-i", str(music), "-filter_complex", "[1:a]atrim=0:45,asetpts=N/SR/TB,volume=1.0[a]", "-map", "0:v:0", "-map", "[a]", "-vf", subtitle_filter, "-t", "45", "-r", str(FPS), "-s", f"{WIDTH}x{HEIGHT}", "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(final_path))
 
 
-def validate(path: Path) -> dict:
-    out = subprocess.check_output([
-        "ffprobe", "-v", "error", "-show_entries", "format=duration,size:stream=codec_type,codec_name,width,height",
-        "-of", "json", str(path)
-    ], text=True)
-    data = json.loads(out)
+def validate(path: Path):
+    probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_type,codec_name,width,height:format=duration,size", "-of", "json", str(path)], capture_output=True, text=True, check=True)
+    data = json.loads(probe.stdout)
     streams = data.get("streams", [])
-    video = next((x for x in streams if x.get("codec_type") == "video"), None)
-    audio = next((x for x in streams if x.get("codec_type") == "audio"), None)
-    if not video or not audio:
-        raise RuntimeError("OUTPUT_FATAL: final MP4 must contain both video and audio")
-    if video.get("width") != WIDTH or video.get("height") != HEIGHT:
-        raise RuntimeError(f"OUTPUT_FATAL: expected {WIDTH}x{HEIGHT}, got {video.get('width')}x{video.get('height')}")
-    if audio.get("codec_name") != "aac":
-        raise RuntimeError("OUTPUT_FATAL: audio must be AAC")
+    video = next((s for s in streams if s.get("codec_type") == "video"), None)
+    audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
+    if not video or not audio: raise RuntimeError("OUTPUT_FATAL: final MP4 must contain video and audio")
+    if (video.get("width"), video.get("height")) != (WIDTH, HEIGHT): raise RuntimeError(f"OUTPUT_FATAL: wrong dimensions: {video.get('width')}x{video.get('height')}")
+    if audio.get("codec_name") != "aac": raise RuntimeError("OUTPUT_FATAL: audio codec is not AAC")
     duration = float(data.get("format", {}).get("duration", 0))
-    if duration < VIDEO_SECONDS - 2:
-        raise RuntimeError(f"OUTPUT_FATAL: final duration too short: {duration:.2f}s")
-    return {"duration": duration, "size": int(data.get("format", {}).get("size", 0)), "video": video, "audio": audio}
+    if duration < 43: raise RuntimeError(f"OUTPUT_FATAL: final duration too short: {duration:.2f}s")
+    return duration
 
 
-def main() -> None:
+def main():
     require_env()
-    for d in (OUT, VIDEOS, AUDIO):
-        d.mkdir(parents=True, exist_ok=True)
-    for p in VIDEOS.glob("*.mp4"):
-        p.unlink()
-    s = session()
-    print("ARCHITECTURE=v5 ZERO_COST=true KAGGLE=false PAID_SERVICES=false ACTIONS_ARTIFACTS=false")
-    print("VIDEO_BACKEND=Agnes Video v2.0 free/default tier")
-    print("MUSIC_BACKEND=ACE-Step 1.5 public ZeroGPU Space")
-
-    image_url = generate_image(s)
-    music = generate_music(s)
-    scenes = [generate_video_clip(s, image_url, prompt, i) for i, prompt in enumerate(PACK["scene_prompts"], 1)]
+    for d in (OUT, VIDEOS, AUDIO): d.mkdir(parents=True, exist_ok=True)
+    for p in VIDEOS.glob("*.mp4"): p.unlink()
+    session = requests.Session()
+    session.headers.update({"User-Agent": "BhajanAabha/5.1"})
+    print("ARCHITECTURE=v5.1 ZERO_COST=true KAGGLE=false PAID_SERVICES=false ACTIONS_ARTIFACTS=false")
+    print("VISUAL_BACKEND=Agnes Image 2.1 Flash + Agnes Video v2.0")
+    print("MUSIC_BACKEND=ACE-Step 1.5 public ZeroGPU Space via /release_task")
+    image_url = generate_image(session)
+    music = generate_music(session)
+    scenes = [generate_video_clip(session, image_url, prompt, i) for i, prompt in enumerate(PACK["scene_prompts"], 1)]
     final_path = VIDEOS / f"{datetime.now(timezone.utc):%Y%m%d}_bhajan-aabha_{PACK['slug']}_v5.mp4"
     assemble(scenes, music, final_path)
-    stats = validate(final_path)
-
-    state = {
-        "channel": "Bhajan Aabha",
-        "architecture": "v5-agnes-visuals-ace-step-music",
-        "status": "READY_FOR_RELEASE",
-        "zero_cost": True,
-        "kaggle": False,
-        "paid_services": False,
-        "paid_gpu": False,
-        "actions_artifacts": False,
-        "deity_reference": "Agnes Image 2.1 Flash",
-        "video_backend": "Agnes Video v2.0",
-        "music_backend": "ACE-Step 1.5 ZeroGPU Space",
-        "vocal_language": "hi",
-        "duration_sec": stats["duration"],
-        "output": str(final_path),
-        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
-    }
+    duration = validate(final_path)
+    state = {"channel": "Bhajan Aabha", "architecture": "v5.1-agnes-visuals-ace-step-music", "status": "READY_FOR_RELEASE", "zero_cost": True, "kaggle": False, "paid_services": False, "paid_gpu": False, "actions_artifacts": False, "deity_reference": "Agnes Image 2.1 Flash", "video_backend": "Agnes Video v2.0", "music_backend": "ACE-Step 1.5 public ZeroGPU Space", "vocal_language": "hi", "duration_sec": duration, "output": str(final_path), "generated_at_utc": datetime.now(timezone.utc).isoformat()}
     (OUT / "run_state.json").write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
     (OUT / "manifest.json").write_text(json.dumps({"videos": [state]}, ensure_ascii=False, indent=2), encoding="utf-8")
     print("VIDEO_OK", final_path)
     print(json.dumps(state, ensure_ascii=False, indent=2))
 
 
-if __name__ == "__main__":
-    main()
+if __name__ == "__main__": main()
