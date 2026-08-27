@@ -24,23 +24,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Verify v3 generator
+      - name: Verify v4 generator
         run: |
           set -e
           echo "COMMIT=$(git rev-parse HEAD)"
-          test -s app/zero_cost_pipeline_v3.py
-          grep -q 'ARCHITECTURE=v3' app/zero_cost_pipeline_v3.py
+          test -s app/zero_cost_pipeline_v4.py
+          grep -q 'ARCHITECTURE=v4' app/zero_cost_pipeline_v4.py
 
       - name: Install zero-cost system tools
         run: |
           set -e
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg fonts-noto-core espeak-ng espeak-ng-data
+          echo "FFMPEG=$(command -v ffmpeg)"
+          ffmpeg -version | head -1
           echo "ESPEAK=$(command -v espeak-ng)"
           espeak-ng --version
-          echo '--- available Hindi voices ---'
-          espeak-ng --voices | grep -E '(^|[[:space:]])hi([[:space:]]|$)' || true
-          echo 'System tools ready. TTS is tested by the v3 Python generator itself.'
+          echo '--- Hindi voice availability ---'
+          espeak-ng --voices | grep -E '(^|[[:space:]])hi([[:space:]]|$)'
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -50,12 +51,12 @@ jobs:
       - name: Install zero-cost generator dependencies
         run: pip install -r requirements.txt
 
-      - name: Generate videos with zero-cost v3 pipeline
+      - name: Generate videos with zero-cost v4 pipeline
         env:
           MAX_VIDEOS: '3'
           VIDEO_SECONDS: '45'
           OUTPUT_DIR: output
-        run: python -m app.zero_cost_pipeline_v3
+        run: python -m app.zero_cost_pipeline_v4
 
       - name: Validate generated outputs
         run: |
