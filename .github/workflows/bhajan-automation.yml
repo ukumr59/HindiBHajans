@@ -33,15 +33,25 @@ jobs:
 
       - name: Install zero-cost system tools
         run: |
+          set -e
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg fonts-noto-core espeak-ng espeak-ng-data
           echo "ESPEAK=$(command -v espeak-ng)"
           espeak-ng --version
+          echo '--- available Hindi voices ---'
           espeak-ng --voices | grep -E '(^|[[:space:]])hi([[:space:]]|$)' || true
-          echo '--- direct Hindi TTS smoke test ---'
-          espeak-ng -q -v hi --stdout 'श्री राम, राम नाम में मन को शांति मिले।' > /tmp/voice-test.wav
+          echo '--- direct Hindi TTS smoke test (stdout WAV) ---'
+          set +e
+          espeak-ng -q -v hi -s 138 -p 48 -a 150 --stdout 'श्री राम, राम नाम में मन को शांति मिले।' > /tmp/voice-test.wav 2>/tmp/voice-test.err
+          RC=$?
+          set -e
+          echo "eSpeak return code: ${RC}"
+          echo 'eSpeak stderr:'
+          cat /tmp/voice-test.err || true
           test -s /tmp/voice-test.wav
-          ffprobe -v error -show_entries format=duration -of csv=p=0 /tmp/voice-test.wav
+          test "$(head -c 4 /tmp/voice-test.wav)" = 'RIFF'
+          ffprobe -v error -show_entries format=duration -of csv=p=0 /tmp/voice-test.wav | awk '$1 >= 2 {ok=1} END {exit !ok}'
+          echo 'Hindi TTS smoke test: PASS (valid WAV produced)'
 
       - name: Set up Python
         uses: actions/setup-python@v5
