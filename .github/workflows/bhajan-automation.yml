@@ -6,7 +6,8 @@ on:
       timezone: 'Asia/Kolkata'
   workflow_dispatch:
 
-# ZERO-COST architecture: GitHub-hosted runner only. No Kaggle, GPU, paid API, or paid storage.
+# HARD CONSTRAINT: zero rupees now and forever. GitHub-hosted runner only.
+# No Kaggle, GPU rental, paid API, paid storage, or Actions artifacts.
 permissions:
   contents: write
 
@@ -23,19 +24,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Verify exact revision
+      - name: Verify v3 generator
         run: |
+          set -e
           echo "COMMIT=$(git rev-parse HEAD)"
-          git status --short
-          test -s app/zero_cost_pipeline_v2.py
+          test -s app/zero_cost_pipeline_v3.py
+          grep -q 'ARCHITECTURE=v3' app/zero_cost_pipeline_v3.py
 
-      - name: Install system tools
+      - name: Install zero-cost system tools
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg fonts-noto-core espeak-ng espeak-ng-data
           echo "ESPEAK=$(command -v espeak-ng)"
           espeak-ng --version
           espeak-ng --voices | grep -E '(^|[[:space:]])hi([[:space:]]|$)' || true
+          echo '--- direct Hindi TTS smoke test ---'
+          espeak-ng -q -v hi --stdout 'श्री राम, राम नाम में मन को शांति मिले।' > /tmp/voice-test.wav
+          test -s /tmp/voice-test.wav
+          ffprobe -v error -show_entries format=duration -of csv=p=0 /tmp/voice-test.wav
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -45,12 +51,12 @@ jobs:
       - name: Install zero-cost generator dependencies
         run: pip install -r requirements.txt
 
-      - name: Generate videos with zero-cost v2 pipeline
+      - name: Generate videos with zero-cost v3 pipeline
         env:
           MAX_VIDEOS: '3'
           VIDEO_SECONDS: '45'
           OUTPUT_DIR: output
-        run: python -m app.zero_cost_pipeline_v2
+        run: python -m app.zero_cost_pipeline_v3
 
       - name: Validate generated outputs
         run: |
@@ -76,16 +82,11 @@ jobs:
           set -e
           TAG="bhajan-aabha-latest"
           gh release delete "$TAG" --repo "$REPO" --cleanup-tag --yes 2>/dev/null || true
-          gh release create "$TAG" \
-            --repo "$REPO" \
-            --title "Bhajan Aabha — Latest Output" \
-            --notes "Latest zero-cost Bhajan Aabha output. Visuals and Hindi narration are generated locally on the GitHub runner. No Kaggle, paid API, paid GPU, external media download, or Actions artifact storage." \
-            --prerelease \
-            output/videos/*.mp4 output/*.json
+          gh release create "$TAG" --repo "$REPO" --title "Bhajan Aabha — Latest Output" --notes "Zero-cost Bhajan Aabha output. Procedural visuals + locally synthesized Hindi narration. No Kaggle, paid API, GPU rental, external media download, or Actions artifact storage." --prerelease output/videos/*.mp4 output/*.json
           echo "Release published: https://github.com/$REPO/releases/tag/$TAG"
 
       - name: Publish status
         run: |
-          echo 'YouTube/Facebook publishing remains gated until channel OAuth credentials are configured.'
+          echo 'YouTube/Facebook publishing is intentionally gated until channel OAuth credentials are configured.'
           echo 'ZERO_COST=true | KAGGLE=false | PAID_SERVICES=false | ACTIONS_ARTIFACTS=false'
           echo 'Video delivery is through the latest GitHub release.'
