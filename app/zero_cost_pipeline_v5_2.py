@@ -12,7 +12,7 @@ import app.zero_cost_pipeline_v5 as base
 SPACE = os.getenv("ACESTEP_SPACE", "ACE-Step/Ace-Step-v1.5")
 
 # The public ACE-Step deployment is a Gradio Space, not the standalone REST
-# server. We discover its live Gradio API schema at runtime so UI refactors do
+# server. Discover the live Gradio API schema at runtime so UI refactors do
 # not silently break the pipeline.
 
 VALUE_MAP = {
@@ -59,16 +59,20 @@ def choose_generation_endpoint(info: dict):
         labels = {norm(p.get("parameter_name") or p.get("label") or "") for p in params}
         overlap = len(wanted & labels)
         text = norm(name)
+        # The direct generate_with_progress endpoint currently has 47 inputs.
+        # Penalize much larger wrappers (batch-management endpoints) that need
+        # UI state objects we do not have in a headless workflow.
+        count_penalty = abs(len(params) - 47) * 3
         score = overlap * 100 + (20 if "generate" in text else 0) + (20 if "music" in text else 0)
-        if len(params) >= 15:
-            score += 10
+        score += 15 if len(params) == 47 else 0
+        score -= count_penalty
         if overlap >= 4:
             candidates.append((score, name, endpoint))
     if not candidates:
         raise RuntimeError("MUSIC_FATAL: could not discover the live ACE-Step Gradio generation endpoint")
     candidates.sort(reverse=True, key=lambda x: x[0])
     score, name, endpoint = candidates[0]
-    print(f"MUSIC_API_ENDPOINT={name} score={score}")
+    print(f"MUSIC_API_ENDPOINT={name} score={score} parameter_count={len(endpoint.get('parameters') or [])}")
     print("MUSIC_API_PARAMETERS:", [p.get("parameter_name") or p.get("label") for p in endpoint.get("parameters", [])])
     return name, endpoint
 
