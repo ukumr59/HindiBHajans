@@ -15,12 +15,6 @@ DJ_MUSIC_PROMPT = """Modern high-energy Hindi devotional bhajan made like a curr
 
 # IMPORTANT: the current public ACE-Step v1.5 Space exposes exactly 49
 # generation_wrapper inputs: 4 wrapper controls followed by these 45 controls.
-# This list mirrors the live wrapper documented by the Space source:
-# captions, lyrics, bpm, key_scale, time_signature, vocal_language,
-# inference_steps, guidance_scale, random_seed_checkbox, seed, reference_audio,
-# audio_duration, batch_size_input, src_audio, audio_codes, repaint range,
-# instruction, cover strength, task_type, then the remaining advanced/LM
-# controls through autogen_checkbox.
 GENERATION_ARGS = [
     "captions", "lyrics", "bpm", "key_scale", "time_signature", "vocal_language",
     "inference_steps", "guidance_scale", "random_seed_checkbox", "seed", "reference_audio",
@@ -110,8 +104,6 @@ def _save_audio(ref: str, target: Path):
 
 
 def _generation_values() -> list[object]:
-    # Exact 45-value live generation_wrapper payload after the four wrapper
-    # controls: selected_model, generation_mode, simple_query, simple_language.
     return [
         DJ_MUSIC_PROMPT,
         base.PACK["lyrics"],
@@ -185,27 +177,17 @@ def _param_text(param: dict) -> str:
     return _norm(" ".join(parts))
 
 
-def _default_value(param: dict):
-    if param.get("parameter_has_default"):
-        return param.get("parameter_default")
-    for key in ("default", "default_value", "value"):
-        if key in param:
-            return param[key]
-    return None
-
-
 def _validate_live_contract(params: list[dict], values: list[object]) -> None:
     if len(params) != 49:
         raise RuntimeError(f"MUSIC_FATAL: unexpected live generation_wrapper parameter count={len(params)}; expected 49")
     if len(values) != 45:
         raise RuntimeError(f"MUSIC_FATAL: internal live generation payload count={len(values)}; expected 45")
 
-    # The first four controls are the wrapper-specific inputs. Validate their
-    # choice domains before submission so a future API change fails safely.
     first_choices = [_choice_values(p) for p in params[:4]]
     model_choices = {_norm(x) for x in first_choices[0]}
     mode_choices = {_norm(x) for x in first_choices[1]}
-    if model_choices and "acestep-v15-turbo" not in model_choices:
+    # _norm converts hyphens to underscores, so compare normalized values.
+    if model_choices and "acestep_v15_turbo" not in model_choices:
         raise RuntimeError(f"MUSIC_FATAL: live model choices changed: {first_choices[0]!r}")
     if mode_choices and not {"simple", "custom"}.issubset(mode_choices):
         raise RuntimeError(f"MUSIC_FATAL: live generation-mode choices changed: {first_choices[1]!r}")
@@ -216,26 +198,16 @@ def _validate_live_contract(params: list[dict], values: list[object]) -> None:
 
 
 def _resolve_live_values(params: list[dict]) -> list[object]:
-    """Resolve the current public Space contract safely.
-
-    The current Space has a stable 49-input wrapper. We use the exact live
-    contract rather than fuzzy name matching because Gradio exposes many
-    generic parameter_N names. This specifically prevents model/generation-mode
-    controls from being confused with the hidden task_type dropdown.
-    """
     values = _generation_values()
     _validate_live_contract(params, values)
-
     wrapper_values = [
-        "acestep-v15-turbo",  # selected_model
-        "custom",             # generation_mode
-        "",                   # simple_query_input (unused in custom mode)
-        "hi",                 # simple_vocal_language
+        "acestep-v15-turbo",
+        "custom",
+        "",
+        "hi",
     ] + values
-
     if len(wrapper_values) != len(params):
         raise RuntimeError(f"MUSIC_FATAL: final live payload mismatch: payload={len(wrapper_values)} params={len(params)}")
-
     for index, value in enumerate(wrapper_values):
         text = _param_text(params[index])
         print(f"MUSIC: param[{index}]={text or '<unnamed>'} -> {value!r}")
@@ -244,15 +216,12 @@ def _resolve_live_values(params: list[dict]) -> list[object]:
 
 def generate_music_gradio() -> Path:
     from gradio_client import Client
-
     values = _generation_values()
     if len(values) != len(GENERATION_ARGS):
         raise RuntimeError(f"MUSIC_FATAL: internal ACE-Step value map mismatch: values={len(values)} expected={len(GENERATION_ARGS)}")
-
     print("MUSIC: connecting to official ACE-Step v1.5 public ZeroGPU Space")
     print("MUSIC: using exact current 49-parameter generation_wrapper contract")
     print("MUSIC: style=LOUD_MODERN_DEVOTIONAL_EDM_DJ_READY bpm=128 batch=1 thinking=off")
-
     last_error = None
     for attempt in range(1, 4):
         try:
