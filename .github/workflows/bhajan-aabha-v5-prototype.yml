@@ -1,4 +1,4 @@
-name: Bhajan Aabha v5.1 — Creative Prototype
+name: Bhajan Aabha v5.2 — Creative Prototype
 
 on:
   workflow_dispatch:
@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   generate-v5:
-    name: Generate Bhajan Aabha v5.1 prototype
+    name: Generate Bhajan Aabha v5.2 prototype
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
@@ -24,7 +24,6 @@ jobs:
       - name: Preflight
         env:
           AGNES_API_KEY: ${{ secrets.AGNES_API_KEY }}
-          ACESTEP_ROOT: https://ace-step-ace-step-v1-5.hf.space
         run: |
           set -e
           test -n "$AGNES_API_KEY" || {
@@ -32,13 +31,9 @@ jobs:
             exit 2
           }
           test -s app/zero_cost_pipeline_v5.py
-          python3 -m py_compile app/zero_cost_pipeline_v5.py
-          echo 'Checking public ACE-Step health endpoint...'
-          curl --fail --silent --show-error --max-time 30 "$ACESTEP_ROOT/health" || {
-            echo 'ACE-Step public ZeroGPU Space is temporarily unavailable.'
-            exit 3
-          }
-          echo 'PRECHECK_OK: Agnes secret present; ACE-Step endpoint reachable; Python syntax valid.'
+          test -s app/zero_cost_pipeline_v5_2.py
+          python3 -m py_compile app/zero_cost_pipeline_v5.py app/zero_cost_pipeline_v5_2.py
+          echo 'PRECHECK_OK: Agnes secret present; ACE-Step will be accessed through its live Gradio Space API; Python syntax valid.'
 
       - name: Install zero-cost media tools
         run: |
@@ -56,13 +51,13 @@ jobs:
       - name: Install Python dependencies
         run: pip install -r requirements.txt
 
-      - name: Generate v5.1 creative bhajan
+      - name: Generate v5.2 creative bhajan
         env:
           AGNES_API_KEY: ${{ secrets.AGNES_API_KEY }}
-          ACESTEP_ROOT: https://ace-step-ace-step-v1-5.hf.space
+          ACESTEP_SPACE: ACE-Step/Ace-Step-v1.5
           VIDEO_SECONDS: '45'
           OUTPUT_DIR: output
-        run: python -m app.zero_cost_pipeline_v5
+        run: python -m app.zero_cost_pipeline_v5_2
 
       - name: Validate output
         run: |
@@ -88,7 +83,7 @@ jobs:
           TAG="bhajan-aabha-v5-prototype"
           gh release delete "$TAG" --repo "$REPO" --cleanup-tag --yes 2>/dev/null || true
           gh release create "$TAG" --repo "$REPO" \
-            --title "Bhajan Aabha v5.1 — Creative Prototype" \
-            --notes "45-second prototype: Agnes deity visuals + ACE-Step 1.5 Hindi singing/music + FFmpeg composition. Zero-cost architecture: no Kaggle, paid GPU, paid API, or Actions artifact storage." \
+            --title "Bhajan Aabha v5.2 — Creative Prototype" \
+            --notes "45-second prototype: Agnes deity visuals + ACE-Step 1.5 Hindi singing/music through the official public Gradio Space + FFmpeg composition. Zero-cost architecture: no Kaggle, paid GPU, paid API, or Actions artifact storage." \
             --prerelease output/videos/*.mp4 output/run_state.json output/manifest.json output/lyrics.srt
           echo "PROTOTYPE_RELEASE=https://github.com/$REPO/releases/tag/$TAG"
