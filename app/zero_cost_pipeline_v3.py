@@ -74,8 +74,8 @@ def pcm_stats(path):
 def ensure_voice(text,path):
     exe=espeak()
     path.unlink(missing_ok=True)
-    # IMPORTANT: use stdout instead of eSpeak's -w file mode. This avoids the
-    # silent/zero-byte failure seen on the hosted runner while remaining local.
+    # IMPORTANT: use stdout instead of eSpeak's -w file mode. On the hosted
+    # runner, eSpeak can emit a valid WAV while still returning a non-zero code.
     variants=[
         [exe,"-q","-v","hi","-s","138","-p","48","-a","150","--stdout",text],
         [exe,"-q","-v","hi+f2","-s","138","-p","48","-a","150","--stdout",text],
@@ -85,13 +85,16 @@ def ensure_voice(text,path):
         try:
             r=subprocess.run(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=60,check=False)
             data=r.stdout or b""
-            if r.returncode==0 and len(data)>=1000 and data[:4]==b"RIFF":
+            # Treat the generated audio as authoritative: a valid RIFF/WAV
+            # with real duration/RMS is usable even when eSpeak reports rc != 0.
+            if len(data)>=1000 and data[:4]==b"RIFF":
                 path.write_bytes(data)
                 dur,rms=pcm_stats(path)
-                print(f"VOICE_TEST executable={exe} bytes={len(data)} duration={dur:.2f}s rms={rms:.5f}")
+                print(f"VOICE_TEST executable={exe} rc={r.returncode} bytes={len(data)} duration={dur:.2f}s rms={rms:.5f}")
                 if dur>=2 and rms>=0.002:
                     print("VOICE_OK Hindi spoken WAV generated")
                     return
+                path.unlink(missing_ok=True)
             errors.append(f"rc={r.returncode} bytes={len(data)} stderr={r.stderr.decode(errors='ignore')[-180:]}")
         except Exception as e: errors.append(repr(e))
     raise RuntimeError("VOICE_FATAL: no valid spoken Hindi WAV: "+" | ".join(errors))
@@ -106,7 +109,6 @@ def font(size,bold=False):
 
 def frame(p,n,tf,bf,sf):
     t=n/FPS; im=Image.new("RGB",(W,H),p["bg"]); d=ImageDraw.Draw(im,"RGBA"); cx,cy=W//2,int(H*.45)
-    # Animated mandala, lamp and particles: entirely generated, no downloaded media.
     for rr in range(330,40,-24): d.ellipse((cx-rr,cy-rr,cx+rr,cy+rr),outline=p["accent"]+(max(12,75-rr//6),),width=2)
     for i in range(28):
         a=t*.22+i*math.pi/14; x=cx+int(math.cos(a)*260); y=cy+int(math.sin(a)*260); d.ellipse((x-4,y-4,x+4,y+4),fill=p["accent"]+(150,))
