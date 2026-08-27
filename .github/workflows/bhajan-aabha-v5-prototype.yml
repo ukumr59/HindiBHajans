@@ -28,9 +28,10 @@ jobs:
           test -s app/zero_cost_pipeline_v5.py
           test -s app/zero_cost_pipeline_v5_2.py
           test -s app/zero_cost_pipeline_v5_3.py
-          python3 -m py_compile app/zero_cost_pipeline_v5.py app/zero_cost_pipeline_v5_2.py app/zero_cost_pipeline_v5_3.py
+          test -s app/zero_cost_pipeline_v5_4.py
+          python3 -m py_compile app/zero_cost_pipeline_v5.py app/zero_cost_pipeline_v5_2.py app/zero_cost_pipeline_v5_3.py app/zero_cost_pipeline_v5_4.py
           grep -q 'gradio_client' requirements.txt
-          echo 'PRECHECK_OK: zero-cost 3-5 minute architecture; no Kaggle; ACE-Step official public ZeroGPU Space; Agnes visuals.'
+          echo 'PRECHECK_OK: zero-cost 3-5 minute architecture; adaptive live ACE-Step contract; Agnes visuals.'
 
       - name: Install zero-cost media tools
         run: |
@@ -53,7 +54,7 @@ jobs:
           AGNES_API_KEY: ${{ secrets.AGNES_API_KEY }}
           VIDEO_SECONDS: '180'
           OUTPUT_DIR: output
-        run: python -m app.zero_cost_pipeline_v5_3
+        run: python -m app.zero_cost_pipeline_v5_4
 
       - name: Validate output
         run: |
@@ -75,6 +76,7 @@ jobs:
           grep -q '"full_length_song": true' output/run_state.json
           grep -q '"scene_count": 12' output/run_state.json
           grep -q '"target_duration_range_sec": "180-300"' output/run_state.json
+          grep -q '"music_api_mode": "live_gradio_48_input_contract"' output/run_state.json
           cat output/run_state.json
 
       - name: Publish 3-5 minute production release
