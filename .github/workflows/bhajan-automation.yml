@@ -40,20 +40,7 @@ jobs:
           espeak-ng --version
           echo '--- available Hindi voices ---'
           espeak-ng --voices | grep -E '(^|[[:space:]])hi([[:space:]]|$)' || true
-          echo '--- direct Hindi TTS smoke test (stdout WAV) ---'
-          set +e
-          espeak-ng -q -v hi -s 138 -p 48 -a 150 --stdout 'श्री राम, राम नाम में मन को शांति मिले।' > /tmp/voice-test.wav 2>/tmp/voice-test.err
-          RC=$?
-          set -e
-          echo "eSpeak return code: ${RC}"
-          echo 'eSpeak stderr:'
-          cat /tmp/voice-test.err || true
-          test -s /tmp/voice-test.wav
-          test "$(head -c 4 /tmp/voice-test.wav)" = 'RIFF'
-          # Do not use `awk ... {exit 0} END {exit 1}`: awk still executes END,
-          # which was causing a false failure even when the WAV was valid.
-          ffprobe -v error -show_entries format=duration -of csv=p=0 /tmp/voice-test.wav | awk '$1+0 >= 2 {ok=1} END {exit !(ok)}'
-          echo 'Hindi TTS smoke test: PASS (valid WAV produced)'
+          echo 'System tools ready. TTS is tested by the v3 Python generator itself.'
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -82,7 +69,7 @@ jobs:
             test -s "$f"
             ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "$f" | grep -q '720,1280'
             ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$f" | grep -q 'aac'
-            ffprobe -v error -select_streams a:0 -show_entries stream=duration -of csv=p=0 "$f" | awk '$1 > 1 {ok=1} END {exit !ok}'
+            ffprobe -v error -select_streams a:0 -show_entries stream=duration -of csv=p=0 "$f" | awk '$1+0 > 1 {ok=1} END {exit !(ok)}'
           done
           cat output/run_state.json
 
