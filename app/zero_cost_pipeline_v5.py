@@ -16,7 +16,7 @@ AUDIO = OUT / "audio"
 AGNES_ROOT = os.getenv("AGNES_ROOT", "https://apihub.agnes-ai.com").rstrip("/")
 AGNES_API_KEY = os.getenv("AGNES_API_KEY", "").strip()
 ACESTEP_ROOT = os.getenv("ACESTEP_ROOT", "https://ace-step-ace-step-v1-5.hf.space").rstrip("/")
-VIDEO_SECONDS = 45
+VIDEO_SECONDS = int(os.getenv("VIDEO_SECONDS", "45"))
 SCENE_SECONDS = 15
 FPS = 24
 WIDTH, HEIGHT = 720, 1280
@@ -26,7 +26,7 @@ PACK = {
     "deity": "श्री राम",
     "title": "श्री राम — भक्ति की मधुर धुन",
     "lyrics": """[Intro]\n\n[Verse 1]\nमन में बसो रघुनंदन, चरणों में मेरा ध्यान\nराम नाम की ज्योति जले, रोशन हो हर प्राण\n\n[Chorus]\nश्री राम जय राम, जय जय राम\nमेरे मन के दीप में, बसते श्री राम\n\n[Verse 2]\nदुख की घड़ी में साथ दो, हे दीनदयाल भगवान\nतेरा नाम ही आसरा, तेरा नाम ही सम्मान\n\n[Chorus]\nश्री राम जय राम, जय जय राम\nमेरे मन के दीप में, बसते श्री राम\n\n[Outro]\nश्री राम... जय राम... जय जय राम...""",
-    "music_prompt": "Modern cinematic Hindi devotional bhajan for YouTube, expressive natural male lead vocal singing in clear Hindi, memorable devotional melody, harmonium, tabla, dholak, bansuri flute, tanpura drone, soft temple bells, subtle acoustic strings, tasteful bass, polished contemporary stereo production, emotional and peaceful, strong verse and chorus dynamics, natural breaths and phrasing, NOT spoken word, NOT narration, NOT humming, NOT a cappella.",
+    "music_prompt": "High-energy modern Hindi devotional DJ bhajan / devotional EDM remix, 128 BPM, 4/4, loud punchy club-ready production with a strong four-on-the-floor kick, deep controlled sub-bass, tight electronic bassline, bright modern synth leads and pads, energetic electronic percussion, powerful dhol and dholak grooves, crisp claps, tasteful temple bells, short risers and impact transitions, catchy devotional hook, cinematic build-ups and satisfying chorus drops. Strong expressive male Hindi lead vocal clearly singing every lyric, upfront and intelligible, with tasteful vocal doubles and spacious reverb; harmonium and bansuri are supporting colors, not the dominant instruments. Modern Indian devotional dance sound, energetic festival/DJ feel, wide stereo image, punchy transients, full frequency spectrum, polished commercial master, loud but clean, no clipping, no muddy low end. Arrange as a complete DJ-friendly song with intro, verse, pre-chorus build, big chorus/drop, second verse, bigger final chorus/drop and outro. NOT spoken word, NOT narration, NOT humming, NOT a cappella, NOT an acoustic-only bhajan, NOT a soft meditation track.",
     "image_prompt": "Lord Rama as a revered Hindu deity, serene compassionate divine face, blue-tinted skin, golden crown, traditional yellow silk dhoti, ornate jewelry, bow beside him, subtle divine aura, magnificent Ayodhya-inspired temple courtyard at dawn, warm golden sunlight, marigold flowers, oil lamps, soft incense haze, cinematic devotional sacred art, highly detailed face and hands, dignified traditional Hindu iconography, vertical composition, no text, no watermark, no modern clothing.",
     "scene_prompts": [
         "Cinematic slow push toward Lord Rama in the temple courtyard, warm dawn rays, gently moving garments and flower petals, flickering diyas and incense haze, serene devotional atmosphere, realistic natural motion, preserve the deity's face, hands and identity exactly.",
@@ -117,62 +117,6 @@ def generate_video_clip(session: requests.Session, image_url: str, prompt: str, 
     raise RuntimeError(f"VIDEO_FATAL: scene {index} timed out")
 
 
-def _extract_task_id(data):
-    if isinstance(data, dict):
-        if data.get("task_id"):
-            return data["task_id"]
-        inner = data.get("data")
-        if isinstance(inner, dict) and inner.get("task_id"):
-            return inner["task_id"]
-    raise RuntimeError(f"MUSIC_FATAL: ACE-Step task id missing: {data}")
-
-
-def generate_music(session: requests.Session) -> Path:
-    print("MUSIC: submitting Hindi sung bhajan to public ACE-Step 1.5 ZeroGPU Space")
-    payload = {"prompt": PACK["music_prompt"], "lyrics": PACK["lyrics"], "vocal_language": "hi", "audio_duration": VIDEO_SECONDS, "model": "acestep-v15-turbo", "thinking": False, "sample_mode": False, "use_format": False, "inference_steps": 8, "batch_size": 1, "use_random_seed": True}
-    data = http_json(session, "POST", f"{ACESTEP_ROOT}/release_task", body=payload, timeout=120, retries=5)
-    task_id = _extract_task_id(data)
-    print("MUSIC_TASK", task_id)
-    deadline = time.time() + 25 * 60
-    while time.time() < deadline:
-        try:
-            result = http_json(session, "POST", f"{ACESTEP_ROOT}/query_result", body={"task_id_list": [task_id]}, timeout=60, retries=2)
-        except RuntimeError as exc:
-            print("MUSIC: transient query error:", exc)
-            time.sleep(15)
-            continue
-        items = result.get("data") if isinstance(result, dict) else result
-        if isinstance(items, dict):
-            items = items.get("data") or items.get("results") or []
-        if not isinstance(items, list) or not items:
-            time.sleep(15)
-            continue
-        item = items[0]
-        status = int(item.get("status", 0))
-        if status == 2:
-            raise RuntimeError(f"MUSIC_FATAL: ACE-Step failed: {item.get('result', item)}")
-        if status != 1:
-            print(f"MUSIC: still running status={status}")
-            time.sleep(15)
-            continue
-        raw = item.get("result", "[]")
-        try:
-            results = json.loads(raw) if isinstance(raw, str) else raw
-        except json.JSONDecodeError as exc:
-            raise RuntimeError(f"MUSIC_FATAL: invalid result JSON: {raw}") from exc
-        if not results:
-            raise RuntimeError(f"MUSIC_FATAL: successful task returned no audio: {item}")
-        audio_ref = results[0].get("file")
-        if not audio_ref:
-            raise RuntimeError(f"MUSIC_FATAL: result contains no audio file: {results[0]}")
-        audio_url = audio_ref if str(audio_ref).startswith("http") else urljoin(ACESTEP_ROOT + "/", str(audio_ref).lstrip("/"))
-        path = AUDIO / "bhajan_source.mp3"
-        download(session, audio_url, path, min_bytes=20000)
-        print("MUSIC_OK", path)
-        return path
-    raise RuntimeError("MUSIC_FATAL: ACE-Step task timed out")
-
-
 def ffmpeg(*args: str):
     p = subprocess.run(["ffmpeg", "-y", *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if p.returncode:
@@ -196,7 +140,16 @@ def assemble(scene_paths: list[Path], music: Path, final_path: Path):
     srt = OUT / "lyrics.srt"
     make_srt(srt)
     subtitle_filter = "subtitles=" + str(srt.resolve()).replace("\\", "/").replace(":", "\\:")
-    ffmpeg("-i", str(visual), "-i", str(music), "-filter_complex", "[1:a]atrim=0:45,asetpts=N/SR/TB,volume=1.0[a]", "-map", "0:v:0", "-map", "[a]", "-vf", subtitle_filter, "-t", "45", "-r", str(FPS), "-s", f"{WIDTH}x{HEIGHT}", "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(final_path))
+    # DJ-oriented final master: keep the generated arrangement intact while
+    # applying clean loudness normalization and a -1 dBTP ceiling. This makes
+    # the embedded song substantially louder and more consistent without hard
+    # clipping or destructive brick-wall limiting.
+    audio_filter = "loudnorm=I=-9:TP=-1.0:LRA=7"
+    ffmpeg("-i", str(visual), "-i", str(music), "-filter_complex", f"[1:a]atrim=0:{VIDEO_SECONDS},asetpts=N/SR/TB,{audio_filter}[a]", "-map", "0:v:0", "-map", "[a]", "-vf", subtitle_filter, "-t", str(VIDEO_SECONDS), "-r", str(FPS), "-s", f"{WIDTH}x{HEIGHT}", "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "256k", "-ar", "48000", "-movflags", "+faststart", str(final_path))
+    # Also export the mastered audio as a standalone MP3 so the generated
+    # devotional track is directly usable in DJ software/players.
+    dj_mp3 = AUDIO / "bhajan_aabha_dj_master.mp3"
+    ffmpeg("-i", str(music), "-af", audio_filter, "-ar", "48000", "-c:a", "libmp3lame", "-b:a", "320k", "-id3v2_version", "3", "-metadata", "title=Bhajan Aabha — DJ Master", "-metadata", "artist=Bhajan Aabha", "-metadata", "genre=Devotional EDM", str(dj_mp3))
 
 
 def validate(path: Path):
@@ -209,7 +162,9 @@ def validate(path: Path):
     if (video.get("width"), video.get("height")) != (WIDTH, HEIGHT): raise RuntimeError(f"OUTPUT_FATAL: wrong dimensions: {video.get('width')}x{video.get('height')}")
     if audio.get("codec_name") != "aac": raise RuntimeError("OUTPUT_FATAL: audio codec is not AAC")
     duration = float(data.get("format", {}).get("duration", 0))
-    if duration < 43: raise RuntimeError(f"OUTPUT_FATAL: final duration too short: {duration:.2f}s")
+    if duration < max(43, VIDEO_SECONDS - 2): raise RuntimeError(f"OUTPUT_FATAL: final duration too short: {duration:.2f}s")
+    dj_mp3 = AUDIO / "bhajan_aabha_dj_master.mp3"
+    if not dj_mp3.exists() or dj_mp3.stat().st_size < 100000: raise RuntimeError("OUTPUT_FATAL: standalone DJ master MP3 missing or suspiciously small")
     return duration
 
 
@@ -217,21 +172,24 @@ def main():
     require_env()
     for d in (OUT, VIDEOS, AUDIO): d.mkdir(parents=True, exist_ok=True)
     for p in VIDEOS.glob("*.mp4"): p.unlink()
+    for p in AUDIO.glob("*.mp3"): p.unlink()
     session = requests.Session()
-    session.headers.update({"User-Agent": "BhajanAabha/5.1"})
-    print("ARCHITECTURE=v5.1 ZERO_COST=true KAGGLE=false PAID_SERVICES=false ACTIONS_ARTIFACTS=false")
+    session.headers.update({"User-Agent": "BhajanAabha/5.2"})
+    print("ARCHITECTURE=v5.2 ZERO_COST=true KAGGLE=false PAID_SERVICES=false ACTIONS_ARTIFACTS=false")
     print("VISUAL_BACKEND=Agnes Image 2.1 Flash + Agnes Video v2.0")
-    print("MUSIC_BACKEND=ACE-Step 1.5 public ZeroGPU Space via /release_task")
+    print("MUSIC_BACKEND=ACE-Step 1.5 HTTP API /v1/music/generate")
+    print("MUSIC_STYLE=LOUD_MODERN_DEVOTIONAL_EDM_DJ_READY bpm=128")
     image_url = generate_image(session)
     music = generate_music(session)
     scenes = [generate_video_clip(session, image_url, prompt, i) for i, prompt in enumerate(PACK["scene_prompts"], 1)]
     final_path = VIDEOS / f"{datetime.now(timezone.utc):%Y%m%d}_bhajan-aabha_{PACK['slug']}_v5.mp4"
     assemble(scenes, music, final_path)
     duration = validate(final_path)
-    state = {"channel": "Bhajan Aabha", "architecture": "v5.1-agnes-visuals-ace-step-music", "status": "READY_FOR_RELEASE", "zero_cost": True, "kaggle": False, "paid_services": False, "paid_gpu": False, "actions_artifacts": False, "deity_reference": "Agnes Image 2.1 Flash", "video_backend": "Agnes Video v2.0", "music_backend": "ACE-Step 1.5 public ZeroGPU Space", "vocal_language": "hi", "duration_sec": duration, "output": str(final_path), "generated_at_utc": datetime.now(timezone.utc).isoformat()}
+    state = {"channel": "Bhajan Aabha", "architecture": "v5.2-agnes-visuals-ace-step-http", "status": "READY_FOR_RELEASE", "zero_cost": True, "kaggle": False, "paid_services": False, "paid_gpu": False, "actions_artifacts": False, "deity_reference": "Agnes Image 2.1 Flash", "video_backend": "Agnes Video v2.0", "music_backend": "ACE-Step 1.5 HTTP API", "music_style": "loud modern devotional EDM / DJ-ready", "bpm": 128, "time_signature": "4/4", "mastering": "-9 LUFS integrated, -1 dBTP ceiling", "dj_master": str(AUDIO / "bhajan_aabha_dj_master.mp3"), "vocal_language": "hi", "duration_sec": duration, "output": str(final_path), "generated_at_utc": datetime.now(timezone.utc).isoformat()}
     (OUT / "run_state.json").write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
     (OUT / "manifest.json").write_text(json.dumps({"videos": [state]}, ensure_ascii=False, indent=2), encoding="utf-8")
     print("VIDEO_OK", final_path)
+    print("DJ_MASTER_OK", AUDIO / "bhajan_aabha_dj_master.mp3")
     print(json.dumps(state, ensure_ascii=False, indent=2))
 
 
