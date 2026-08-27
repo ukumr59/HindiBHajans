@@ -7,8 +7,10 @@ import subprocess
 import time
 from pathlib import Path
 
-import app.zero_cost_pipeline_v5 as base
+import app.zero_cost_pipeline_v5_4 as longform
+import app.zero_cost_pipeline_v5_2 as music
 
+base = longform.base
 KAGGLE_KERNEL_SLUG = os.getenv('KAGGLE_KERNEL_SLUG', 'bhajan-aabha-ace-step')
 KAGGLE_USERNAME = os.getenv('KAGGLE_USERNAME', '').strip()
 
@@ -62,10 +64,6 @@ def _prepare_kernel():
 
 def _configure_kaggle_cli():
     _run('python', '-m', 'pip', 'install', '-q', '-U', 'kaggle')
-    # Support both the current token environment and the legacy username/key
-    # pair without ever writing credentials to the repository or kernel source.
-    if os.getenv('KAGGLE_API_TOKEN'):
-        os.environ['KAGGLE_API_TOKEN'] = os.environ['KAGGLE_API_TOKEN']
     print(f'KAGGLE_LAUNCH: authenticated as {KAGGLE_USERNAME}', flush=True)
 
 
@@ -73,6 +71,7 @@ def _kernel_status(kernel_id: str) -> str:
     p = _run('kaggle', 'kernels', 'status', kernel_id, capture=True)
     text = (p.stdout + '\n' + p.stderr).upper()
     print('KAGGLE_STATUS:', text[-1200:], flush=True)
+    # Match explicit status lines first; avoid false positives from URLs/logs.
     for state in ('COMPLETE', 'ERROR', 'CANCELLED', 'CANCELED', 'FAILED', 'RUNNING', 'QUEUED', 'INITIALIZING'):
         if state in text:
             return state
@@ -84,7 +83,7 @@ def generate_music_kaggle() -> Path:
     _configure_kaggle_cli()
     root = _prepare_kernel()
     kernel_id = f'{KAGGLE_USERNAME}/{KAGGLE_KERNEL_SLUG}'
-    print(f'KAGGLE_LAUNCH: pushing {kernel_id} on free T4 GPU', flush=True)
+    print(f'KAGGLE_LAUNCH: pushing {kernel_id} on free NvidiaTeslaT4 GPU', flush=True)
     _run('kaggle', 'kernels', 'push', '-p', str(root))
 
     deadline = time.time() + 65 * 60
@@ -122,11 +121,29 @@ def generate_music_kaggle() -> Path:
     return target
 
 
-# Replace only the music backend. The existing Agnes image/video generation,
-# FFmpeg assembly, subtitles, validation and GitHub release remain unchanged.
-base.generate_music = lambda session: generate_music_kaggle()
+# v5.4 keeps the production-grade 180-300s lyrics, 12-scene visual plan,
+# SRT generation, validation and final assembly. Replace only its ACE-Step
+# Gradio call with the zero-cost Kaggle GPU worker.
+music.generate_music_gradio = generate_music_kaggle
 base.ACESTEP_ROOT = 'kaggle://ACE-Step-1.5'
 
 
 if __name__ == '__main__':
-    base.main()
+    longform.main()
+    state_path = base.OUT / 'run_state.json'
+    state = json.loads(state_path.read_text(encoding='utf-8')) if state_path.exists() else {}
+    state.update({
+        'architecture': 'v5.5-kaggle-gpu-longform',
+        'music_backend': 'ACE-Step 1.5 on Kaggle free GPU worker',
+        'music_api_mode': 'kaggle_ace_step_gpu_worker',
+        'music_model': 'acestep-v15-turbo',
+        'music_lm_model': 'acestep-5Hz-lm-0.6B',
+        'kaggle': True,
+        'huggingface_zero_gpu': False,
+        'paid_services': False,
+        'paid_gpu': False,
+        'zero_cost': True,
+    })
+    state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding='utf-8')
+    (base.OUT / 'manifest.json').write_text(json.dumps({'videos': [state]}, ensure_ascii=False, indent=2), encoding='utf-8')
+    print('STATE_OK backend=kaggle_ace_step_gpu_worker kaggle=true')
