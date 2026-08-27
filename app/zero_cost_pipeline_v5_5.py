@@ -1,0 +1,132 @@
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import time
+from pathlib import Path
+
+import app.zero_cost_pipeline_v5 as base
+
+KAGGLE_KERNEL_SLUG = os.getenv('KAGGLE_KERNEL_SLUG', 'bhajan-aabha-ace-step')
+KAGGLE_USERNAME = os.getenv('KAGGLE_USERNAME', '').strip()
+
+
+def _run(*args, cwd=None, check=True, capture=False):
+    print('KAGGLE_LAUNCH:', ' '.join(map(str, args)), flush=True)
+    return subprocess.run(list(map(str, args)), cwd=cwd, check=check, text=True, capture_output=capture)
+
+
+def _require_kaggle():
+    if not KAGGLE_USERNAME:
+        raise RuntimeError('SETUP_REQUIRED: KAGGLE_USERNAME repository secret is missing')
+    if not os.getenv('KAGGLE_KEY') and not os.getenv('KAGGLE_API_TOKEN'):
+        raise RuntimeError('SETUP_REQUIRED: KAGGLE_KEY or KAGGLE_API_TOKEN repository secret is missing')
+
+
+def _prepare_kernel():
+    root = Path('kaggle_job')
+    if root.exists():
+        shutil.rmtree(root)
+    root.mkdir(parents=True)
+    shutil.copy2(Path(__file__).with_name('kaggle_ace_step_worker.py'), root / 'worker.py')
+    request = {
+        'caption': base.PACK['music_prompt'],
+        'lyrics': base.PACK['lyrics'],
+        'duration': int(base.VIDEO_SECONDS),
+        'bpm': 128,
+        'keyscale': 'C Major',
+        'timesignature': '4/4',
+        'vocal_language': 'hi',
+    }
+    (root / 'bhajan_request.json').write_text(json.dumps(request, ensure_ascii=False, indent=2), encoding='utf-8')
+    metadata = {
+        'id': f'{KAGGLE_USERNAME}/{KAGGLE_KERNEL_SLUG}',
+        'title': 'Bhajan Aabha ACE-Step GPU Worker',
+        'code_file': 'worker.py',
+        'language': 'python',
+        'kernel_type': 'script',
+        'is_private': True,
+        'enable_gpu': True,
+        'enable_internet': True,
+        'machine_shape': 'NvidiaTeslaT4',
+        'dataset_sources': [],
+        'competition_sources': [],
+        'kernel_sources': [],
+        'model_sources': [],
+    }
+    (root / 'kernel-metadata.json').write_text(json.dumps(metadata, indent=2), encoding='utf-8')
+    return root
+
+
+def _configure_kaggle_cli():
+    _run('python', '-m', 'pip', 'install', '-q', '-U', 'kaggle')
+    # Support both the current token environment and the legacy username/key
+    # pair without ever writing credentials to the repository or kernel source.
+    if os.getenv('KAGGLE_API_TOKEN'):
+        os.environ['KAGGLE_API_TOKEN'] = os.environ['KAGGLE_API_TOKEN']
+    print(f'KAGGLE_LAUNCH: authenticated as {KAGGLE_USERNAME}', flush=True)
+
+
+def _kernel_status(kernel_id: str) -> str:
+    p = _run('kaggle', 'kernels', 'status', kernel_id, capture=True)
+    text = (p.stdout + '\n' + p.stderr).upper()
+    print('KAGGLE_STATUS:', text[-1200:], flush=True)
+    for state in ('COMPLETE', 'ERROR', 'CANCELLED', 'CANCELED', 'FAILED', 'RUNNING', 'QUEUED', 'INITIALIZING'):
+        if state in text:
+            return state
+    return 'UNKNOWN'
+
+
+def generate_music_kaggle() -> Path:
+    _require_kaggle()
+    _configure_kaggle_cli()
+    root = _prepare_kernel()
+    kernel_id = f'{KAGGLE_USERNAME}/{KAGGLE_KERNEL_SLUG}'
+    print(f'KAGGLE_LAUNCH: pushing {kernel_id} on free T4 GPU', flush=True)
+    _run('kaggle', 'kernels', 'push', '-p', str(root))
+
+    deadline = time.time() + 65 * 60
+    last_state = None
+    while time.time() < deadline:
+        state = _kernel_status(kernel_id)
+        if state != last_state:
+            print(f'KAGGLE_LAUNCH: state={state}', flush=True)
+            last_state = state
+        if state == 'COMPLETE':
+            break
+        if state in {'ERROR', 'FAILED', 'CANCELLED', 'CANCELED'}:
+            raise RuntimeError(f'KAGGLE_ACE_FATAL: kernel ended with state={state}')
+        time.sleep(30)
+    else:
+        raise RuntimeError('KAGGLE_ACE_FATAL: kernel timed out after 65 minutes')
+
+    out_dir = Path('kaggle_output')
+    if out_dir.exists():
+        shutil.rmtree(out_dir)
+    out_dir.mkdir()
+    _run('kaggle', 'kernels', 'output', kernel_id, '-p', str(out_dir), '-o', '-q')
+    candidates = list(out_dir.rglob('bhajan_source.mp3'))
+    if not candidates:
+        candidates = list(out_dir.rglob('*.mp3'))
+    if not candidates:
+        raise RuntimeError(f'KAGGLE_ACE_FATAL: no MP3 returned by kernel. Files={list(out_dir.rglob("*"))}')
+    source = candidates[0]
+    target = base.AUDIO / 'bhajan_source.mp3'
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, target)
+    if target.stat().st_size < 100_000:
+        raise RuntimeError('KAGGLE_ACE_FATAL: returned MP3 is suspiciously small')
+    print(f'KAGGLE_ACE_OK: {target} {target.stat().st_size} bytes', flush=True)
+    return target
+
+
+# Replace only the music backend. The existing Agnes image/video generation,
+# FFmpeg assembly, subtitles, validation and GitHub release remain unchanged.
+base.generate_music = lambda session: generate_music_kaggle()
+base.ACESTEP_ROOT = 'kaggle://ACE-Step-1.5'
+
+
+if __name__ == '__main__':
+    base.main()
