@@ -32,36 +32,6 @@ def _require_kaggle():
         raise RuntimeError('SETUP_REQUIRED: KAGGLE_KEY or KAGGLE_API_TOKEN repository secret is missing')
 
 
-def _csv_kernel_refs(search_term: str) -> list[str]:
-    p = _run('kaggle', 'kernels', 'list', '--mine', '--search', search_term, '--page-size', '100', '-v', check=False, capture=True)
-    if p.returncode != 0:
-        text = (p.stdout + '\n' + p.stderr).strip()
-        print(f'KAGGLE_DISCOVERY: kernels list failed for {search_term!r}: {text[-900:]}', flush=True)
-        return []
-    refs: list[str] = []
-    try:
-        rows = list(csv.DictReader(io.StringIO(p.stdout)))
-        for row in rows:
-            ref = (row.get('ref') or row.get('Ref') or '').strip()
-            if ref and '/' in ref:
-                refs.append(ref)
-    except Exception as exc:
-        print(f'KAGGLE_DISCOVERY: CSV parse failed: {exc}', flush=True)
-    return refs
-
-
-def _discover_owned_kernel() -> str | None:
-    """Find the real kernel ref from Kaggle's own-kernel listing."""
-    for term in (KAGGLE_KERNEL_TITLE, BASE_SLUG, 'Bhajan Aabha'):
-        for ref in _csv_kernel_refs(term):
-            owner, _, slug = ref.partition('/')
-            if owner == KAGGLE_USERNAME and ('bhajan' in slug.lower() or 'ace-step' in slug.lower()):
-                print(f'KAGGLE_DISCOVERY: owned kernel found via list: {ref}', flush=True)
-                return ref
-    print('KAGGLE_DISCOVERY: no owned Bhajan/ACE-Step kernel found in --mine listing', flush=True)
-    return None
-
-
 def _try_pull_existing(kernel_id: str) -> bool:
     probe = Path('.kaggle_kernel_probe')
     if probe.exists():
@@ -80,14 +50,13 @@ def _try_pull_existing(kernel_id: str) -> bool:
 
 
 def _select_kernel() -> tuple[str, bool]:
-    discovered = _discover_owned_kernel()
-    if discovered and _try_pull_existing(discovered):
-        return discovered, True
-
-    # Never recreate the known-conflicting slug. Use a distinct slug/title pair.
-    slug = REQUESTED_SLUG or f'{BASE_SLUG}-v2'
-    print(f'KAGGLE_DISCOVERY: creating isolated fallback kernel slug={slug}', flush=True)
-    return f'{KAGGLE_USERNAME}/{slug}', False
+    # IMPORTANT: every normal run gets a fresh slug. Reusing the previous
+    # slug is what caused the repeated SaveKernel HTTP 409 conflict.
+    # KAGGLE_KERNEL_SLUG is intentionally ignored for normal production runs
+    # so an old secret cannot force us back onto the conflicting kernel.
+    run_slug = f'{BASE_SLUG}-{int(time.time())}'
+    print(f'KAGGLE_DISCOVERY: creating unique isolated kernel slug={run_slug}', flush=True)
+    return f'{KAGGLE_USERNAME}/{run_slug}', False
 
 
 def _prepare_kernel(kernel_id: str, existing: bool):
@@ -123,11 +92,9 @@ def _prepare_kernel(kernel_id: str, existing: bool):
         metadata['enable_internet'] = True
         metadata['machine_shape'] = 'NvidiaTeslaT4'
     else:
-        slug = kernel_id.split('/', 1)[1]
-        title = 'Bhajan Aabha ACE-Step GPU Worker V2' if slug.endswith('-v2') else KAGGLE_KERNEL_TITLE
         metadata = {
             'id': kernel_id,
-            'title': title,
+            'title': KAGGLE_KERNEL_TITLE,
             'code_file': 'worker.py',
             'language': 'python',
             'kernel_type': 'script',
@@ -162,8 +129,8 @@ def _push_kernel(root: Path, kernel_id: str):
         if '409' not in output and 'Conflict' not in output:
             raise subprocess.CalledProcessError(p.returncode, p.args, p.stdout, p.stderr)
         if attempt < 3:
-            print('KAGGLE_PUSH: 409 conflict; waiting 60s before retry', flush=True)
-            time.sleep(60)
+            print('KAGGLE_PUSH: transient 409; waiting 15s before retry', flush=True)
+            time.sleep(15)
     raise RuntimeError('KAGGLE_ACE_FATAL: Kaggle kernels push remained HTTP 409 after 3 attempts')
 
 
@@ -179,7 +146,6 @@ def _download_output_once(kernel_id: str, out_dir: Path) -> tuple[bool, str]:
     candidates = list(out_dir.rglob('bhajan_source.mp3'))
     if candidates:
         return True, 'COMPLETE'
-    # No output yet is expected while the remote GPU kernel is running.
     if p.returncode != 0:
         low = text.lower()
         fatal_markers = ('permission denied', '403', '404', 'authentication', 'unauthorized', 'not found')
@@ -242,7 +208,6 @@ if __name__ == '__main__':
         'music_model': 'acestep-v15-turbo',
         'music_lm_model': 'acestep-5Hz-lm-0.6B',
         'kaggle': True,
-        'kaggle_kernel': f'{KAGGLE_USERNAME}/{REQUESTED_SLUG or BASE_SLUG}',
         'huggingface_zero_gpu': False,
         'paid_services': False,
         'paid_gpu': False,
