@@ -3,8 +3,6 @@ name: Bhajan Aabha v5.2 — Creative Prototype
 on:
   workflow_dispatch:
 
-# HARD CONSTRAINT: zero rupees. No Kaggle, no paid GPU, no paid API,
-# no Actions artifact storage. Output is delivered through a GitHub release.
 permissions:
   contents: write
 
@@ -26,14 +24,11 @@ jobs:
           AGNES_API_KEY: ${{ secrets.AGNES_API_KEY }}
         run: |
           set -e
-          test -n "$AGNES_API_KEY" || {
-            echo 'SETUP_REQUIRED: add AGNES_API_KEY as a repository secret.'
-            exit 2
-          }
+          test -n "$AGNES_API_KEY" || { echo 'SETUP_REQUIRED: add AGNES_API_KEY as a repository secret.'; exit 2; }
           test -s app/zero_cost_pipeline_v5.py
           test -s app/zero_cost_pipeline_v5_2.py
           python3 -m py_compile app/zero_cost_pipeline_v5.py app/zero_cost_pipeline_v5_2.py
-          echo 'PRECHECK_OK: Agnes secret present; ACE-Step will use its documented HTTP /v1/music/generate API; Python syntax valid.'
+          echo 'PRECHECK_OK: Agnes secret present; ACE-Step public Space will use POST /release_task + POST /query_result; Python syntax valid.'
 
       - name: Install zero-cost media tools
         run: |
@@ -67,15 +62,16 @@ jobs:
           test "$COUNT" -eq 1
           VIDEO=$(find output/videos -maxdepth 1 -type f -name '*.mp4' | head -1)
           test -s "$VIDEO"
+          test -s output/audio/bhajan_source.mp3
           test -s output/audio/bhajan_aabha_dj_master.mp3
           ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "$VIDEO" | grep -q '720,1280'
           ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$VIDEO" | grep -q 'aac'
+          ffprobe -v error -select_streams a:0 -show_entries stream=codec_name,sample_rate,channels -of csv=p=0 output/audio/bhajan_aabha_dj_master.mp3 | grep -q 'mp3,48000,2'
           ffprobe -v error -show_entries format=duration -of csv=p=0 "$VIDEO" | awk '$1+0 >= 43 {ok=1} END {exit !(ok)}'
-          ffprobe -v error -select_streams a:0 -show_entries stream=codec_name,sample_rate -of csv=p=0 output/audio/bhajan_aabha_dj_master.mp3 | grep -q 'mp3,48000'
           grep -q '"zero_cost": true' output/run_state.json
           grep -q '"kaggle": false' output/run_state.json
           grep -q '"bpm": 128' output/run_state.json
-          grep -q 'loud modern devotional EDM / DJ-ready' output/run_state.json
+          grep -q 'LOUD_MODERN_DEVOTIONAL_EDM_DJ_READY' output/run_state.json
           cat output/run_state.json
 
       - name: Publish prototype to GitHub release
@@ -88,6 +84,6 @@ jobs:
           gh release delete "$TAG" --repo "$REPO" --cleanup-tag --yes 2>/dev/null || true
           gh release create "$TAG" --repo "$REPO" \
             --title "Bhajan Aabha v5.2 — Creative Prototype" \
-            --notes "45-second prototype: Agnes deity visuals + ACE-Step 1.5 Hindi singing/music through the documented public HTTP API + FFmpeg composition. Music is explicitly generated as loud modern devotional EDM at 128 BPM and mastered as a standalone DJ-ready MP3. Zero-cost architecture: no Kaggle, paid GPU, paid API, or Actions artifact storage." \
+            --notes "45-second prototype: canonical deity visuals + Hindi sung devotional production + loud modern EDM/DJ-ready arrangement + standalone DJ master. ACE-Step public Space uses /release_task + /query_result. Zero-cost architecture." \
             --prerelease output/videos/*.mp4 output/audio/bhajan_aabha_dj_master.mp3 output/run_state.json output/manifest.json output/lyrics.srt
           echo "PROTOTYPE_RELEASE=https://github.com/$REPO/releases/tag/$TAG"
