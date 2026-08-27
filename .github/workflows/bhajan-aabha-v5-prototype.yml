@@ -1,0 +1,86 @@
+name: Bhajan Aabha v5 — Creative Prototype
+
+on:
+  workflow_dispatch:
+
+# HARD CONSTRAINT: zero rupees. No Kaggle, no paid GPU, no paid API,
+# no Actions artifact storage. Output is delivered through a GitHub release.
+permissions:
+  contents: write
+
+concurrency:
+  group: bhajan-aabha-v5-prototype
+  cancel-in-progress: false
+
+jobs:
+  generate-v5:
+    name: Generate Bhajan Aabha v5 prototype
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Preflight
+        env:
+          AGNES_API_KEY: ${{ secrets.AGNES_API_KEY }}
+        run: |
+          set -e
+          test -n "$AGNES_API_KEY" || {
+            echo 'SETUP_REQUIRED: add a FREE Agnes AI API key as repository secret AGNES_API_KEY.'
+            echo 'No paid plan is required by this workflow.'
+            exit 2
+          }
+          test -s app/zero_cost_pipeline_v5.py
+          python3 -m py_compile app/zero_cost_pipeline_v5.py
+
+      - name: Install zero-cost media tools
+        run: |
+          set -e
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg fonts-noto-core
+          ffmpeg -version | head -1
+          fc-match 'Noto Sans Devanagari' | head -1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Generate v5 creative bhajan
+        env:
+          AGNES_API_KEY: ${{ secrets.AGNES_API_KEY }}
+          ACESTEP_ROOT: https://ace-step-ace-step-v1-5.hf.space
+          VIDEO_SECONDS: '45'
+          OUTPUT_DIR: output
+        run: python -m app.zero_cost_pipeline_v5
+
+      - name: Validate output
+        run: |
+          set -e
+          test -s output/run_state.json
+          COUNT=$(find output/videos -maxdepth 1 -type f -name '*.mp4' | wc -l)
+          test "$COUNT" -eq 1
+          VIDEO=$(find output/videos -maxdepth 1 -type f -name '*.mp4' | head -1)
+          test -s "$VIDEO"
+          ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "$VIDEO" | grep -q '720,1280'
+          ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$VIDEO" | grep -q 'aac'
+          ffprobe -v error -show_entries format=duration -of csv=p=0 "$VIDEO" | awk '$1+0 >= 43 {ok=1} END {exit !(ok)}'
+          cat output/run_state.json
+
+      - name: Publish prototype to GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -e
+          TAG="bhajan-aabha-v5-prototype"
+          gh release delete "$TAG" --repo "$REPO" --cleanup-tag --yes 2>/dev/null || true
+          gh release create "$TAG" --repo "$REPO" \
+            --title "Bhajan Aabha v5 — Creative Prototype" \
+            --notes "45-second prototype: Agnes deity visuals + ACE-Step 1.5 Hindi singing/music + FFmpeg composition. Zero-cost architecture: no Kaggle, paid GPU, paid API, or Actions artifact storage." \
+            --prerelease output/videos/*.mp4 output/run_state.json output/manifest.json output/lyrics.srt
+          echo "PROTOTYPE_RELEASE=https://github.com/$REPO/releases/tag/$TAG"
