@@ -51,7 +51,7 @@ jobs:
       - name: Generate full-length bhajan video
         env:
           AGNES_API_KEY: ${{ secrets.AGNES_API_KEY }}
-          VIDEO_SECONDS: '240'
+          VIDEO_SECONDS: '180'
           OUTPUT_DIR: output
         run: python -m app.zero_cost_pipeline_v5_3
 
@@ -73,7 +73,7 @@ jobs:
           grep -q '"zero_cost": true' output/run_state.json
           grep -q '"kaggle": false' output/run_state.json
           grep -q '"full_length_song": true' output/run_state.json
-          grep -q '"scene_count": 16' output/run_state.json
+          grep -q '"scene_count": 12' output/run_state.json
           grep -q '"target_duration_range_sec": "180-300"' output/run_state.json
           cat output/run_state.json
 
@@ -87,6 +87,6 @@ jobs:
           gh release delete "$TAG" --repo "$REPO" --cleanup-tag --yes 2>/dev/null || true
           gh release create "$TAG" --repo "$REPO" \
             --title "Bhajan Aabha — 3-5 Minute Production" \
-            --notes "Full-length 3-5 minute devotional video. Default production target is 240 seconds: one full-length ACE-Step song, 16 x 15-second canonical-deity visual scenes, synchronized Hindi lyrics, and standalone 320k DJ master. Zero-cost architecture: no Kaggle, paid GPU, paid API, or Actions artifact storage." \
+            --notes "Full-length 3-5 minute devotional video. First production target is 180 seconds: one full-length ACE-Step song, 12 x 15-second canonical-deity visual scenes, synchronized Hindi lyrics, and standalone 320k DJ master. Zero-cost architecture: no Kaggle, paid GPU, paid API, or Actions artifact storage." \
             --prerelease output/videos/*.mp4 output/audio/bhajan_aabha_dj_master.mp3 output/run_state.json output/manifest.json output/lyrics.srt
           echo "LONGFORM_RELEASE=https://github.com/$REPO/releases/tag/$TAG"
