@@ -38,7 +38,9 @@ def _try_pull_existing(kernel_id: str) -> bool:
     if probe.exists():
         shutil.rmtree(probe)
     try:
-        p = _run('kaggle', 'kernels', 'pull', '-p', str(probe), '-k', kernel_id, '-m', check=False, capture=True)
+        # IMPORTANT: current Kaggle CLI expects OWNER/KERNEL as the positional
+        # argument. `-k/--kernel` is NOT a valid option for `kernels pull`.
+        p = _run('kaggle', 'kernels', 'pull', kernel_id, '-p', str(probe), '-m', check=False, capture=True)
         text = (p.stdout + '\n' + p.stderr).strip()
         if p.returncode == 0 and (probe / 'kernel-metadata.json').exists():
             print(f'KAGGLE_DISCOVERY: existing kernel confirmed by pull: {kernel_id}', flush=True)
@@ -71,10 +73,9 @@ def _prepare_kernel(kernel_id: str, existing: bool):
     root.mkdir(parents=True)
 
     if existing:
-        # Kaggle documents pull + push as the update workflow for an existing
-        # kernel. Preserve its exact title/slug metadata instead of inventing
-        # a new title, which is a known source of HTTP 409 conflicts.
-        _run('kaggle', 'kernels', 'pull', '-p', str(root), '-k', kernel_id, '-m')
+        # Pull the existing kernel metadata/code before updating it. Preserve
+        # its exact title/slug relationship to avoid a new-kernel 409.
+        _run('kaggle', 'kernels', 'pull', kernel_id, '-p', str(root), '-m')
         print(f'KAGGLE_METADATA_OK: pulled existing kernel {kernel_id}', flush=True)
     else:
         print(f'KAGGLE_METADATA_OK: creating new kernel {kernel_id}', flush=True)
@@ -102,8 +103,7 @@ def _prepare_kernel(kernel_id: str, existing: bool):
         metadata['enable_gpu'] = True
         metadata['enable_internet'] = True
         metadata['machine_shape'] = 'NvidiaTeslaT4'
-        # Keep the pulled title exactly as Kaggle owns it. For an existing
-        # kernel it is safe to retain it; changing title/slug is not needed.
+        # Preserve the pulled title exactly; do not rename an existing kernel.
     else:
         metadata = {
             'id': kernel_id,
@@ -144,9 +144,8 @@ def _kernel_status(kernel_id: str) -> str:
 
 
 def _push_kernel(root: Path, kernel_id: str):
-    # A 409 can also mean Kaggle still has an active session for the kernel.
-    # Give that session time to clear, then retry instead of immediately
-    # failing the whole GitHub run.
+    # A 409 can mean a stale/active kernel version. Retry, but only after
+    # first confirming we are updating the correct existing kernel.
     for attempt in range(1, 4):
         print(f'KAGGLE_LAUNCH: push attempt {attempt}/3 kernel={kernel_id}', flush=True)
         p = _run('kaggle', 'kernels', 'push', '-p', str(root), check=False, capture=True)
