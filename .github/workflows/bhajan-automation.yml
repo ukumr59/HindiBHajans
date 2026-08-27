@@ -6,8 +6,7 @@ on:
       timezone: 'Asia/Kolkata'
   workflow_dispatch:
 
-# Zero-cost architecture: GitHub runner only. No Kaggle, no paid GPU, no paid API.
-# The generator creates visuals and Hindi narration locally; no external media files are downloaded.
+# ZERO-COST architecture: GitHub-hosted runner only. No Kaggle, GPU, paid API, or paid storage.
 permissions:
   contents: write
 
@@ -24,10 +23,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Verify exact revision
+        run: |
+          echo "COMMIT=$(git rev-parse HEAD)"
+          git status --short
+          test -s app/zero_cost_pipeline_v2.py
+
       - name: Install system tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg fonts-noto-core espeak-ng
+          sudo apt-get install -y -qq ffmpeg fonts-noto-core espeak-ng espeak-ng-data
+          echo "ESPEAK=$(command -v espeak-ng)"
+          espeak-ng --version
+          espeak-ng --voices | grep -E '(^|[[:space:]])hi([[:space:]]|$)' || true
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -37,12 +45,12 @@ jobs:
       - name: Install zero-cost generator dependencies
         run: pip install -r requirements.txt
 
-      - name: Discover trends and generate videos
+      - name: Generate videos with zero-cost v2 pipeline
         env:
           MAX_VIDEOS: '3'
           VIDEO_SECONDS: '45'
           OUTPUT_DIR: output
-        run: python -m app.zero_cost_pipeline
+        run: python -m app.zero_cost_pipeline_v2
 
       - name: Validate generated outputs
         run: |
@@ -56,7 +64,6 @@ jobs:
             test -s "$f"
             ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "$f" | grep -q '720,1280'
             ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$f" | grep -q 'aac'
-            # Require a real audio stream with non-zero duration.
             ffprobe -v error -select_streams a:0 -show_entries stream=duration -of csv=p=0 "$f" | awk '$1 > 1 {ok=1} END {exit !ok}'
           done
           cat output/run_state.json
@@ -68,18 +75,17 @@ jobs:
         run: |
           set -e
           TAG="bhajan-aabha-latest"
-          echo "Replacing previous $TAG release so storage does not grow indefinitely."
           gh release delete "$TAG" --repo "$REPO" --cleanup-tag --yes 2>/dev/null || true
           gh release create "$TAG" \
             --repo "$REPO" \
             --title "Bhajan Aabha — Latest Output" \
-            --notes "Latest automatically generated Bhajan Aabha videos. Visuals are procedurally generated and narration is locally synthesized in Hindi. No paid service, GPU, Kaggle, or external media download is required." \
+            --notes "Latest zero-cost Bhajan Aabha output. Visuals and Hindi narration are generated locally on the GitHub runner. No Kaggle, paid API, paid GPU, external media download, or Actions artifact storage." \
             --prerelease \
             output/videos/*.mp4 output/*.json
           echo "Release published: https://github.com/$REPO/releases/tag/$TAG"
 
       - name: Publish status
         run: |
-          echo 'Publishing to YouTube/Facebook is intentionally gated until channel OAuth credentials are configured.'
-          echo 'No paid API, paid GPU, Kaggle, or Actions artifact storage is used.'
+          echo 'YouTube/Facebook publishing remains gated until channel OAuth credentials are configured.'
+          echo 'ZERO_COST=true | KAGGLE=false | PAID_SERVICES=false | ACTIONS_ARTIFACTS=false'
           echo 'Video delivery is through the latest GitHub release.'
