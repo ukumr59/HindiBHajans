@@ -11,11 +11,10 @@ import app.zero_cost_pipeline_v5_2 as v52
 ACE_STEP_SPACE = v52.ACE_STEP_SPACE
 base = v52.base
 
-# LIVE ACE-Step v1.5 generation_wrapper contract as exposed by the current Space.
-# The four wrapper inputs are followed by param_4..param_49 (46 generation inputs).
-# The critical input added after use_cot_language is instrumental_checkbox.
-# Omitting it shifts auto_lrc into score_scale, producing:
-#   Value False is less than minimum value 0.01
+# Canonical ACE-Step generation values. The public Space has exposed both
+# 45- and 46-generation-input variants; compatibility is resolved from the
+# live endpoint length, with only the trailing optional state argument omitted
+# for the 45-input variant.
 GENERATION_ARGS = [
     "captions", "lyrics", "bpm", "key_scale", "time_signature", "vocal_language",
     "inference_steps", "guidance_scale", "random_seed_checkbox", "seed", "reference_audio",
@@ -39,63 +38,22 @@ def _find_generation_endpoint(api: dict):
 
 def _values() -> list[object]:
     return [
-        v52.DJ_MUSIC_PROMPT,
-        base.PACK["lyrics"],
-        128,
-        "C Major",
-        "4",
-        "hi",
-        8,
-        7.0,
-        True,
-        "-1",
-        None,
-        float(base.VIDEO_SECONDS),
-        1,
-        None,
-        "",
-        0.0,
-        -1.0,
-        "Fill the audio semantic mask based on the given conditions:",
-        1.0,
-        "text2music",
-        False,
-        0.0,
-        1.0,
-        3.0,
-        "ode",
-        "",
-        "mp3",
-        0.85,
-        False,
-        2.0,
-        0,
-        0.9,
+        v52.DJ_MUSIC_PROMPT, base.PACK["lyrics"], 128, "C Major", "4", "hi", 8, 7.0,
+        True, "-1", None, float(base.VIDEO_SECONDS), 1, None, "", 0.0, -1.0,
+        "Fill the audio semantic mask based on the given conditions:", 1.0, "text2music",
+        False, 0.0, 1.0, 3.0, "ode", "", "mp3", 0.85, False, 2.0, 0, 0.9,
         "sleepy ambient, meditation, humming, spoken narration, a cappella, weak vocals, acoustic-only",
-        False,
-        False,
-        False,
-        False,
-        False,
-        False,
-        False,
-        False,
-        False,
-        0.5,
-        1,
-        None,
-        [],
+        False, False, False, False, False, False, False, False, False, 0.5, 1, None, [],
     ]
 
 
 def generate_music_gradio() -> Path:
-    values = _values()
-    if len(values) != 46 or len(GENERATION_ARGS) != 46:
-        raise RuntimeError(f"MUSIC_FATAL: positional map mismatch values={len(values)} args={len(GENERATION_ARGS)}")
+    canonical_values = _values()
+    if len(canonical_values) != 46 or len(GENERATION_ARGS) != 46:
+        raise RuntimeError(f"MUSIC_FATAL: canonical positional map mismatch values={len(canonical_values)} args={len(GENERATION_ARGS)}")
 
     print("MUSIC: connecting to official ACE-Step v1.5 public ZeroGPU Space")
-    print("MUSIC: using LIVE generation_wrapper positional contract")
-    print("MUSIC: wrapper=4 + generation=46; instrumental_checkbox explicitly included")
+    print("MUSIC: resolving LIVE generation_wrapper contract at runtime")
     print("MUSIC: style=LOUD_MODERN_DEVOTIONAL_EDM_DJ_READY bpm=128 batch=1 thinking=off")
 
     last_error = None
@@ -105,14 +63,18 @@ def generate_music_gradio() -> Path:
             api = client.view_api(print_info=False, return_format="dict")
             endpoint, info = _find_generation_endpoint(api)
             params = list(info.get("parameters") or [])
-            if len(params) != 50:
-                raise RuntimeError(
-                    f"MUSIC_FATAL: live generation_wrapper contract changed: total_params={len(params)} expected=50 (4 wrapper + 46 generation); refusing unsafe call"
-                )
-            print(f"MUSIC: selected endpoint={endpoint}")
-            print("MUSIC: live contract verified: param_4..param_49 = 46 generation parameters")
-
+            total = len(params)
+            if total not in (49, 50):
+                raise RuntimeError(f"MUSIC_FATAL: unsupported live generation_wrapper contract: total_params={total}; supported=49 or 50")
+            generation_count = total - 4
+            values = canonical_values[:generation_count]
             wrapper_values = ["acestep-v15-turbo", "custom", "", "hi"] + values
+            if len(wrapper_values) != total:
+                raise RuntimeError(f"MUSIC_FATAL: runtime positional count mismatch call={len(wrapper_values)} endpoint={total}")
+            mode = "45-generation compatibility" if generation_count == 45 else "46-generation canonical"
+            print(f"MUSIC: selected endpoint={endpoint}")
+            print(f"MUSIC: live contract verified: total={total}; wrapper=4; generation={generation_count}; mode={mode}")
+
             result = client.predict(*wrapper_values, api_name=endpoint)
             print("MUSIC: Gradio generation completed")
             print("MUSIC: result type=" + type(result).__name__)
@@ -142,7 +104,6 @@ def generate_music_gradio() -> Path:
 base.generate_music = lambda session: generate_music_gradio()
 base.ACESTEP_ROOT = "gradio://ACE-Step/Ace-Step-v1.5"
 
-
 if __name__ == "__main__":
     base.main()
     videos = sorted(base.VIDEOS.glob("*.mp4"))
@@ -154,7 +115,7 @@ if __name__ == "__main__":
         state = json.loads(state_path.read_text(encoding="utf-8"))
         state.update({
             "music_backend": "ACE-Step v1.5 official Hugging Face ZeroGPU Space via Gradio Client",
-            "music_api_mode": "gradio_client_live_api_positional_v46",
+            "music_api_mode": "gradio_client_live_api_runtime_contract",
             "music_style": "LOUD_MODERN_DEVOTIONAL_EDM_DJ_READY",
             "bpm": 128,
             "time_signature": "4/4",
