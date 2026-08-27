@@ -12,10 +12,16 @@ import app.zero_cost_pipeline_v5_4 as longform
 import app.zero_cost_pipeline_v5_2 as music
 
 base = longform.base
-# Kaggle requires the metadata id slug to resolve to the kernel title slug.
-# "Bhajan Aabha ACE-Step GPU Worker" resolves to this exact slug.
 DEFAULT_KAGGLE_KERNEL_SLUG = 'bhajan-aabha-ace-step-gpu-worker'
-KAGGLE_KERNEL_SLUG = os.getenv('KAGGLE_KERNEL_SLUG', DEFAULT_KAGGLE_KERNEL_SLUG).strip()
+_requested_slug = os.getenv('KAGGLE_KERNEL_SLUG', '').strip()
+# The previous workflow used bhajan-aabha-ace-step. It was accepted by the
+# push command but did not resolve to the title slug, producing the exact
+# warning/failure seen in the run logs. Normalize that legacy value here so
+# even an already-saved workflow invocation uses the correct kernel id.
+if _requested_slug in {'', 'bhajan-aabha-ace-step'}:
+    KAGGLE_KERNEL_SLUG = DEFAULT_KAGGLE_KERNEL_SLUG
+else:
+    KAGGLE_KERNEL_SLUG = _requested_slug
 KAGGLE_USERNAME = os.getenv('KAGGLE_USERNAME', '').strip()
 KAGGLE_KERNEL_TITLE = 'Bhajan Aabha ACE-Step GPU Worker'
 
