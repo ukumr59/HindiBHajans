@@ -27,7 +27,8 @@ jobs:
           test -n "$AGNES_API_KEY" || { echo 'SETUP_REQUIRED: add AGNES_API_KEY as a repository secret.'; exit 2; }
           test -s app/zero_cost_pipeline_v5.py
           test -s app/zero_cost_pipeline_v5_2.py
-          python3 -m py_compile app/zero_cost_pipeline_v5.py app/zero_cost_pipeline_v5_2.py
+          test -s app/zero_cost_pipeline_v5_2_fix.py
+          python3 -m py_compile app/zero_cost_pipeline_v5.py app/zero_cost_pipeline_v5_2.py app/zero_cost_pipeline_v5_2_fix.py
           grep -q 'gradio_client' requirements.txt
           echo 'PRECHECK_OK: Agnes secret present; ACE-Step will use the official public ZeroGPU Space through Gradio Client; Python syntax valid.'
 
@@ -52,7 +53,7 @@ jobs:
           AGNES_API_KEY: ${{ secrets.AGNES_API_KEY }}
           VIDEO_SECONDS: '45'
           OUTPUT_DIR: output
-        run: python -m app.zero_cost_pipeline_v5_2
+        run: python -m app.zero_cost_pipeline_v5_2_fix
 
       - name: Validate output
         run: |
