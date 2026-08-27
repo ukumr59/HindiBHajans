@@ -61,7 +61,9 @@ jobs:
           KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
           KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
           KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
-          KAGGLE_KERNEL_SLUG: bhajan-aabha-ace-step
+          # The previous slug is the known 409-conflict slug. Use the fresh,
+          # title-matched V2 slug for the free GPU worker.
+          KAGGLE_KERNEL_SLUG: bhajan-aabha-ace-step-gpu-worker-v2
           VIDEO_SECONDS: '180'
           OUTPUT_DIR: output
         run: python -m app.zero_cost_pipeline_v5_5
