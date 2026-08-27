@@ -12,18 +12,17 @@ import app.zero_cost_pipeline_v5_4 as longform
 import app.zero_cost_pipeline_v5_2 as music
 
 base = longform.base
-DEFAULT_KAGGLE_KERNEL_SLUG = 'bhajan-aabha-ace-step-gpu-worker'
-_requested_slug = os.getenv('KAGGLE_KERNEL_SLUG', '').strip()
-# The previous workflow used bhajan-aabha-ace-step. It was accepted by the
-# push command but did not resolve to the title slug, producing the exact
-# warning/failure seen in the run logs. Normalize that legacy value here so
-# even an already-saved workflow invocation uses the correct kernel id.
-if _requested_slug in {'', 'bhajan-aabha-ace-step'}:
-    KAGGLE_KERNEL_SLUG = DEFAULT_KAGGLE_KERNEL_SLUG
-else:
-    KAGGLE_KERNEL_SLUG = _requested_slug
 KAGGLE_USERNAME = os.getenv('KAGGLE_USERNAME', '').strip()
 KAGGLE_KERNEL_TITLE = 'Bhajan Aabha ACE-Step GPU Worker'
+REQUESTED_SLUG = os.getenv('KAGGLE_KERNEL_SLUG', '').strip()
+
+# Prefer the already-created worker. We never create a stream of disposable
+# Kaggle kernels. The 409 seen in the previous run occurred because the code
+# tried to create/update a kernel whose slug/title state already existed.
+CANDIDATE_SLUGS = []
+for _slug in (REQUESTED_SLUG, 'bhajan-aabha-ace-step-gpu-worker', 'bhajan-aabha-ace-step'):
+    if _slug and _slug not in CANDIDATE_SLUGS:
+        CANDIDATE_SLUGS.append(_slug)
 
 
 def _run(*args, cwd=None, check=True, capture=False):
@@ -38,11 +37,44 @@ def _require_kaggle():
         raise RuntimeError('SETUP_REQUIRED: KAGGLE_KEY or KAGGLE_API_TOKEN repository secret is missing')
 
 
-def _prepare_kernel():
+def _kernel_exists(kernel_id: str) -> bool:
+    p = _run('kaggle', 'kernels', 'status', kernel_id, check=False, capture=True)
+    text = (p.stdout + '\n' + p.stderr).strip()
+    if p.returncode == 0:
+        print(f'KAGGLE_DISCOVERY: existing kernel {kernel_id}', flush=True)
+        return True
+    print(f'KAGGLE_DISCOVERY: {kernel_id} not available ({text[-500:]})', flush=True)
+    return False
+
+
+def _select_kernel() -> tuple[str, bool]:
+    for slug in CANDIDATE_SLUGS:
+        kernel_id = f'{KAGGLE_USERNAME}/{slug}'
+        if _kernel_exists(kernel_id):
+            return kernel_id, True
+    # No existing kernel: create exactly one, with a title whose slug matches.
+    slug = 'bhajan-aabha-ace-step-gpu-worker'
+    return f'{KAGGLE_USERNAME}/{slug}', False
+
+
+def _prepare_kernel(kernel_id: str, existing: bool):
     root = Path('kaggle_job')
     if root.exists():
         shutil.rmtree(root)
     root.mkdir(parents=True)
+
+    if existing:
+        # Pull the existing metadata first. Kaggle documents this as the safe
+        # update workflow for an existing kernel. Most importantly, we keep
+        # its established title/slug relationship instead of sending a new
+        # title that can trigger HTTP 409 Conflict.
+        _run('kaggle', 'kernels', 'pull', '-p', str(root), '-k', kernel_id, '-m')
+        print(f'KAGGLE_METADATA_OK: reusing existing kernel {kernel_id}', flush=True)
+    else:
+        print(f'KAGGLE_METADATA_OK: creating new kernel {kernel_id}', flush=True)
+
+    # Replace only the executable worker and request payload. Do not replace
+    # the existing kernel's title/identity metadata.
     shutil.copy2(Path(__file__).with_name('kaggle_ace_step_worker.py'), root / 'worker.py')
     request = {
         'caption': base.PACK['music_prompt'],
@@ -54,23 +86,39 @@ def _prepare_kernel():
         'vocal_language': 'hi',
     }
     (root / 'bhajan_request.json').write_text(json.dumps(request, ensure_ascii=False, indent=2), encoding='utf-8')
-    metadata = {
-        'id': f'{KAGGLE_USERNAME}/{KAGGLE_KERNEL_SLUG}',
-        'title': KAGGLE_KERNEL_TITLE,
-        'code_file': 'worker.py',
-        'language': 'python',
-        'kernel_type': 'script',
-        'is_private': True,
-        'enable_gpu': True,
-        'enable_internet': True,
-        'machine_shape': 'NvidiaTeslaT4',
-        'dataset_sources': [],
-        'competition_sources': [],
-        'kernel_sources': [],
-        'model_sources': [],
-    }
-    (root / 'kernel-metadata.json').write_text(json.dumps(metadata, indent=2), encoding='utf-8')
-    print(f'KAGGLE_METADATA_OK: id={metadata["id"]} title={metadata["title"]} accelerator={metadata["machine_shape"]}', flush=True)
+
+    metadata_path = root / 'kernel-metadata.json'
+    if existing and metadata_path.exists():
+        metadata = json.loads(metadata_path.read_text(encoding='utf-8'))
+        # For an existing kernel title is optional; leaving the established
+        # title untouched avoids the title/slug conflict that caused 409.
+        metadata['id'] = kernel_id
+        metadata['code_file'] = 'worker.py'
+        metadata['language'] = 'python'
+        metadata['kernel_type'] = metadata.get('kernel_type', 'script')
+        metadata['is_private'] = True
+        metadata['enable_gpu'] = True
+        metadata['enable_internet'] = True
+        metadata['machine_shape'] = 'NvidiaTeslaT4'
+        metadata.pop('title', None)
+    else:
+        metadata = {
+            'id': kernel_id,
+            'title': KAGGLE_KERNEL_TITLE,
+            'code_file': 'worker.py',
+            'language': 'python',
+            'kernel_type': 'script',
+            'is_private': True,
+            'enable_gpu': True,
+            'enable_internet': True,
+            'machine_shape': 'NvidiaTeslaT4',
+            'dataset_sources': [],
+            'competition_sources': [],
+            'kernel_sources': [],
+            'model_sources': [],
+        }
+    metadata_path.write_text(json.dumps(metadata, indent=2), encoding='utf-8')
+    print(f'KAGGLE_METADATA_READY: id={kernel_id} existing={existing} gpu=NvidiaTeslaT4 title_in_push={"title" in metadata}', flush=True)
     return root
 
 
@@ -95,9 +143,10 @@ def _kernel_status(kernel_id: str) -> str:
 def generate_music_kaggle() -> Path:
     _require_kaggle()
     _configure_kaggle_cli()
-    root = _prepare_kernel()
-    kernel_id = f'{KAGGLE_USERNAME}/{KAGGLE_KERNEL_SLUG}'
-    print(f'KAGGLE_LAUNCH: pushing {kernel_id} on free NvidiaTeslaT4 GPU', flush=True)
+    kernel_id, existing = _select_kernel()
+    root = _prepare_kernel(kernel_id, existing)
+
+    print(f'KAGGLE_LAUNCH: pushing existing={existing} kernel={kernel_id} on free NvidiaTeslaT4 GPU', flush=True)
     _run('kaggle', 'kernels', 'push', '-p', str(root))
 
     deadline = time.time() + 65 * 60
@@ -150,7 +199,7 @@ if __name__ == '__main__':
         'music_model': 'acestep-v15-turbo',
         'music_lm_model': 'acestep-5Hz-lm-0.6B',
         'kaggle': True,
-        'kaggle_kernel': f'{KAGGLE_USERNAME}/{KAGGLE_KERNEL_SLUG}',
+        'kaggle_kernel': f'{KAGGLE_USERNAME}/{CANDIDATE_SLUGS[0] if CANDIDATE_SLUGS else "bhajan-aabha-ace-step-gpu-worker"}',
         'huggingface_zero_gpu': False,
         'paid_services': False,
         'paid_gpu': False,
