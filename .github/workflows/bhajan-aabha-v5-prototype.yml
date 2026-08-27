@@ -28,7 +28,8 @@ jobs:
           test -s app/zero_cost_pipeline_v5.py
           test -s app/zero_cost_pipeline_v5_2_fix.py
           test -s app/zero_cost_pipeline_v6.py
-          python3 -m py_compile app/zero_cost_pipeline_v5.py app/zero_cost_pipeline_v5_2_fix.py app/zero_cost_pipeline_v6.py
+          test -s app/zero_cost_pipeline_v6_runner.py
+          python3 -m py_compile app/zero_cost_pipeline_v5.py app/zero_cost_pipeline_v5_2_fix.py app/zero_cost_pipeline_v6.py app/zero_cost_pipeline_v6_runner.py
           grep -q 'gradio_client' requirements.txt
           echo 'PRECHECK_OK: zero-cost long-form architecture; ACE-Step official public ZeroGPU Space; 240s target; Python syntax valid.'
 
@@ -53,7 +54,7 @@ jobs:
           AGNES_API_KEY: ${{ secrets.AGNES_API_KEY }}
           VIDEO_SECONDS: '240'
           OUTPUT_DIR: output
-        run: python -m app.zero_cost_pipeline_v6
+        run: python -m app.zero_cost_pipeline_v6_runner
 
       - name: Validate output
         run: |
@@ -74,6 +75,7 @@ jobs:
           grep -q '"target_duration_sec": 240' output/run_state.json
           grep -q '"music_duration_sec": 240' output/run_state.json
           grep -q '"visual_chapters": 8' output/run_state.json
+          grep -q '"music_contract": "full-length 240s ACE-Step generation; not a 30s loop"' output/run_state.json
           cat output/run_state.json
 
       - name: Publish long-form production release
