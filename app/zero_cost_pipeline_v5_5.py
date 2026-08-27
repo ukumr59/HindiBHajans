@@ -34,8 +34,8 @@ def _require_kaggle():
 
 def _csv_kernel_refs(search_term: str) -> list[str]:
     p = _run('kaggle', 'kernels', 'list', '--mine', '--search', search_term, '--page-size', '100', '-v', check=False, capture=True)
-    text = (p.stdout + '\n' + p.stderr).strip()
     if p.returncode != 0:
+        text = (p.stdout + '\n' + p.stderr).strip()
         print(f'KAGGLE_DISCOVERY: kernels list failed for {search_term!r}: {text[-900:]}', flush=True)
         return []
     refs: list[str] = []
@@ -51,22 +51,9 @@ def _csv_kernel_refs(search_term: str) -> list[str]:
 
 
 def _discover_owned_kernel() -> str | None:
-    """Find the real kernel ref from Kaggle's own-kernel listing.
-
-    Pulling a guessed private slug can return 403 even when a conflicting
-    kernel exists. The owned-kernel list is the authoritative discovery path.
-    """
-    terms = [
-        KAGGLE_KERNEL_TITLE,
-        BASE_SLUG,
-        'Bhajan Aabha',
-    ]
-    seen: set[str] = set()
-    for term in terms:
+    """Find the real kernel ref from Kaggle's own-kernel listing."""
+    for term in (KAGGLE_KERNEL_TITLE, BASE_SLUG, 'Bhajan Aabha'):
         for ref in _csv_kernel_refs(term):
-            if ref in seen:
-                continue
-            seen.add(ref)
             owner, _, slug = ref.partition('/')
             if owner == KAGGLE_USERNAME and ('bhajan' in slug.lower() or 'ace-step' in slug.lower()):
                 print(f'KAGGLE_DISCOVERY: owned kernel found via list: {ref}', flush=True)
@@ -93,18 +80,12 @@ def _try_pull_existing(kernel_id: str) -> bool:
 
 
 def _select_kernel() -> tuple[str, bool]:
-    # First discover the actual owned kernel rather than guessing a slug.
     discovered = _discover_owned_kernel()
     if discovered and _try_pull_existing(discovered):
         return discovered, True
 
-    # If no accessible owned kernel exists, create a NEW slug that cannot
-    # collide with the old broken/ghost kernel. The title and slug are kept in
-    # sync because Kaggle links them and rejects conflicting metadata.
+    # Never recreate the known-conflicting slug. Use a distinct slug/title pair.
     slug = REQUESTED_SLUG or f'{BASE_SLUG}-v2'
-    title = 'Bhajan Aabha ACE-Step GPU Worker V2' if slug.endswith('-v2') else KAGGLE_KERNEL_TITLE
-    global KAGGLE_KERNEL_TITLE
-    KAGGLE_KERNEL_TITLE = title
     print(f'KAGGLE_DISCOVERY: creating isolated fallback kernel slug={slug}', flush=True)
     return f'{KAGGLE_USERNAME}/{slug}', False
 
@@ -143,9 +124,10 @@ def _prepare_kernel(kernel_id: str, existing: bool):
         metadata['machine_shape'] = 'NvidiaTeslaT4'
     else:
         slug = kernel_id.split('/', 1)[1]
+        title = 'Bhajan Aabha ACE-Step GPU Worker V2' if slug.endswith('-v2') else KAGGLE_KERNEL_TITLE
         metadata = {
             'id': kernel_id,
-            'title': KAGGLE_KERNEL_TITLE,
+            'title': title,
             'code_file': 'worker.py',
             'language': 'python',
             'kernel_type': 'script',
