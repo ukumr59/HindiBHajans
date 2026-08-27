@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 # Zero-cost architecture: GitHub runner only. No Kaggle, no paid GPU, no paid API.
-# Audio and visual assets are resolved directly by the generator through the Wikimedia Commons API.
+# The generator creates visuals and Hindi narration locally; no external media files are downloaded.
 permissions:
   contents: write
 
@@ -27,7 +27,7 @@ jobs:
       - name: Install system tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg fonts-noto-core
+          sudo apt-get install -y -qq ffmpeg fonts-noto-core espeak-ng
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -56,6 +56,8 @@ jobs:
             test -s "$f"
             ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "$f" | grep -q '720,1280'
             ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$f" | grep -q 'aac'
+            # Require a real audio stream with non-zero duration.
+            ffprobe -v error -select_streams a:0 -show_entries stream=duration -of csv=p=0 "$f" | awk '$1 > 1 {ok=1} END {exit !ok}'
           done
           cat output/run_state.json
 
@@ -71,7 +73,7 @@ jobs:
           gh release create "$TAG" \
             --repo "$REPO" \
             --title "Bhajan Aabha — Latest Output" \
-            --notes "Latest automatically generated Bhajan Aabha videos. Audio and visual assets are resolved from the generator's public-domain/CC0 content packs. Previous release is replaced on each successful run." \
+            --notes "Latest automatically generated Bhajan Aabha videos. Visuals are procedurally generated and narration is locally synthesized in Hindi. No paid service, GPU, Kaggle, or external media download is required." \
             --prerelease \
             output/videos/*.mp4 output/*.json
           echo "Release published: https://github.com/$REPO/releases/tag/$TAG"
