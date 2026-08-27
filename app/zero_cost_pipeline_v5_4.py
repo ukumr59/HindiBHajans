@@ -121,12 +121,19 @@ def configure():
 def generate_music_fixed() -> Path:
     from gradio_client import Client
 
-    # v5.2 contains the actual 44-value generation payload. Do not mutate it,
-    # monkey-patch it, or import v5.3: that was the source of the _ORIGINAL_VALUES
-    # failure. The live wrapper currently exposes 48 inputs = 4 + 44.
+    # v5.2's generation list has 45 entries because it retains the obsolete
+    # UI-only is_format_caption_state slot. The live generation_wrapper has
+    # 48 total inputs: 4 wrapper inputs + 44 generation inputs. Remove only
+    # that verified obsolete slot; never reorder the remaining arguments.
     values = list(music._generation_values())
+    if len(values) != 45:
+        raise RuntimeError(f"MUSIC_FATAL: stable local ACE-Step payload changed unexpectedly: {len(values)} values; expected 45")
+    obsolete_index = 36
+    if music.GENERATION_ARGS[obsolete_index] != "is_format_caption_state":
+        raise RuntimeError(f"MUSIC_FATAL: safety check failed: index 36 is {music.GENERATION_ARGS[obsolete_index]!r}, not the known obsolete slot")
+    del values[obsolete_index]
     if len(values) != 44:
-        raise RuntimeError(f"MUSIC_FATAL: ACE-Step local generation payload has {len(values)} values; expected 44")
+        raise RuntimeError(f"MUSIC_FATAL: normalized ACE-Step payload has {len(values)} values; expected 44")
 
     last_error = None
     for attempt in range(1, 4):
@@ -152,13 +159,12 @@ def generate_music_fixed() -> Path:
             if target.stat().st_size < 20000:
                 raise RuntimeError("MUSIC_FATAL: generated audio is suspiciously small")
 
-            # Hard validation: the song itself must be full-length. We will not
-            # stretch/loop a short generation to fake a 3-minute bhajan.
             import subprocess
             probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(target)], capture_output=True, text=True, check=True)
             duration = float(probe.stdout.strip())
-            if duration < target_seconds() - 3:
-                raise RuntimeError(f"MUSIC_FATAL: ACE-Step returned only {duration:.2f}s; required >= {target_seconds()-3}s full-length audio")
+            required = target_seconds()
+            if duration < required - 3:
+                raise RuntimeError(f"MUSIC_FATAL: ACE-Step returned only {duration:.2f}s; required >= {required-3}s full-length audio")
             print(f"MUSIC_OK {target} duration={duration:.2f}s")
             return target
         except Exception as exc:
