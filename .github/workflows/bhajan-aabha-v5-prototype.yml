@@ -27,11 +27,10 @@ jobs:
           test -n "$AGNES_API_KEY" || { echo 'SETUP_REQUIRED: add AGNES_API_KEY as a repository secret.'; exit 2; }
           test -s app/zero_cost_pipeline_v5.py
           test -s app/zero_cost_pipeline_v5_2.py
-          test -s app/zero_cost_pipeline_v5_3.py
           test -s app/zero_cost_pipeline_v5_4.py
-          python3 -m py_compile app/zero_cost_pipeline_v5.py app/zero_cost_pipeline_v5_2.py app/zero_cost_pipeline_v5_3.py app/zero_cost_pipeline_v5_4.py
+          python3 -m py_compile app/zero_cost_pipeline_v5.py app/zero_cost_pipeline_v5_2.py app/zero_cost_pipeline_v5_4.py
           grep -q 'gradio_client' requirements.txt
-          echo 'PRECHECK_OK: zero-cost 3-5 minute architecture; adaptive live ACE-Step contract; Agnes visuals.'
+          echo 'PRECHECK_OK: clean zero-cost 3-5 minute architecture; no v5.3 monkey-patching; live ACE-Step contract; Agnes visuals.'
 
       - name: Install zero-cost media tools
         run: |
@@ -69,8 +68,10 @@ jobs:
           ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "$VIDEO" | grep -q '720,1280'
           ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$VIDEO" | grep -q 'aac'
           ffprobe -v error -select_streams a:0 -show_entries stream=codec_name,sample_rate,channels -of csv=p=0 output/audio/bhajan_aabha_dj_master.mp3 | grep -q 'mp3,48000,2'
-          DURATION=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$VIDEO")
-          awk -v d="$DURATION" 'BEGIN {exit !(d >= 178 && d <= 302)}'
+          MUSIC_DURATION=$(ffprobe -v error -show_entries format=duration -of csv=p=0 output/audio/bhajan_source.mp3)
+          VIDEO_DURATION=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$VIDEO")
+          awk -v d="$MUSIC_DURATION" 'BEGIN {exit !(d >= 177 && d <= 305)}'
+          awk -v d="$VIDEO_DURATION" 'BEGIN {exit !(d >= 178 && d <= 302)}'
           grep -q '"zero_cost": true' output/run_state.json
           grep -q '"kaggle": false' output/run_state.json
           grep -q '"full_length_song": true' output/run_state.json
@@ -90,5 +91,5 @@ jobs:
           gh release create "$TAG" --repo "$REPO" \
             --title "Bhajan Aabha — 3-5 Minute Production" \
             --notes "Full-length 3-5 minute devotional video. First production target is 180 seconds: one full-length ACE-Step song, 12 x 15-second canonical-deity visual scenes, synchronized Hindi lyrics, and standalone 320k DJ master. Zero-cost architecture: no Kaggle, paid GPU, paid API, or Actions artifact storage." \
-            --prerelease output/videos/*.mp4 output/audio/bhajan_aabha_dj_master.mp3 output/run_state.json output/manifest.json output/lyrics.srt
+            --prerelease output/videos/*.mp4 output/audio/bhajan_source.mp3 output/audio/bhajan_aabha_dj_master.mp3 output/run_state.json output/manifest.json output/lyrics.srt
           echo "LONGFORM_RELEASE=https://github.com/$REPO/releases/tag/$TAG"
