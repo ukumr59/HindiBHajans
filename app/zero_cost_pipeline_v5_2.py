@@ -13,9 +13,10 @@ ACE_STEP_SPACE = "ACE-Step/Ace-Step-v1.5"
 
 DJ_MUSIC_PROMPT = """Modern high-energy Hindi devotional bhajan made like a current YouTube DJ devotional song, 128 BPM, 4/4, loud polished commercial stereo production, powerful expressive Hindi male lead vocal clearly singing every lyric with natural emotion and clean pronunciation, catchy devotional melody, huge memorable chorus, energetic EDM arrangement, punchy four-on-the-floor kick, deep controlled sub bass, modern synth bass, bright synth leads, wide pads, electronic percussion, claps, dhol and dholak layered with tabla, cinematic risers, tasteful temple bells, bansuri accents, harmonium texture, short instrumental intro, strong verse build, massive chorus/drop, rhythmic instrumental break, final chorus with layered backing vocals, professional YouTube/radio loudness and DJ playback energy. NOT meditation music, NOT sleepy, NOT ambient, NOT acoustic-only, NOT spoken narration, NOT humming, NOT a cappella, NOT instrumental-only."""
 
-# Live ACE-Step v1.5 generation_wrapper: 4 wrapper inputs + 45 generation inputs.
-# The generation inputs are positional because the live Gradio endpoint exposes
-# generic param_* names. Keep this list exactly aligned with the live endpoint.
+# Canonical generation fields used by ACE-Step v1.5. The public ZeroGPU
+# Space has changed the wrapper ordering over time, so generate_music_gradio
+# resolves live parameters by name/label/choices instead of blindly assuming
+# that wrapper inputs occupy a fixed number of positions.
 GENERATION_ARGS = [
     "captions", "lyrics", "bpm", "key_scale", "time_signature", "vocal_language",
     "inference_steps", "guidance_scale", "random_seed_checkbox", "seed", "reference_audio",
@@ -105,7 +106,6 @@ def _save_audio(ref: str, target: Path):
 
 
 def _generation_values() -> list[object]:
-    # Values correspond one-for-one with GENERATION_ARGS above.
     return [
         DJ_MUSIC_PROMPT,
         base.PACK["lyrics"],
@@ -155,15 +155,130 @@ def _generation_values() -> list[object]:
     ]
 
 
+def _choice_values(param: dict) -> list[object]:
+    """Collect enum/choice-like values from Gradio's live parameter metadata."""
+    found: list[object] = []
+    for key in ("choices", "enum", "values"):
+        value = param.get(key)
+        if isinstance(value, (list, tuple)):
+            found.extend(value)
+    ptype = param.get("type")
+    if isinstance(ptype, dict):
+        for key in ("choices", "enum", "values"):
+            value = ptype.get(key)
+            if isinstance(value, (list, tuple)):
+                found.extend(value)
+    return found
+
+
+def _param_text(param: dict) -> str:
+    parts = []
+    for key in ("parameter_name", "name", "label", "description", "component"):
+        value = param.get(key)
+        if value:
+            parts.append(str(value))
+    return _norm(" ".join(parts))
+
+
+def _default_value(param: dict):
+    if param.get("parameter_has_default"):
+        return param.get("parameter_default")
+    for key in ("default", "default_value", "value"):
+        if key in param:
+            return param[key]
+    return None
+
+
+def _resolve_live_values(params: list[dict]) -> list[object]:
+    """Build the positional payload from the live endpoint schema.
+
+    ACE-Step's public Space has changed wrapper inputs while keeping the same
+    generation controls. Matching by metadata prevents a stale positional
+    assumption from sending 0.0 into the task_type radio (the failure seen in
+    the previous run).
+    """
+    desired = dict(zip(GENERATION_ARGS, _generation_values()))
+    resolved = []
+    task_seen = False
+    model_seen = False
+
+    for index, param in enumerate(params):
+        text = _param_text(param)
+        choices = _choice_values(param)
+        choice_norm = {_norm(x) for x in choices}
+
+        value = None
+        matched = None
+
+        # Hard semantic detection first: these controls are radios/dropdowns
+        # and their live choices are more reliable than their generated names.
+        if {"text2music", "repaint", "cover"}.issubset(choice_norm):
+            value = "text2music"
+            task_seen = True
+            matched = "task_type(choice-detected)"
+        elif "acestep-v15-turbo" in choice_norm:
+            value = "acestep-v15-turbo"
+            model_seen = True
+            matched = "model(choice-detected)"
+        else:
+            for key, candidate in desired.items():
+                nk = _norm(key)
+                if nk == text or nk in text or text.endswith(nk):
+                    value = candidate
+                    matched = key
+                    if key == "task_type":
+                        task_seen = True
+                    break
+
+        if matched is None:
+            # Handle common labels whose generated parameter name is generic.
+            aliases = {
+                "caption": "captions",
+                "song_description": "captions",
+                "music_caption": "captions",
+                "generation_mode": "task_type",
+                "mode": "task_type",
+                "model": None,
+                "checkpoint": None,
+            }
+            for alias, key in aliases.items():
+                if alias in text:
+                    if key is None:
+                        value = "acestep-v15-turbo"
+                        model_seen = True
+                        matched = "model(alias)"
+                    else:
+                        value = desired[key]
+                        matched = key + "(alias)"
+                        if key == "task_type":
+                            task_seen = True
+                    break
+
+        if matched is None:
+            value = _default_value(param)
+            matched = "live-default"
+
+        resolved.append(value)
+        print(f"MUSIC: param[{index}]={text or '<unnamed>'} -> {matched} -> {value!r}")
+
+    if not task_seen:
+        raise RuntimeError("MUSIC_FATAL: live generation_wrapper task_type control was not identified")
+    if not model_seen:
+        print("MUSIC: model control not exposed as a selectable live parameter; retaining Space default")
+    if len(resolved) != len(params):
+        raise RuntimeError(f"MUSIC_FATAL: live payload length mismatch: resolved={len(resolved)} params={len(params)}")
+    return resolved
+
+
 def generate_music_gradio() -> Path:
     from gradio_client import Client
 
     values = _generation_values()
     if len(values) != len(GENERATION_ARGS):
-        raise RuntimeError(f"MUSIC_FATAL: internal ACE-Step positional map mismatch: values={len(values)} expected={len(GENERATION_ARGS)}")
+        raise RuntimeError(f"MUSIC_FATAL: internal ACE-Step value map mismatch: values={len(values)} expected={len(GENERATION_ARGS)}")
 
     print("MUSIC: connecting to official ACE-Step v1.5 public ZeroGPU Space")
-    print("MUSIC: using live generation_wrapper with canonical positional argument order")
+    print("MUSIC: resolving live generation_wrapper schema before submission")
     print("MUSIC: style=LOUD_MODERN_DEVOTIONAL_EDM_DJ_READY bpm=128 batch=1 thinking=off")
 
     last_error = None
@@ -176,9 +291,9 @@ def generate_music_gradio() -> Path:
             if len(params) != 49:
                 raise RuntimeError(f"MUSIC_FATAL: unexpected live generation_wrapper parameter count={len(params)}; refusing unsafe positional call")
             print(f"MUSIC: selected endpoint={endpoint}")
-            print("MUSIC: positional contract=4 wrapper args + 45 generation args")
-            wrapper_values = ["acestep-v15-turbo", "custom", "", "hi"] + values
-            result = client.predict(*wrapper_values, api_name=endpoint)
+            print(f"MUSIC: live contract={len(params)} parameters; resolving by schema")
+            live_values = _resolve_live_values(params)
+            result = client.predict(*live_values, api_name=endpoint)
             print("MUSIC: Gradio generation completed")
             print("MUSIC: result type=" + type(result).__name__)
             print("MUSIC: result preview=" + repr(result)[:1800])
@@ -225,7 +340,7 @@ if __name__ == "__main__":
     state_path = base.OUT / "run_state.json"
     if state_path.exists():
         state = json.loads(state_path.read_text(encoding="utf-8"))
-        state.update({"music_backend": "ACE-Step v1.5 official Hugging Face ZeroGPU Space via Gradio Client", "music_api_mode": "gradio_client_live_api_positional", "music_style": "LOUD_MODERN_DEVOTIONAL_EDM_DJ_READY", "bpm": 128, "time_signature": "4/4", "dj_master": str(dj_master), "dj_master_bitrate": "320k", "dj_master_sample_rate": 48000})
+        state.update({"music_backend": "ACE-Step v1.5 official Hugging Face ZeroGPU Space via Gradio Client", "music_api_mode": "gradio_client_live_api_schema_resolved", "music_style": "LOUD_MODERN_DEVOTIONAL_EDM_DJ_READY", "bpm": 128, "time_signature": "4/4", "dj_master": str(dj_master), "dj_master_bitrate": "320k", "dj_master_sample_rate": 48000})
         state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
         (base.OUT / "manifest.json").write_text(json.dumps({"videos": [state]}, ensure_ascii=False, indent=2), encoding="utf-8")
         print("STATE_OK music_backend=ACE-Step official ZeroGPU Space via Gradio Client")
