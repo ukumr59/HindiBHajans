@@ -28,7 +28,8 @@ jobs:
           test -s app/zero_cost_pipeline_v5.py
           test -s app/zero_cost_pipeline_v5_2.py
           python3 -m py_compile app/zero_cost_pipeline_v5.py app/zero_cost_pipeline_v5_2.py
-          echo 'PRECHECK_OK: Agnes secret present; ACE-Step public Space will use POST /release_task + POST /query_result; Python syntax valid.'
+          grep -q 'gradio_client' requirements.txt
+          echo 'PRECHECK_OK: Agnes secret present; ACE-Step will use the official public ZeroGPU Space through Gradio Client; Python syntax valid.'
 
       - name: Install zero-cost media tools
         run: |
@@ -49,7 +50,6 @@ jobs:
       - name: Generate v5.2 creative bhajan
         env:
           AGNES_API_KEY: ${{ secrets.AGNES_API_KEY }}
-          ACESTEP_ROOT: https://ace-step-ace-step-v1-5.hf.space
           VIDEO_SECONDS: '45'
           OUTPUT_DIR: output
         run: python -m app.zero_cost_pipeline_v5_2
@@ -84,6 +84,6 @@ jobs:
           gh release delete "$TAG" --repo "$REPO" --cleanup-tag --yes 2>/dev/null || true
           gh release create "$TAG" --repo "$REPO" \
             --title "Bhajan Aabha v5.2 — Creative Prototype" \
-            --notes "45-second prototype: canonical deity visuals + Hindi sung devotional production + loud modern EDM/DJ-ready arrangement + standalone DJ master. ACE-Step public Space uses /release_task + /query_result. Zero-cost architecture." \
+            --notes "45-second prototype: canonical deity visuals + Hindi sung devotional production + loud modern EDM/DJ-ready arrangement + standalone DJ master. Music generation uses the official ACE-Step v1.5 public ZeroGPU Space through its live Gradio API. Zero-cost architecture: no Kaggle, paid GPU, paid API, or Actions artifact storage." \
             --prerelease output/videos/*.mp4 output/audio/bhajan_aabha_dj_master.mp3 output/run_state.json output/manifest.json output/lyrics.srt
           echo "PROTOTYPE_RELEASE=https://github.com/$REPO/releases/tag/$TAG"
