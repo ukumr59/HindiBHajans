@@ -37,17 +37,18 @@ jobs:
       - name: Install zero-cost generator dependencies
         run: pip install -r requirements.txt
 
-      - name: Patch Wikimedia downloader for direct static assets
+      - name: Patch Wikimedia downloader to resolve real file URLs
         run: |
           python - <<'PY'
           from pathlib import Path
           p = Path('app/zero_cost_pipeline.py')
           s = p.read_text(encoding='utf-8')
-          old = '''def commons_redirect(filename: str) -> str:\n    return "https://commons.wikimedia.org/wiki/Special:Redirect/file/" + quote(filename, safe="")\n'''
-          new = '''def commons_redirect(filename: str) -> str:\n    # Avoid Wikimedia Special:Redirect, which can rate-limit GitHub-hosted runners.\n    # Wikimedia Commons stores files at a deterministic upload.wikimedia.org path.\n    import hashlib\n    digest = hashlib.md5(filename.encode("utf-8")).hexdigest()\n    safe_name = filename.replace(" ", "_")\n    return f"https://upload.wikimedia.org/wikipedia/commons/{digest[0]}/{digest[:2]}/{quote(safe_name, safe=\"._-(),\")}"\n'''
-          if old not in s:
-              raise SystemExit('Expected downloader function was not found; refusing to patch blindly.')
-          p.write_text(s.replace(old, new), encoding='utf-8')
+          start = s.index('def commons_redirect(filename: str) -> str:')
+          end = s.index('\n\ndef prepare_assets', start)
+          new = '''def commons_redirect(filename: str) -> str:\n    # Resolve the actual Commons upload URL through MediaWiki's supported\n    # imageinfo API instead of guessing upload.wikimedia.org paths or using\n    # Special:Redirect/file, both of which are unreliable for automation.\n    api = (\n        "https://commons.wikimedia.org/w/api.php?action=query&format=json"\n        "&prop=imageinfo&iiprop=url&titles=" + quote("File:" + filename, safe="")\n    )\n    req = Request(api, headers={"User-Agent": "BhajanAabha/2.0 (automated media resolver)"})\n    data = json.loads(urlopen(req, timeout=30).read().decode("utf-8"))\n    pages = data.get("query", {}).get("pages", {})\n    for page in pages.values():\n        infos = page.get("imageinfo") or []\n        if infos and infos[0].get("url"):\n            return infos[0]["url"]\n    raise FileNotFoundError(f"Wikimedia Commons file not found: {filename}")\n'''
+          s = s[:start] + new + s[end:]
+          p.write_text(s, encoding='utf-8')
+          print('Wikimedia resolver patched successfully.')
           PY
 
       - name: Discover trends and generate videos
