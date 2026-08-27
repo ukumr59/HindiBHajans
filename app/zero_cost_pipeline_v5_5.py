@@ -4,7 +4,6 @@ import csv
 import io
 import json
 import os
-import re
 import shutil
 import subprocess
 import time
@@ -15,9 +14,7 @@ import app.zero_cost_pipeline_v5_2 as music
 
 base = longform.base
 KAGGLE_USERNAME = os.getenv('KAGGLE_USERNAME', '').strip()
-REQUESTED_SLUG = os.getenv('KAGGLE_KERNEL_SLUG', '').strip()
 BASE_SLUG = 'bhajan-aabha-ace-step-gpu-worker'
-KAGGLE_KERNEL_TITLE = 'Bhajan Aabha ACE-Step GPU Worker'
 
 
 def _run(*args, cwd=None, check=True, capture=False):
@@ -32,42 +29,27 @@ def _require_kaggle():
         raise RuntimeError('SETUP_REQUIRED: KAGGLE_KEY or KAGGLE_API_TOKEN repository secret is missing')
 
 
-def _try_pull_existing(kernel_id: str) -> bool:
-    probe = Path('.kaggle_kernel_probe')
-    if probe.exists():
-        shutil.rmtree(probe)
-    try:
-        p = _run('kaggle', 'kernels', 'pull', kernel_id, '-p', str(probe), '-m', check=False, capture=True)
-        text = (p.stdout + '\n' + p.stderr).strip()
-        if p.returncode == 0 and (probe / 'kernel-metadata.json').exists():
-            print(f'KAGGLE_DISCOVERY: existing kernel confirmed by pull: {kernel_id}', flush=True)
-            return True
-        print(f'KAGGLE_DISCOVERY: pull unavailable for {kernel_id}: {text[-700:]}', flush=True)
-        return False
-    finally:
-        if probe.exists():
-            shutil.rmtree(probe, ignore_errors=True)
+def _select_kernel() -> tuple[str, str]:
+    """Create a genuinely new Kaggle kernel with a title whose slug matches its id.
+
+    Kaggle links kernel titles and URL slugs. A previous implementation generated
+    a unique id but kept a fixed title, which made Kaggle warn that the title did
+    not resolve to the id and then return HTTP 409 from SaveKernel. For a new
+    kernel, both values must normalize to the same slug.
+    """
+    stamp = str(time.time_ns())[-12:]
+    slug = f'{BASE_SLUG}-{stamp}'
+    title = f'Bhajan Aabha ACE-Step GPU Worker {stamp}'
+    print(f'KAGGLE_DISCOVERY: creating unique kernel slug={slug}', flush=True)
+    print(f'KAGGLE_DISCOVERY: matching kernel title={title}', flush=True)
+    return f'{KAGGLE_USERNAME}/{slug}', title
 
 
-def _select_kernel() -> tuple[str, bool]:
-    # IMPORTANT: every normal run gets a fresh slug. Reusing the previous
-    # slug is what caused the repeated SaveKernel HTTP 409 conflict.
-    # KAGGLE_KERNEL_SLUG is intentionally ignored for normal production runs
-    # so an old secret cannot force us back onto the conflicting kernel.
-    run_slug = f'{BASE_SLUG}-{int(time.time())}'
-    print(f'KAGGLE_DISCOVERY: creating unique isolated kernel slug={run_slug}', flush=True)
-    return f'{KAGGLE_USERNAME}/{run_slug}', False
-
-
-def _prepare_kernel(kernel_id: str, existing: bool):
+def _prepare_kernel(kernel_id: str, title: str):
     root = Path('kaggle_job')
     if root.exists():
         shutil.rmtree(root)
     root.mkdir(parents=True)
-
-    if existing:
-        _run('kaggle', 'kernels', 'pull', kernel_id, '-p', str(root), '-m')
-        print(f'KAGGLE_METADATA_OK: pulled existing kernel {kernel_id}', flush=True)
 
     shutil.copy2(Path(__file__).with_name('kaggle_ace_step_worker.py'), root / 'worker.py')
     request = {
@@ -81,34 +63,24 @@ def _prepare_kernel(kernel_id: str, existing: bool):
     }
     (root / 'bhajan_request.json').write_text(json.dumps(request, ensure_ascii=False, indent=2), encoding='utf-8')
 
+    metadata = {
+        'id': kernel_id,
+        'title': title,
+        'code_file': 'worker.py',
+        'language': 'python',
+        'kernel_type': 'script',
+        'is_private': True,
+        'enable_gpu': True,
+        'enable_internet': True,
+        'machine_shape': 'NvidiaTeslaT4',
+        'dataset_sources': [],
+        'competition_sources': [],
+        'kernel_sources': [],
+        'model_sources': [],
+    }
     metadata_path = root / 'kernel-metadata.json'
-    if existing and metadata_path.exists():
-        metadata = json.loads(metadata_path.read_text(encoding='utf-8'))
-        metadata['code_file'] = 'worker.py'
-        metadata['language'] = 'python'
-        metadata['kernel_type'] = metadata.get('kernel_type', 'script')
-        metadata['is_private'] = True
-        metadata['enable_gpu'] = True
-        metadata['enable_internet'] = True
-        metadata['machine_shape'] = 'NvidiaTeslaT4'
-    else:
-        metadata = {
-            'id': kernel_id,
-            'title': KAGGLE_KERNEL_TITLE,
-            'code_file': 'worker.py',
-            'language': 'python',
-            'kernel_type': 'script',
-            'is_private': True,
-            'enable_gpu': True,
-            'enable_internet': True,
-            'machine_shape': 'NvidiaTeslaT4',
-            'dataset_sources': [],
-            'competition_sources': [],
-            'kernel_sources': [],
-            'model_sources': [],
-        }
     metadata_path.write_text(json.dumps(metadata, indent=2), encoding='utf-8')
-    print(f'KAGGLE_METADATA_READY: id={kernel_id} existing={existing} gpu=NvidiaTeslaT4 title={metadata.get("title")}', flush=True)
+    print(f'KAGGLE_METADATA_READY: id={kernel_id} title={title} gpu=NvidiaTeslaT4', flush=True)
     return root
 
 
@@ -118,20 +90,22 @@ def _configure_kaggle_cli():
 
 
 def _push_kernel(root: Path, kernel_id: str):
-    for attempt in range(1, 4):
-        print(f'KAGGLE_LAUNCH: push attempt {attempt}/3 kernel={kernel_id}', flush=True)
+    # A 409 is a real conflict for a brand-new slug. Do not waste three retries
+    # on it. A retry is retained only for a transient API conflict.
+    for attempt in range(1, 3):
+        print(f'KAGGLE_LAUNCH: push attempt {attempt}/2 kernel={kernel_id}', flush=True)
         p = _run('kaggle', 'kernels', 'push', '-p', str(root), check=False, capture=True)
         output = (p.stdout + '\n' + p.stderr).strip()
         if output:
-            print('KAGGLE_PUSH_OUTPUT:', output[-1800:], flush=True)
+            print('KAGGLE_PUSH_OUTPUT:', output[-2200:], flush=True)
         if p.returncode == 0:
             return
         if '409' not in output and 'Conflict' not in output:
             raise subprocess.CalledProcessError(p.returncode, p.args, p.stdout, p.stderr)
-        if attempt < 3:
-            print('KAGGLE_PUSH: transient 409; waiting 15s before retry', flush=True)
+        if attempt == 1:
+            print('KAGGLE_PUSH: transient 409; waiting 15s before one retry', flush=True)
             time.sleep(15)
-    raise RuntimeError('KAGGLE_ACE_FATAL: Kaggle kernels push remained HTTP 409 after 3 attempts')
+    raise RuntimeError('KAGGLE_ACE_FATAL: Kaggle kernels push returned HTTP 409 for a fresh slug. Check the preceding slug/title lines.')
 
 
 def _download_output_once(kernel_id: str, out_dir: Path) -> tuple[bool, str]:
@@ -157,10 +131,10 @@ def _download_output_once(kernel_id: str, out_dir: Path) -> tuple[bool, str]:
 def generate_music_kaggle() -> Path:
     _require_kaggle()
     _configure_kaggle_cli()
-    kernel_id, existing = _select_kernel()
-    root = _prepare_kernel(kernel_id, existing)
+    kernel_id, title = _select_kernel()
+    root = _prepare_kernel(kernel_id, title)
 
-    print(f'KAGGLE_LAUNCH: pushing existing={existing} kernel={kernel_id} on free NvidiaTeslaT4 GPU', flush=True)
+    print(f'KAGGLE_LAUNCH: pushing kernel={kernel_id} on free NvidiaTeslaT4 GPU', flush=True)
     _push_kernel(root, kernel_id)
 
     # Do not call `kaggle kernels status`: the account can push successfully but
