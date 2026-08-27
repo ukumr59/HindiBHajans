@@ -22,15 +22,17 @@ jobs:
       - name: Preflight
         env:
           AGNES_API_KEY: ${{ secrets.AGNES_API_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           set -e
           test -n "$AGNES_API_KEY" || { echo 'SETUP_REQUIRED: add AGNES_API_KEY as a repository secret.'; exit 2; }
+          test -n "$HF_TOKEN" || { echo 'SETUP_REQUIRED: add HF_TOKEN as a repository secret.'; exit 2; }
           test -s app/zero_cost_pipeline_v5.py
           test -s app/zero_cost_pipeline_v5_2.py
           test -s app/zero_cost_pipeline_v5_4.py
           python3 -m py_compile app/zero_cost_pipeline_v5.py app/zero_cost_pipeline_v5_2.py app/zero_cost_pipeline_v5_4.py
           grep -q 'gradio_client' requirements.txt
-          echo 'PRECHECK_OK: clean zero-cost 3-5 minute architecture; live ACE-Step contract; Agnes visuals.'
+          echo 'PRECHECK_OK: clean zero-cost 3-5 minute architecture; authenticated live ACE-Step contract; Agnes visuals.'
 
       - name: Install zero-cost media tools
         run: |
@@ -54,6 +56,7 @@ jobs:
       - name: Generate full-length bhajan video
         env:
           AGNES_API_KEY: ${{ secrets.AGNES_API_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
           VIDEO_SECONDS: '180'
           OUTPUT_DIR: output
         run: python -m app.zero_cost_pipeline_v5_4
