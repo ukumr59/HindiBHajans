@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 # Zero-cost architecture: GitHub runner only. No Kaggle, no paid GPU, no paid API.
-# Audio is sourced only from public-domain/CC0 packs defined in the generator.
+# Audio and visual assets are resolved directly by the generator through the Wikimedia Commons API.
 permissions:
   contents: write
 
@@ -37,20 +37,6 @@ jobs:
       - name: Install zero-cost generator dependencies
         run: pip install -r requirements.txt
 
-      - name: Patch Wikimedia downloader to resolve real file URLs
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          p = Path('app/zero_cost_pipeline.py')
-          s = p.read_text(encoding='utf-8')
-          start = s.index('def commons_redirect(filename: str) -> str:')
-          end = s.index('\n\ndef prepare_assets', start)
-          new = '''def commons_redirect(filename: str) -> str:\n    # Resolve the actual Commons upload URL through MediaWiki's supported\n    # imageinfo API instead of guessing upload.wikimedia.org paths or using\n    # Special:Redirect/file, both of which are unreliable for automation.\n    api = (\n        "https://commons.wikimedia.org/w/api.php?action=query&format=json"\n        "&prop=imageinfo&iiprop=url&titles=" + quote("File:" + filename, safe="")\n    )\n    req = Request(api, headers={"User-Agent": "BhajanAabha/2.0 (automated media resolver)"})\n    data = json.loads(urlopen(req, timeout=30).read().decode("utf-8"))\n    pages = data.get("query", {}).get("pages", {})\n    for page in pages.values():\n        infos = page.get("imageinfo") or []\n        if infos and infos[0].get("url"):\n            return infos[0]["url"]\n    raise FileNotFoundError(f"Wikimedia Commons file not found: {filename}")\n'''
-          s = s[:start] + new + s[end:]
-          p.write_text(s, encoding='utf-8')
-          print('Wikimedia resolver patched successfully.')
-          PY
-
       - name: Discover trends and generate videos
         env:
           MAX_VIDEOS: '3'
@@ -60,6 +46,7 @@ jobs:
 
       - name: Validate generated outputs
         run: |
+          set -e
           test -s output/run_state.json
           COUNT=$(find output/videos -maxdepth 1 -type f -name '*.mp4' | wc -l)
           echo "Generated videos: ${COUNT}"
@@ -84,7 +71,7 @@ jobs:
           gh release create "$TAG" \
             --repo "$REPO" \
             --title "Bhajan Aabha — Latest Output" \
-            --notes "Latest automatically generated Bhajan Aabha videos. Audio is public-domain/CC0; visuals are CC0. Previous release is replaced on each successful run." \
+            --notes "Latest automatically generated Bhajan Aabha videos. Audio and visual assets are resolved from the generator's public-domain/CC0 content packs. Previous release is replaced on each successful run." \
             --prerelease \
             output/videos/*.mp4 output/*.json
           echo "Release published: https://github.com/$REPO/releases/tag/$TAG"
