@@ -150,19 +150,6 @@ def _configure_kaggle_cli():
     print(f'KAGGLE_LAUNCH: authenticated as {KAGGLE_USERNAME}', flush=True)
 
 
-def _kernel_status(kernel_id: str) -> str:
-    p = _run('kaggle', 'kernels', 'status', kernel_id, check=False, capture=True)
-    text = (p.stdout + '\n' + p.stderr).strip()
-    print('KAGGLE_STATUS:', text[-1600:], flush=True)
-    match = re.search(r'(?im)^\s*(?:status|state)\s*[:=]\s*([A-Za-z_]+)', text)
-    if match:
-        return match.group(1).upper()
-    for state in ('COMPLETE', 'ERROR', 'CANCELLED', 'CANCELED', 'FAILED', 'RUNNING', 'QUEUED', 'INITIALIZING'):
-        if re.search(rf'\b{state}\b', text.upper()):
-            return state
-    return 'UNKNOWN'
-
-
 def _push_kernel(root: Path, kernel_id: str):
     for attempt in range(1, 4):
         print(f'KAGGLE_LAUNCH: push attempt {attempt}/3 kernel={kernel_id}', flush=True)
@@ -180,6 +167,27 @@ def _push_kernel(root: Path, kernel_id: str):
     raise RuntimeError('KAGGLE_ACE_FATAL: Kaggle kernels push remained HTTP 409 after 3 attempts')
 
 
+def _download_output_once(kernel_id: str, out_dir: Path) -> tuple[bool, str]:
+    """Use the output endpoint as the completion signal; kernels/status is forbidden for this account."""
+    if out_dir.exists():
+        shutil.rmtree(out_dir)
+    out_dir.mkdir(parents=True)
+    p = _run('kaggle', 'kernels', 'output', kernel_id, '-p', str(out_dir), '-o', '-q', check=False, capture=True)
+    text = (p.stdout + '\n' + p.stderr).strip()
+    if text:
+        print('KAGGLE_OUTPUT:', text[-1200:], flush=True)
+    candidates = list(out_dir.rglob('bhajan_source.mp3'))
+    if candidates:
+        return True, 'COMPLETE'
+    # No output yet is expected while the remote GPU kernel is running.
+    if p.returncode != 0:
+        low = text.lower()
+        fatal_markers = ('permission denied', '403', '404', 'authentication', 'unauthorized', 'not found')
+        if any(marker in low for marker in fatal_markers) and 'has not finished' not in low and 'not finished' not in low:
+            raise RuntimeError(f'KAGGLE_ACE_FATAL: output retrieval failed: {text[-1200:]}')
+    return False, 'RUNNING'
+
+
 def generate_music_kaggle() -> Path:
     _require_kaggle()
     _configure_kaggle_cli()
@@ -189,26 +197,23 @@ def generate_music_kaggle() -> Path:
     print(f'KAGGLE_LAUNCH: pushing existing={existing} kernel={kernel_id} on free NvidiaTeslaT4 GPU', flush=True)
     _push_kernel(root, kernel_id)
 
+    # Do not call `kaggle kernels status`: the account can push successfully but
+    # is denied kernels.get. Polling the kernel output is sufficient and avoids
+    # the forbidden status endpoint entirely.
+    out_dir = Path('kaggle_output')
     deadline = time.time() + 65 * 60
-    last_state = None
+    poll = 0
     while time.time() < deadline:
-        state = _kernel_status(kernel_id)
-        if state != last_state:
-            print(f'KAGGLE_LAUNCH: state={state}', flush=True)
-            last_state = state
-        if state == 'COMPLETE':
+        poll += 1
+        print(f'KAGGLE_LAUNCH: waiting for GPU output poll={poll} kernel={kernel_id}', flush=True)
+        complete, state = _download_output_once(kernel_id, out_dir)
+        print(f'KAGGLE_LAUNCH: output_state={state}', flush=True)
+        if complete:
             break
-        if state in {'ERROR', 'FAILED', 'CANCELLED', 'CANCELED'}:
-            raise RuntimeError(f'KAGGLE_ACE_FATAL: kernel ended with state={state}')
         time.sleep(30)
     else:
-        raise RuntimeError('KAGGLE_ACE_FATAL: kernel timed out after 65 minutes')
+        raise RuntimeError('KAGGLE_ACE_FATAL: kernel output timed out after 65 minutes')
 
-    out_dir = Path('kaggle_output')
-    if out_dir.exists():
-        shutil.rmtree(out_dir)
-    out_dir.mkdir()
-    _run('kaggle', 'kernels', 'output', kernel_id, '-p', str(out_dir), '-o', '-q')
     candidates = list(out_dir.rglob('bhajan_source.mp3')) or list(out_dir.rglob('*.mp3'))
     if not candidates:
         raise RuntimeError(f'KAGGLE_ACE_FATAL: no MP3 returned by kernel. Files={list(out_dir.rglob("*"))}')
