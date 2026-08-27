@@ -50,7 +50,9 @@ jobs:
           cat /tmp/voice-test.err || true
           test -s /tmp/voice-test.wav
           test "$(head -c 4 /tmp/voice-test.wav)" = 'RIFF'
-          ffprobe -v error -show_entries format=duration -of csv=p=0 /tmp/voice-test.wav | awk '$1 >= 2 {ok=1} END {exit !ok}'
+          # Do not use `awk ... {exit 0} END {exit 1}`: awk still executes END,
+          # which was causing a false failure even when the WAV was valid.
+          ffprobe -v error -show_entries format=duration -of csv=p=0 /tmp/voice-test.wav | awk '$1+0 >= 2 {ok=1} END {exit !(ok)}'
           echo 'Hindi TTS smoke test: PASS (valid WAV produced)'
 
       - name: Set up Python
