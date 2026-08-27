@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import shutil
 import subprocess
 import time
@@ -13,8 +14,6 @@ ACE_STEP_SPACE = "ACE-Step/Ace-Step-v1.5"
 
 DJ_MUSIC_PROMPT = """Modern high-energy Hindi devotional bhajan made like a current YouTube DJ devotional song, 128 BPM, 4/4, loud polished commercial stereo production, powerful expressive Hindi male lead vocal clearly singing every lyric with natural emotion and clean pronunciation, catchy devotional melody, huge memorable chorus, energetic EDM arrangement, punchy four-on-the-floor kick, deep controlled sub bass, modern synth bass, bright synth leads, wide pads, electronic percussion, claps, dhol and dholak layered with tabla, cinematic risers, tasteful temple bells, bansuri accents, harmonium texture, short instrumental intro, strong verse build, massive chorus/drop, rhythmic instrumental break, final chorus with layered backing vocals, professional YouTube/radio loudness and DJ playback energy. NOT meditation music, NOT sleepy, NOT ambient, NOT acoustic-only, NOT spoken narration, NOT humming, NOT a cappella, NOT instrumental-only."""
 
-# IMPORTANT: the current public ACE-Step v1.5 Space exposes exactly 49
-# generation_wrapper inputs: 4 wrapper controls followed by these 45 controls.
 GENERATION_ARGS = [
     "captions", "lyrics", "bpm", "key_scale", "time_signature", "vocal_language",
     "inference_steps", "guidance_scale", "random_seed_checkbox", "seed", "reference_audio",
@@ -186,7 +185,6 @@ def _validate_live_contract(params: list[dict], values: list[object]) -> None:
     first_choices = [_choice_values(p) for p in params[:4]]
     model_choices = {_norm(x) for x in first_choices[0]}
     mode_choices = {_norm(x) for x in first_choices[1]}
-    # _norm converts hyphens to underscores, so compare normalized values.
     if model_choices and "acestep_v15_turbo" not in model_choices:
         raise RuntimeError(f"MUSIC_FATAL: live model choices changed: {first_choices[0]!r}")
     if mode_choices and not {"simple", "custom"}.issubset(mode_choices):
@@ -219,13 +217,16 @@ def generate_music_gradio() -> Path:
     values = _generation_values()
     if len(values) != len(GENERATION_ARGS):
         raise RuntimeError(f"MUSIC_FATAL: internal ACE-Step value map mismatch: values={len(values)} expected={len(GENERATION_ARGS)}")
-    print("MUSIC: connecting to official ACE-Step v1.5 public ZeroGPU Space")
+    hf_token = os.environ.get("HF_TOKEN", "").strip()
+    if not hf_token:
+        raise RuntimeError("MUSIC_SETUP_REQUIRED: HF_TOKEN repository secret is missing")
+    print("MUSIC: connecting to official ACE-Step v1.5 public ZeroGPU Space with authenticated HF account")
     print("MUSIC: using exact current 49-parameter generation_wrapper contract")
     print("MUSIC: style=LOUD_MODERN_DEVOTIONAL_EDM_DJ_READY bpm=128 batch=1 thinking=off")
     last_error = None
     for attempt in range(1, 4):
         try:
-            client = Client(ACE_STEP_SPACE, max_workers=1)
+            client = Client(ACE_STEP_SPACE, token=hf_token, max_workers=1)
             api = client.view_api(print_info=False, return_format="dict")
             endpoint, info = _find_generation_endpoint(api)
             params = _params(info)
@@ -279,7 +280,7 @@ if __name__ == "__main__":
     state_path = base.OUT / "run_state.json"
     if state_path.exists():
         state = json.loads(state_path.read_text(encoding="utf-8"))
-        state.update({"music_backend": "ACE-Step v1.5 official Hugging Face ZeroGPU Space via Gradio Client", "music_api_mode": "gradio_client_live_api_exact_49", "music_style": "LOUD_MODERN_DEVOTIONAL_EDM_DJ_READY", "bpm": 128, "time_signature": "4/4", "dj_master": str(dj_master), "dj_master_bitrate": "320k", "dj_master_sample_rate": 48000})
+        state.update({"music_backend": "ACE-Step v1.5 official Hugging Face ZeroGPU Space via Gradio Client", "music_api_mode": "live_gradio_49_input_contract", "music_style": "LOUD_MODERN_DEVOTIONAL_EDM_DJ_READY", "bpm": 128, "time_signature": "4/4", "dj_master": str(dj_master), "dj_master_bitrate": "320k", "dj_master_sample_rate": 48000})
         state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
         (base.OUT / "manifest.json").write_text(json.dumps({"videos": [state]}, ensure_ascii=False, indent=2), encoding="utf-8")
         print("STATE_OK music_backend=ACE-Step official ZeroGPU Space via Gradio Client")
