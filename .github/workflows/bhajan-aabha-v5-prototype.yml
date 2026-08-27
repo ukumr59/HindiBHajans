@@ -30,16 +30,18 @@ jobs:
           test -s app/zero_cost_pipeline_v5_4.py
           python3 -m py_compile app/zero_cost_pipeline_v5.py app/zero_cost_pipeline_v5_2.py app/zero_cost_pipeline_v5_4.py
           grep -q 'gradio_client' requirements.txt
-          echo 'PRECHECK_OK: clean zero-cost 3-5 minute architecture; live ACE-Step 49-input contract; Agnes visuals.'
+          echo 'PRECHECK_OK: clean zero-cost 3-5 minute architecture; live ACE-Step contract; Agnes visuals.'
 
-      - name: Verify zero-cost media tools
+      - name: Install zero-cost media tools
         run: |
           set -e
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg fonts-noto-core
           command -v ffmpeg
           command -v ffprobe
           ffmpeg -version | head -1
           fc-match 'Noto Sans Devanagari' | head -1 || true
-          echo 'MEDIA_TOOLS_OK: using tools already present on the GitHub runner; no apt-get update required.'
+          echo 'MEDIA_TOOLS_OK: ffmpeg, ffprobe and Devanagari font are installed.'
 
       - name: Set up Python
         uses: actions/setup-python@v5
