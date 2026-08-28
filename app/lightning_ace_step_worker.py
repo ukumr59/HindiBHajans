@@ -30,7 +30,17 @@ def prepare():
     run("nvidia-smi")
     if not ACE.exists():
         run("git", "clone", "--depth", "1", "https://github.com/ACE-Step/ACE-Step-1.5.git", str(ACE))
+
+    # ACE-Step declares nano-vllm as a local uv source. Plain pip does not
+    # understand [tool.uv.sources], so `pip install -e .` otherwise tries to
+    # download a package literally named nano-vllm from PyPI and fails.
+    # Install the bundled local package first, then install ACE-Step normally.
+    nano_vllm = ACE / "acestep" / "third_parts" / "nano-vllm"
+    if not nano_vllm.exists():
+        raise RuntimeError(f"LIGHTNING_ACE_FATAL: bundled nano-vllm source missing at {nano_vllm}")
+    run(sys.executable, "-m", "pip", "install", "-e", str(nano_vllm), "--no-deps", "--quiet")
     run(sys.executable, "-m", "pip", "install", "-e", ".", "--quiet", cwd=ACE)
+
     if subprocess.run(["ffmpeg", "-version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
         run("sudo", "apt-get", "update", "-qq")
         run("sudo", "apt-get", "install", "-y", "-qq", "ffmpeg")
