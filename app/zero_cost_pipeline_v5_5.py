@@ -2,218 +2,114 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
-import subprocess
-import time
+import tempfile
 from pathlib import Path
 
 import app.zero_cost_pipeline_v5_4 as longform
 import app.zero_cost_pipeline_v5_2 as music
 
 base = longform.base
-KAGGLE_USERNAME = os.getenv('KAGGLE_USERNAME', '').strip()
-KAGGLE_KEY = os.getenv('KAGGLE_KEY', '').strip()
-BASE_SLUG = 'bhajan-aabha-ace-step-gpu-worker'
+LIGHTNING_USER_ID = os.getenv("LIGHTNING_USER_ID", "").strip()
+LIGHTNING_API_KEY = os.getenv("LIGHTNING_API_KEY", "").strip()
+LIGHTNING_USERNAME = os.getenv("LIGHTNING_USERNAME", "").strip()
+LIGHTNING_TEAMSPACE = os.getenv("LIGHTNING_TEAMSPACE", "default-project").strip()
+LIGHTNING_STUDIO = os.getenv("LIGHTNING_STUDIO", "bhajan-aabha-ace-step").strip()
 
 
-def _run(*args, cwd=None, check=True, capture=False):
-    print('KAGGLE_LAUNCH:', ' '.join(map(str, args)), flush=True)
-    return subprocess.run(list(map(str, args)), cwd=cwd, check=check, text=True, capture_output=capture)
+def _require_lightning() -> None:
+    if not LIGHTNING_USER_ID or not LIGHTNING_API_KEY:
+        raise RuntimeError("SETUP_REQUIRED: LIGHTNING_USER_ID and LIGHTNING_API_KEY repository secrets are required")
+    if not LIGHTNING_USERNAME:
+        raise RuntimeError("SETUP_REQUIRED: LIGHTNING_USERNAME must identify the Lightning user teamspace owner")
 
 
-def _require_kaggle():
-    if not KAGGLE_USERNAME:
-        raise RuntimeError('SETUP_REQUIRED: KAGGLE_USERNAME repository secret is missing')
-    if not KAGGLE_KEY and not os.getenv('KAGGLE_API_TOKEN'):
-        raise RuntimeError('SETUP_REQUIRED: KAGGLE_KEY or KAGGLE_API_TOKEN repository secret is missing')
+def generate_music_lightning() -> Path:
+    _require_lightning()
+    from lightning_sdk import Machine, Studio
 
-
-def _select_kernel() -> tuple[str, str]:
-    # One persistent kernel. Do not create timestamped kernels on every run.
-    slug = BASE_SLUG
-    title = 'Bhajan Aabha ACE-Step GPU Worker'
-    kernel_id = f'{KAGGLE_USERNAME}/{slug}'
-    print(f'KAGGLE_DISCOVERY: persistent kernel={kernel_id}', flush=True)
-    return kernel_id, title
-
-
-def _prepare_kernel(kernel_id: str, title: str):
-    root = Path('kaggle_job')
-    if root.exists():
-        shutil.rmtree(root)
-    root.mkdir(parents=True)
-    shutil.copy2(Path(__file__).with_name('kaggle_ace_step_worker.py'), root / 'worker.py')
     request = {
-        'caption': base.PACK['music_prompt'],
-        'lyrics': base.PACK['lyrics'],
-        'duration': int(base.VIDEO_SECONDS),
-        'bpm': 128,
-        'keyscale': 'C Major',
-        'timesignature': '4/4',
-        'vocal_language': 'hi',
+        "caption": base.PACK["music_prompt"],
+        "lyrics": base.PACK["lyrics"],
+        "duration": int(base.VIDEO_SECONDS),
+        "bpm": 128,
+        "keyscale": "C Major",
+        "timesignature": "4/4",
+        "vocal_language": "hi",
     }
-    (root / 'bhajan_request.json').write_text(json.dumps(request, ensure_ascii=False, indent=2), encoding='utf-8')
-    metadata = {
-        'id': kernel_id,
-        'title': title,
-        'code_file': 'worker.py',
-        'language': 'python',
-        'kernel_type': 'script',
-        'is_private': False,
-        'enable_gpu': True,
-        'enable_internet': True,
-        'machine_shape': 'NvidiaTeslaT4',
-        'dataset_sources': [],
-        'competition_sources': [],
-        'kernel_sources': [],
-        'model_sources': [],
-    }
-    (root / 'kernel-metadata.json').write_text(json.dumps(metadata, indent=2), encoding='utf-8')
-    return root
+    request_path = Path(tempfile.mkdtemp(prefix="lightning_bhajan_")) / "bhajan_request.json"
+    request_path.write_text(json.dumps(request, ensure_ascii=False, indent=2), encoding="utf-8")
+    worker = Path(__file__).with_name("lightning_ace_step_worker.py")
+
+    studio = Studio(
+        name=LIGHTNING_STUDIO,
+        teamspace=LIGHTNING_TEAMSPACE,
+        user=LIGHTNING_USERNAME,
+        create_ok=True,
+    )
+    started_here = False
+    try:
+        status = str(studio.status).lower()
+        print(f"LIGHTNING_STATUS: studio={LIGHTNING_STUDIO} status={status}", flush=True)
+        if "running" not in status:
+            print("LIGHTNING_LAUNCH: starting dedicated T4 GPU Studio", flush=True)
+            studio.start(Machine.T4)
+            started_here = True
+        else:
+            machine = str(studio.machine).lower()
+            if "t4" not in machine:
+                print("LIGHTNING_LAUNCH: switching dedicated Studio to T4", flush=True)
+                studio.switch_machine(Machine.T4)
+                started_here = True
+
+        studio.upload_file(str(worker), remote_path="bhajan_ace_step_worker.py")
+        studio.upload_file(str(request_path), remote_path="bhajan_request.json")
+        command = "python bhajan_ace_step_worker.py"
+        print("LIGHTNING_LAUNCH: executing ACE-Step worker on remote T4", flush=True)
+        output, code = studio.run_with_exit_code(command)
+        print(output[-12000:], flush=True)
+        if code != 0:
+            raise RuntimeError(f"LIGHTNING_ACE_FATAL: remote worker exited with code {code}")
+
+        local_output = base.AUDIO / "bhajan_source.mp3"
+        local_output.parent.mkdir(parents=True, exist_ok=True)
+        studio.download_file("bhajan_aabha_worker/bhajan_source.mp3", str(local_output))
+        if not local_output.exists() or local_output.stat().st_size < 100_000:
+            raise RuntimeError("LIGHTNING_ACE_FATAL: downloaded MP3 is missing or suspiciously small")
+        print(f"LIGHTNING_ACE_OK: {local_output} {local_output.stat().st_size} bytes", flush=True)
+        return local_output
+    finally:
+        if started_here:
+            try:
+                print("LIGHTNING_LAUNCH: stopping dedicated Studio to preserve free GPU credits", flush=True)
+                studio.stop()
+            except Exception as exc:
+                print(f"LIGHTNING_CLEANUP_WARNING: {exc}", flush=True)
 
 
-def _configure_kaggle_cli():
-    _run('python', '-m', 'pip', 'install', '-q', '-U', 'kaggle')
-    if KAGGLE_KEY:
-        os.environ.pop('KAGGLE_API_TOKEN', None)
-        os.environ.pop('KAGGLE_ACCESS_TOKEN', None)
-        print('KAGGLE_AUTH: using legacy KAGGLE_USERNAME + KAGGLE_KEY credentials', flush=True)
-    else:
-        print('KAGGLE_AUTH: using KAGGLE_API_TOKEN fallback', flush=True)
-    print(f'KAGGLE_LAUNCH: authenticated as {KAGGLE_USERNAME}', flush=True)
+music.generate_music_gradio = generate_music_lightning
+base.ACESTEP_ROOT = "lightning://ACE-Step-1.5"
 
 
-def _kernel_status(kernel_id: str) -> str | None:
-    p = _run('kaggle', 'kernels', 'status', kernel_id, check=False, capture=True)
-    text = (p.stdout + '\n' + p.stderr).strip()
-    if text:
-        print('KAGGLE_STATUS:', text[-1600:], flush=True)
-    if p.returncode == 0:
-        low = text.lower()
-        for status in ('running', 'queued', 'complete', 'error', 'cancelled', 'canceled'):
-            if status in low:
-                return status.upper()
-        return 'UNKNOWN'
-    low = text.lower()
-    if any(x in low for x in ('not found', '404', 'does not exist', 'not exist', 'cannot find')):
-        return None
-    if any(x in low for x in ('permission', '403', 'authentication', 'unauthorized', 'forbidden', 'kernels.get')):
-        raise RuntimeError(f'KAGGLE_ACE_FATAL: kernel status failed: {text[-1200:]}')
-    raise RuntimeError(f'KAGGLE_ACE_FATAL: unable to determine Kaggle kernel status: {text[-1200:]}')
-
-
-def _wait_until_available(kernel_id: str, timeout_seconds: int = 70 * 60):
-    deadline = time.time() + timeout_seconds
-    while time.time() < deadline:
-        status = _kernel_status(kernel_id)
-        print(f'KAGGLE_LAUNCH: persistent kernel status={status}', flush=True)
-        if status is None or status in ('COMPLETE', 'ERROR', 'CANCELLED', 'CANCELED'):
-            return status
-        if status in ('RUNNING', 'QUEUED'):
-            time.sleep(30)
-            continue
-        time.sleep(30)
-    raise RuntimeError('KAGGLE_ACE_FATAL: persistent Kaggle kernel remained RUNNING/QUEUED for 70 minutes')
-
-
-def _push_kernel(root: Path, kernel_id: str):
-    _wait_until_available(kernel_id)
-    for attempt in range(1, 3):
-        print(f'KAGGLE_LAUNCH: push attempt {attempt}/2 kernel={kernel_id}', flush=True)
-        p = _run('kaggle', 'kernels', 'push', '-p', str(root), check=False, capture=True)
-        output = (p.stdout + '\n' + p.stderr).strip()
-        if output:
-            print('KAGGLE_PUSH_OUTPUT:', output[-2200:], flush=True)
-        if p.returncode == 0:
-            return
-        low = output.lower()
-        if '409' not in low and 'conflict' not in low:
-            raise subprocess.CalledProcessError(p.returncode, p.args, p.stdout, p.stderr)
-        if attempt == 1:
-            print('KAGGLE_PUSH: 409 conflict; waiting for the same persistent worker instead of creating another kernel', flush=True)
-            _wait_until_available(kernel_id)
-    raise RuntimeError('KAGGLE_ACE_FATAL: Kaggle kernels push returned HTTP 409 after status-aware retry')
-
-
-def _download_output_once(kernel_id: str, out_dir: Path) -> tuple[bool, str]:
-    if out_dir.exists():
-        shutil.rmtree(out_dir)
-    out_dir.mkdir(parents=True)
-    p = _run('kaggle', 'kernels', 'output', kernel_id, '-p', str(out_dir), '-o', '-q', check=False, capture=True)
-    text = (p.stdout + '\n' + p.stderr).strip()
-    if text:
-        print('KAGGLE_OUTPUT:', text[-1200:], flush=True)
-    candidates = list(out_dir.rglob('bhajan_source.mp3'))
-    if candidates:
-        return True, 'COMPLETE'
-    if p.returncode != 0:
-        low = text.lower()
-        fatal_markers = ('permission', '403', '404', 'authentication', 'unauthorized', 'forbidden', 'kernels.get')
-        running_markers = ('has not finished', 'not finished', 'still running', 'no output')
-        if any(marker in low for marker in fatal_markers) and not any(marker in low for marker in running_markers):
-            raise RuntimeError(f'KAGGLE_ACE_FATAL: output retrieval failed: {text[-1200:]}')
-    return False, 'RUNNING'
-
-
-def generate_music_kaggle() -> Path:
-    _require_kaggle()
-    _configure_kaggle_cli()
-    kernel_id, title = _select_kernel()
-    root = _prepare_kernel(kernel_id, title)
-    print(f'KAGGLE_LAUNCH: using persistent free NvidiaTeslaT4 GPU worker={kernel_id}', flush=True)
-    _push_kernel(root, kernel_id)
-
-    out_dir = Path('kaggle_output')
-    deadline = time.time() + 65 * 60
-    poll = 0
-    while time.time() < deadline:
-        poll += 1
-        status = _kernel_status(kernel_id)
-        print(f'KAGGLE_LAUNCH: waiting for GPU output poll={poll} kernel_status={status}', flush=True)
-        if status in ('ERROR', 'CANCELLED', 'CANCELED'):
-            raise RuntimeError(f'KAGGLE_ACE_FATAL: kernel finished with status {status}')
-        complete, state = _download_output_once(kernel_id, out_dir)
-        print(f'KAGGLE_LAUNCH: output_state={state}', flush=True)
-        if complete:
-            break
-        time.sleep(30)
-    else:
-        raise RuntimeError('KAGGLE_ACE_FATAL: kernel output timed out after 65 minutes')
-
-    candidates = list(out_dir.rglob('bhajan_source.mp3')) or list(out_dir.rglob('*.mp3'))
-    if not candidates:
-        raise RuntimeError(f'KAGGLE_ACE_FATAL: no MP3 returned by kernel. Files={list(out_dir.rglob("*"))}')
-    source = candidates[0]
-    target = base.AUDIO / 'bhajan_source.mp3'
-    target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source, target)
-    if target.stat().st_size < 100_000:
-        raise RuntimeError('KAGGLE_ACE_FATAL: returned MP3 is suspiciously small')
-    print(f'KAGGLE_ACE_OK: {target} {target.stat().st_size} bytes', flush=True)
-    return target
-
-
-music.generate_music_gradio = generate_music_kaggle
-base.ACESTEP_ROOT = 'kaggle://ACE-Step-1.5'
-
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     longform.main()
-    state_path = base.OUT / 'run_state.json'
-    state = json.loads(state_path.read_text(encoding='utf-8')) if state_path.exists() else {}
+    state_path = base.OUT / "run_state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
     state.update({
-        'architecture': 'v5.5-kaggle-gpu-longform',
-        'music_backend': 'ACE-Step 1.5 on Kaggle free GPU worker',
-        'music_api_mode': 'kaggle_ace_step_gpu_worker',
-        'music_model': 'acestep-v15-turbo',
-        'music_lm_model': 'acestep-5Hz-lm-0.6B',
-        'kaggle': True,
-        'huggingface_zero_gpu': False,
-        'paid_services': False,
-        'paid_gpu': False,
-        'zero_cost': True,
-        'kaggle_kernel_strategy': 'persistent_status_aware_worker',
+        "architecture": "v5.6-lightning-gpu-longform",
+        "music_backend": "ACE-Step 1.5 on Lightning AI free T4 Studio",
+        "music_api_mode": "lightning_ace_step_gpu_studio",
+        "music_model": "acestep-v15-turbo",
+        "music_lm_model": "acestep-5Hz-lm-0.6B",
+        "kaggle": False,
+        "huggingface_zero_gpu": False,
+        "paid_services": False,
+        "paid_gpu": False,
+        "zero_cost": True,
+        "lightning": True,
+        "lightning_machine": "T4",
+        "lightning_teamspace": LIGHTNING_TEAMSPACE,
+        "lightning_studio": LIGHTNING_STUDIO,
     })
-    state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding='utf-8')
-    (base.OUT / 'manifest.json').write_text(json.dumps({'videos': [state]}, ensure_ascii=False, indent=2), encoding='utf-8')
-    print('STATE_OK backend=kaggle_ace_step_gpu_worker kaggle=true strategy=persistent_status_aware_worker')
+    state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    (base.OUT / "manifest.json").write_text(json.dumps({"videos": [state]}, ensure_ascii=False, indent=2), encoding="utf-8")
+    print("STATE_OK backend=lightning_ace_step_gpu_studio kaggle=false zero_cost=true machine=T4")
