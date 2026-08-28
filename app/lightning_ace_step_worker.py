@@ -7,8 +7,12 @@ import sys
 import time
 from pathlib import Path
 
-WORK = Path.home() / "bhajan_aabha_worker"
-INPUT = WORK / "bhajan_request.json"
+# Lightning Studio executes uploaded files from /teamspace/studios/this_studio.
+# Keep all worker input/output relative to this script instead of Path.home(),
+# because the Studio user's HOME is not the upload working directory.
+STUDIO_ROOT = Path(__file__).resolve().parent
+WORK = STUDIO_ROOT / "bhajan_aabha_worker"
+INPUT = STUDIO_ROOT / "bhajan_request.json"
 OUTPUT = WORK / "bhajan_source.mp3"
 ACE = WORK / "ACE-Step-1.5"
 
@@ -20,6 +24,8 @@ def run(*args, cwd=None):
 
 def prepare():
     WORK.mkdir(parents=True, exist_ok=True)
+    print(f"LIGHTNING_STUDIO_ROOT: {STUDIO_ROOT}", flush=True)
+    print(f"LIGHTNING_REQUEST: {INPUT} exists={INPUT.exists()}", flush=True)
     print("LIGHTNING_GPU:", flush=True)
     run("nvidia-smi")
     if not ACE.exists():
@@ -73,12 +79,13 @@ def generate(req: dict) -> Path:
     run("ffmpeg", "-y", "-i", str(source), "-af", "loudnorm=I=-9:TP=-1.0:LRA=7", "-ar", "48000", "-ac", "2", "-c:a", "libmp3lame", "-b:a", "320k", str(OUTPUT))
     if OUTPUT.stat().st_size < 100_000:
         raise RuntimeError("LIGHTNING_ACE_FATAL: output MP3 is suspiciously small")
+    print(f"LIGHTNING_OUTPUT: {OUTPUT} {OUTPUT.stat().st_size} bytes", flush=True)
     return OUTPUT
 
 
 def main():
     if not INPUT.exists():
-        raise RuntimeError("LIGHTNING_ACE_FATAL: bhajan_request.json not found")
+        raise RuntimeError(f"LIGHTNING_ACE_FATAL: bhajan_request.json not found at {INPUT}")
     req = json.loads(INPUT.read_text(encoding="utf-8"))
     prepare()
     out = generate(req)
