@@ -19,7 +19,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Preflight — Lightning GPU
+      - name: Preflight — Lightning GPU credentials
         env:
           AGNES_API_KEY: ${{ secrets.AGNES_API_KEY }}
           LIGHTNING_USER_ID: ${{ secrets.LIGHTNING_USER_ID }}
@@ -39,12 +39,11 @@ jobs:
         run: |
           set -e
           sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg fonts-noto-core
+          sudo apt-get install -y -qq ffmpeg fonts-noto-core jq
           command -v ffmpeg
           command -v ffprobe
           ffmpeg -version | head -1
           fc-match 'Noto Sans Devanagari' | head -1 || true
-          echo 'MEDIA_TOOLS_OK: ffmpeg, ffprobe and Devanagari font are installed.'
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -54,13 +53,39 @@ jobs:
       - name: Install Python dependencies
         run: pip install -r requirements.txt lightning-sdk
 
+      - name: Resolve Lightning membership (no hardcoded username)
+        env:
+          LIGHTNING_USER_ID: ${{ secrets.LIGHTNING_USER_ID }}
+          LIGHTNING_API_KEY: ${{ secrets.LIGHTNING_API_KEY }}
+        run: |
+          set -euo pipefail
+          M=$(lightning api /v1/memberships)
+          echo "$M" | jq -e '.memberships | length > 0' >/dev/null
+          TS=$(echo "$M" | jq -r '.memberships[0].name')
+          OWNER_TYPE=$(echo "$M" | jq -r '.memberships[0].ownerType')
+          OWNER_ID=$(echo "$M" | jq -r '.memberships[0].ownerId')
+          echo "LIGHTNING_TEAMSPACE=$TS" >> "$GITHUB_ENV"
+          if [ "$OWNER_TYPE" = "user" ]; then
+            OWNER=$(lightning api "/v1/users/$OWNER_ID" | jq -r '.name')
+            test -n "$OWNER" && test "$OWNER" != "null"
+            echo "LIGHTNING_USERNAME=$OWNER" >> "$GITHUB_ENV"
+            echo "LIGHTNING_OWNER_TYPE=user"
+          elif [ "$OWNER_TYPE" = "organization" ] || [ "$OWNER_TYPE" = "org" ]; then
+            OWNER=$(lightning api "/v1/orgs/$OWNER_ID" | jq -r '.name')
+            test -n "$OWNER" && test "$OWNER" != "null"
+            echo "LIGHTNING_ORG=$OWNER" >> "$GITHUB_ENV"
+            echo "LIGHTNING_OWNER_TYPE=organization"
+          else
+            echo "Unsupported ownerType=$OWNER_TYPE" >&2
+            exit 2
+          fi
+          echo "LIGHTNING_TEAMSPACE resolved: $TS"
+
       - name: Generate full-length bhajan video on Lightning T4
         env:
           AGNES_API_KEY: ${{ secrets.AGNES_API_KEY }}
           LIGHTNING_USER_ID: ${{ secrets.LIGHTNING_USER_ID }}
           LIGHTNING_API_KEY: ${{ secrets.LIGHTNING_API_KEY }}
-          LIGHTNING_USERNAME: Utkarshas
-          LIGHTNING_TEAMSPACE: default-project
           LIGHTNING_STUDIO: bhajan-aabha-ace-step
           VIDEO_SECONDS: '180'
           OUTPUT_DIR: output
