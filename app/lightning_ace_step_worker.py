@@ -8,7 +8,6 @@ import sys
 import time
 from pathlib import Path
 
-# Lightning Studio executes uploaded files from /teamspace/studios/this_studio.
 STUDIO_ROOT = Path(__file__).resolve().parent
 WORK = STUDIO_ROOT / "bhajan_aabha_worker"
 INPUT = STUDIO_ROOT / "bhajan_request.json"
@@ -25,21 +24,19 @@ def prepare():
     WORK.mkdir(parents=True, exist_ok=True)
     print(f"LIGHTNING_STUDIO_ROOT: {STUDIO_ROOT}", flush=True)
     print(f"LIGHTNING_REQUEST: {INPUT} exists={INPUT.exists()}", flush=True)
-    print("LIGHTNING_GPU:", flush=True)
     run("nvidia-smi")
     if not ACE.exists():
         run("git", "clone", "--depth", "1", "https://github.com/ACE-Step/ACE-Step-1.5.git", str(ACE))
 
-    # ACE-Step 1.5 uses uv dependency sources. Plain pip ignores the
-    # [tool.uv.sources] mappings, so use uv against the existing Studio Python.
+    # Resolve ACE-Step's uv sources. This installs the project with its
+    # pinned CUDA PyTorch stack instead of letting plain pip ignore uv sources.
     print("LIGHTNING_DEPS: installing uv", flush=True)
     run(sys.executable, "-m", "pip", "install", "-q", "-U", "uv")
     print("LIGHTNING_DEPS: resolving ACE-Step with uv tool.uv.sources", flush=True)
     run(sys.executable, "-m", "uv", "pip", "install", "--system", "-e", ".", cwd=ACE)
 
-    # IMPORTANT: use shutil.which before invoking ffmpeg. subprocess.run()
-    # raises FileNotFoundError when the executable is absent, so the previous
-    # check never reached the installer on a fresh Lightning Studio.
+    # FFmpeg must be discovered before subprocess.run(); otherwise a fresh
+    # Studio raises FileNotFoundError before any fallback can run.
     if shutil.which("ffmpeg") is None:
         print("LIGHTNING_DEPS: ffmpeg not found; installing system ffmpeg", flush=True)
         if shutil.which("sudo") is not None:
@@ -53,12 +50,16 @@ def prepare():
     run("ffmpeg", "-version")
 
     run(sys.executable, "-c", "import torch; print('LIGHTNING_TORCH_OK:', torch.__version__, 'CUDA=', torch.version.cuda, 'AVAILABLE=', torch.cuda.is_available())")
-    run(sys.executable, "-c", "import nano_vllm; print('LIGHTNING_NANOVLLM_OK')")
+
+    # ACE-Step is explicitly configured below for the PyTorch LM backend.
+    # nano-vLLM is optional for that backend and is not a valid preflight gate.
+    print("LIGHTNING_LLM_BACKEND: pt (nano-vLLM preflight skipped)", flush=True)
 
 
 def generate(req: dict) -> Path:
     os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     os.environ.setdefault("ACESTEP_SAVE_MEMORY", "1")
+    os.environ.setdefault("ACESTEP_LLM_BACKEND", "pt")
     sys.path.insert(0, str(ACE))
     import torch
     from acestep.handler import AceStepHandler
