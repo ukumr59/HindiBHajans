@@ -1,0 +1,54 @@
+name: Lightning GPU Smoke Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-lightning:
+    name: Verify Lightning T4 access
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Lightning SDK
+        run: pip install -q lightning-sdk
+
+      - name: Start T4 and verify CUDA
+        env:
+          LIGHTNING_USER_ID: ${{ secrets.LIGHTNING_USER_ID }}
+          LIGHTNING_API_KEY: ${{ secrets.LIGHTNING_API_KEY }}
+          LIGHTNING_USERNAME: Utkarshas
+          LIGHTNING_TEAMSPACE: default-project
+          LIGHTNING_STUDIO: bhajan-aabha-ace-step
+        run: |
+          python - <<'PY'
+          from lightning_sdk import Machine, Studio
+          s = Studio(name="bhajan-aabha-ace-step", teamspace="default-project", user="Utkarshas", create_ok=True)
+          try:
+              status = str(s.status).lower()
+              print("LIGHTNING_STATUS:", status)
+              if "running" not in status:
+                  s.start(Machine.T4)
+              elif "t4" not in str(s.machine).lower():
+                  s.switch_machine(Machine.T4)
+              out, code = s.run_with_exit_code("nvidia-smi --query-gpu=name,memory.total --format=csv,noheader")
+              print(out)
+              if code != 0:
+                  raise SystemExit(code)
+              print("LIGHTNING_GPU_SMOKE_TEST_OK")
+          finally:
+              try:
+                  s.stop()
+              except Exception as exc:
+                  print("LIGHTNING_STOP_WARNING:", exc)
+          PY
