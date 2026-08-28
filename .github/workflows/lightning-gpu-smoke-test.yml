@@ -20,20 +20,59 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install Lightning SDK
-        run: pip install -q lightning-sdk
+      - name: Install Lightning SDK and jq
+        run: |
+          pip install -q lightning-sdk
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq
+
+      - name: Resolve Lightning membership (no hardcoded username)
+        env:
+          LIGHTNING_USER_ID: ${{ secrets.LIGHTNING_USER_ID }}
+          LIGHTNING_API_KEY: ${{ secrets.LIGHTNING_API_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$LIGHTNING_USER_ID"
+          test -n "$LIGHTNING_API_KEY"
+          M=$(lightning api /v1/memberships)
+          echo "$M" | jq -e '.memberships | length > 0' >/dev/null
+          TS=$(echo "$M" | jq -r '.memberships[0].name')
+          OWNER_TYPE=$(echo "$M" | jq -r '.memberships[0].ownerType')
+          OWNER_ID=$(echo "$M" | jq -r '.memberships[0].ownerId')
+          echo "LIGHTNING_TEAMSPACE=$TS" >> "$GITHUB_ENV"
+          if [ "$OWNER_TYPE" = "user" ]; then
+            OWNER=$(lightning api "/v1/users/$OWNER_ID" | jq -r '.name')
+            test -n "$OWNER" && test "$OWNER" != "null"
+            echo "LIGHTNING_USERNAME=$OWNER" >> "$GITHUB_ENV"
+            echo "LIGHTNING_OWNER_TYPE=user"
+            echo "LIGHTNING_USERNAME resolved (value hidden)"
+          elif [ "$OWNER_TYPE" = "organization" ] || [ "$OWNER_TYPE" = "org" ]; then
+            OWNER=$(lightning api "/v1/orgs/$OWNER_ID" | jq -r '.name')
+            test -n "$OWNER" && test "$OWNER" != "null"
+            echo "LIGHTNING_ORG=$OWNER" >> "$GITHUB_ENV"
+            echo "LIGHTNING_OWNER_TYPE=organization"
+            echo "LIGHTNING_ORG resolved (value hidden)"
+          else
+            echo "Unsupported ownerType=$OWNER_TYPE" >&2
+            exit 2
+          fi
+          echo "LIGHTNING_TEAMSPACE resolved: $TS"
 
       - name: Start T4 and verify CUDA
         env:
           LIGHTNING_USER_ID: ${{ secrets.LIGHTNING_USER_ID }}
           LIGHTNING_API_KEY: ${{ secrets.LIGHTNING_API_KEY }}
-          LIGHTNING_USERNAME: Utkarshas
-          LIGHTNING_TEAMSPACE: default-project
           LIGHTNING_STUDIO: bhajan-aabha-ace-step
         run: |
           python - <<'PY'
+          import os
           from lightning_sdk import Machine, Studio
-          s = Studio(name="bhajan-aabha-ace-step", teamspace="default-project", user="Utkarshas", create_ok=True)
+          kwargs = dict(name=os.environ["LIGHTNING_STUDIO"], teamspace=os.environ["LIGHTNING_TEAMSPACE"], create_ok=True)
+          if os.getenv("LIGHTNING_ORG"):
+              kwargs["org"] = os.environ["LIGHTNING_ORG"]
+          else:
+              kwargs["user"] = os.environ["LIGHTNING_USERNAME"]
+          s = Studio(**kwargs)
           try:
               status = str(s.status).lower()
               print("LIGHTNING_STATUS:", status)
