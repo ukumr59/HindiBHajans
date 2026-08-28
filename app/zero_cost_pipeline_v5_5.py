@@ -12,20 +12,35 @@ base = longform.base
 LIGHTNING_USER_ID = os.getenv("LIGHTNING_USER_ID", "").strip()
 LIGHTNING_API_KEY = os.getenv("LIGHTNING_API_KEY", "").strip()
 LIGHTNING_USERNAME = os.getenv("LIGHTNING_USERNAME", "").strip()
-LIGHTNING_TEAMSPACE = os.getenv("LIGHTNING_TEAMSPACE", "default-project").strip()
+LIGHTNING_ORG = os.getenv("LIGHTNING_ORG", "").strip()
+LIGHTNING_TEAMSPACE = os.getenv("LIGHTNING_TEAMSPACE", "").strip()
 LIGHTNING_STUDIO = os.getenv("LIGHTNING_STUDIO", "bhajan-aabha-ace-step").strip()
 
 
 def _require_lightning() -> None:
     if not LIGHTNING_USER_ID or not LIGHTNING_API_KEY:
         raise RuntimeError("SETUP_REQUIRED: LIGHTNING_USER_ID and LIGHTNING_API_KEY repository secrets are required")
-    if not LIGHTNING_USERNAME:
-        raise RuntimeError("SETUP_REQUIRED: LIGHTNING_USERNAME must identify the Lightning user teamspace owner")
+    if not LIGHTNING_TEAMSPACE:
+        raise RuntimeError("SETUP_REQUIRED: LIGHTNING_TEAMSPACE must be resolved from the Lightning membership")
+    if not LIGHTNING_USERNAME and not LIGHTNING_ORG:
+        raise RuntimeError("SETUP_REQUIRED: Lightning teamspace owner was not resolved; set LIGHTNING_USERNAME or LIGHTNING_ORG")
+    if LIGHTNING_USERNAME and LIGHTNING_ORG:
+        raise RuntimeError("SETUP_REQUIRED: set only one of LIGHTNING_USERNAME or LIGHTNING_ORG")
+
+
+def _studio():
+    from lightning_sdk import Studio
+    kwargs = {"name": LIGHTNING_STUDIO, "teamspace": LIGHTNING_TEAMSPACE, "create_ok": True}
+    if LIGHTNING_ORG:
+        kwargs["org"] = LIGHTNING_ORG
+    else:
+        kwargs["user"] = LIGHTNING_USERNAME
+    return Studio(**kwargs)
 
 
 def generate_music_lightning() -> Path:
     _require_lightning()
-    from lightning_sdk import Machine, Studio
+    from lightning_sdk import Machine
 
     request = {
         "caption": base.PACK["music_prompt"],
@@ -40,16 +55,11 @@ def generate_music_lightning() -> Path:
     request_path.write_text(json.dumps(request, ensure_ascii=False, indent=2), encoding="utf-8")
     worker = Path(__file__).with_name("lightning_ace_step_worker.py")
 
-    studio = Studio(
-        name=LIGHTNING_STUDIO,
-        teamspace=LIGHTNING_TEAMSPACE,
-        user=LIGHTNING_USERNAME,
-        create_ok=True,
-    )
+    studio = _studio()
     started_here = False
     try:
         status = str(studio.status).lower()
-        print(f"LIGHTNING_STATUS: studio={LIGHTNING_STUDIO} status={status}", flush=True)
+        print(f"LIGHTNING_STATUS: studio={LIGHTNING_STUDIO} teamspace={LIGHTNING_TEAMSPACE} owner={LIGHTNING_USERNAME or LIGHTNING_ORG} status={status}", flush=True)
         if "running" not in status:
             print("LIGHTNING_LAUNCH: starting dedicated T4 GPU Studio", flush=True)
             studio.start(Machine.T4)
@@ -63,9 +73,8 @@ def generate_music_lightning() -> Path:
 
         studio.upload_file(str(worker), remote_path="bhajan_ace_step_worker.py")
         studio.upload_file(str(request_path), remote_path="bhajan_request.json")
-        command = "python bhajan_ace_step_worker.py"
         print("LIGHTNING_LAUNCH: executing ACE-Step worker on remote T4", flush=True)
-        output, code = studio.run_with_exit_code(command)
+        output, code = studio.run_with_exit_code("python bhajan_ace_step_worker.py")
         print(output[-12000:], flush=True)
         if code != 0:
             raise RuntimeError(f"LIGHTNING_ACE_FATAL: remote worker exited with code {code}")
@@ -80,7 +89,7 @@ def generate_music_lightning() -> Path:
     finally:
         if started_here:
             try:
-                print("LIGHTNING_LAUNCH: stopping dedicated Studio to preserve free GPU credits", flush=True)
+                print("LIGHTNING_LAUNCH: stopping dedicated Studio", flush=True)
                 studio.stop()
             except Exception as exc:
                 print(f"LIGHTNING_CLEANUP_WARNING: {exc}", flush=True)
@@ -96,7 +105,7 @@ if __name__ == "__main__":
     state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
     state.update({
         "architecture": "v5.6-lightning-gpu-longform",
-        "music_backend": "ACE-Step 1.5 on Lightning AI free T4 Studio",
+        "music_backend": "ACE-Step 1.5 on Lightning AI T4 Studio",
         "music_api_mode": "lightning_ace_step_gpu_studio",
         "music_model": "acestep-v15-turbo",
         "music_lm_model": "acestep-5Hz-lm-0.6B",
