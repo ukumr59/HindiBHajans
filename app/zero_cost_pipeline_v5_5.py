@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import csv
-import io
 import json
 import os
 import shutil
@@ -26,22 +24,17 @@ def _run(*args, cwd=None, check=True, capture=False):
 def _require_kaggle():
     if not KAGGLE_USERNAME:
         raise RuntimeError('SETUP_REQUIRED: KAGGLE_USERNAME repository secret is missing')
-    # Prefer the legacy username/key pair when both credential styles exist.
-    # The current Kaggle CLI prioritizes KAGGLE_API_TOKEN over legacy credentials,
-    # and the token-backed path is the one returning Permission kernels.get denied
-    # for this public worker. The legacy key already has the permissions needed
-    # for push/status/output in this workflow.
     if not KAGGLE_KEY and not os.getenv('KAGGLE_API_TOKEN'):
         raise RuntimeError('SETUP_REQUIRED: KAGGLE_KEY or KAGGLE_API_TOKEN repository secret is missing')
 
 
 def _select_kernel() -> tuple[str, str]:
-    stamp = str(time.time_ns())[-12:]
-    slug = f'{BASE_SLUG}-{stamp}'
-    title = f'Bhajan Aabha ACE-Step GPU Worker {stamp}'
-    print(f'KAGGLE_DISCOVERY: creating unique kernel slug={slug}', flush=True)
-    print(f'KAGGLE_DISCOVERY: matching kernel title={title}', flush=True)
-    return f'{KAGGLE_USERNAME}/{slug}', title
+    # One persistent kernel. Do not create timestamped kernels on every run.
+    slug = BASE_SLUG
+    title = 'Bhajan Aabha ACE-Step GPU Worker'
+    kernel_id = f'{KAGGLE_USERNAME}/{slug}'
+    print(f'KAGGLE_DISCOVERY: persistent kernel={kernel_id}', flush=True)
+    return kernel_id, title
 
 
 def _prepare_kernel(kernel_id: str, title: str):
@@ -49,7 +42,6 @@ def _prepare_kernel(kernel_id: str, title: str):
     if root.exists():
         shutil.rmtree(root)
     root.mkdir(parents=True)
-
     shutil.copy2(Path(__file__).with_name('kaggle_ace_step_worker.py'), root / 'worker.py')
     request = {
         'caption': base.PACK['music_prompt'],
@@ -61,15 +53,12 @@ def _prepare_kernel(kernel_id: str, title: str):
         'vocal_language': 'hi',
     }
     (root / 'bhajan_request.json').write_text(json.dumps(request, ensure_ascii=False, indent=2), encoding='utf-8')
-
     metadata = {
         'id': kernel_id,
         'title': title,
         'code_file': 'worker.py',
         'language': 'python',
         'kernel_type': 'script',
-        # Keep the worker public. Output retrieval is performed with the account's
-        # legacy Kaggle credentials rather than the newer token-precedence path.
         'is_private': False,
         'enable_gpu': True,
         'enable_internet': True,
@@ -79,18 +68,13 @@ def _prepare_kernel(kernel_id: str, title: str):
         'kernel_sources': [],
         'model_sources': [],
     }
-    metadata_path = root / 'kernel-metadata.json'
-    metadata_path.write_text(json.dumps(metadata, indent=2), encoding='utf-8')
-    print(f'KAGGLE_METADATA_READY: id={kernel_id} title={title} gpu=NvidiaTeslaT4 public=true', flush=True)
+    (root / 'kernel-metadata.json').write_text(json.dumps(metadata, indent=2), encoding='utf-8')
     return root
 
 
 def _configure_kaggle_cli():
     _run('python', '-m', 'pip', 'install', '-q', '-U', 'kaggle')
     if KAGGLE_KEY:
-        # Kaggle CLI gives KAGGLE_API_TOKEN precedence over legacy credentials.
-        # Remove the token from this process so every CLI call below uses the
-        # known-good KAGGLE_USERNAME + KAGGLE_KEY pair.
         os.environ.pop('KAGGLE_API_TOKEN', None)
         os.environ.pop('KAGGLE_ACCESS_TOKEN', None)
         print('KAGGLE_AUTH: using legacy KAGGLE_USERNAME + KAGGLE_KEY credentials', flush=True)
@@ -99,7 +83,41 @@ def _configure_kaggle_cli():
     print(f'KAGGLE_LAUNCH: authenticated as {KAGGLE_USERNAME}', flush=True)
 
 
+def _kernel_status(kernel_id: str) -> str | None:
+    p = _run('kaggle', 'kernels', 'status', kernel_id, check=False, capture=True)
+    text = (p.stdout + '\n' + p.stderr).strip()
+    if text:
+        print('KAGGLE_STATUS:', text[-1600:], flush=True)
+    if p.returncode == 0:
+        low = text.lower()
+        for status in ('running', 'queued', 'complete', 'error', 'cancelled', 'canceled'):
+            if status in low:
+                return status.upper()
+        return 'UNKNOWN'
+    low = text.lower()
+    if any(x in low for x in ('not found', '404', 'does not exist', 'not exist', 'cannot find')):
+        return None
+    if any(x in low for x in ('permission', '403', 'authentication', 'unauthorized', 'forbidden', 'kernels.get')):
+        raise RuntimeError(f'KAGGLE_ACE_FATAL: kernel status failed: {text[-1200:]}')
+    raise RuntimeError(f'KAGGLE_ACE_FATAL: unable to determine Kaggle kernel status: {text[-1200:]}')
+
+
+def _wait_until_available(kernel_id: str, timeout_seconds: int = 70 * 60):
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        status = _kernel_status(kernel_id)
+        print(f'KAGGLE_LAUNCH: persistent kernel status={status}', flush=True)
+        if status is None or status in ('COMPLETE', 'ERROR', 'CANCELLED', 'CANCELED'):
+            return status
+        if status in ('RUNNING', 'QUEUED'):
+            time.sleep(30)
+            continue
+        time.sleep(30)
+    raise RuntimeError('KAGGLE_ACE_FATAL: persistent Kaggle kernel remained RUNNING/QUEUED for 70 minutes')
+
+
 def _push_kernel(root: Path, kernel_id: str):
+    _wait_until_available(kernel_id)
     for attempt in range(1, 3):
         print(f'KAGGLE_LAUNCH: push attempt {attempt}/2 kernel={kernel_id}', flush=True)
         p = _run('kaggle', 'kernels', 'push', '-p', str(root), check=False, capture=True)
@@ -108,12 +126,13 @@ def _push_kernel(root: Path, kernel_id: str):
             print('KAGGLE_PUSH_OUTPUT:', output[-2200:], flush=True)
         if p.returncode == 0:
             return
-        if '409' not in output and 'Conflict' not in output:
+        low = output.lower()
+        if '409' not in low and 'conflict' not in low:
             raise subprocess.CalledProcessError(p.returncode, p.args, p.stdout, p.stderr)
         if attempt == 1:
-            print('KAGGLE_PUSH: transient 409; waiting 15s before one retry', flush=True)
-            time.sleep(15)
-    raise RuntimeError('KAGGLE_ACE_FATAL: Kaggle kernels push returned HTTP 409 for a fresh slug. Check the preceding slug/title lines.')
+            print('KAGGLE_PUSH: 409 conflict; waiting for the same persistent worker instead of creating another kernel', flush=True)
+            _wait_until_available(kernel_id)
+    raise RuntimeError('KAGGLE_ACE_FATAL: Kaggle kernels push returned HTTP 409 after status-aware retry')
 
 
 def _download_output_once(kernel_id: str, out_dir: Path) -> tuple[bool, str]:
@@ -129,18 +148,7 @@ def _download_output_once(kernel_id: str, out_dir: Path) -> tuple[bool, str]:
         return True, 'COMPLETE'
     if p.returncode != 0:
         low = text.lower()
-        # A permission/authentication error is fatal. In particular, match the
-        # exact Kaggle message "Permission 'kernels.get' was denied" so this
-        # cannot silently enter another endless polling loop.
-        fatal_markers = (
-            'permission',
-            '403',
-            '404',
-            'authentication',
-            'unauthorized',
-            'forbidden',
-            'kernels.get',
-        )
+        fatal_markers = ('permission', '403', '404', 'authentication', 'unauthorized', 'forbidden', 'kernels.get')
         running_markers = ('has not finished', 'not finished', 'still running', 'no output')
         if any(marker in low for marker in fatal_markers) and not any(marker in low for marker in running_markers):
             raise RuntimeError(f'KAGGLE_ACE_FATAL: output retrieval failed: {text[-1200:]}')
@@ -152,8 +160,7 @@ def generate_music_kaggle() -> Path:
     _configure_kaggle_cli()
     kernel_id, title = _select_kernel()
     root = _prepare_kernel(kernel_id, title)
-
-    print(f'KAGGLE_LAUNCH: pushing kernel={kernel_id} on free NvidiaTeslaT4 GPU', flush=True)
+    print(f'KAGGLE_LAUNCH: using persistent free NvidiaTeslaT4 GPU worker={kernel_id}', flush=True)
     _push_kernel(root, kernel_id)
 
     out_dir = Path('kaggle_output')
@@ -161,7 +168,10 @@ def generate_music_kaggle() -> Path:
     poll = 0
     while time.time() < deadline:
         poll += 1
-        print(f'KAGGLE_LAUNCH: waiting for GPU output poll={poll} kernel={kernel_id}', flush=True)
+        status = _kernel_status(kernel_id)
+        print(f'KAGGLE_LAUNCH: waiting for GPU output poll={poll} kernel_status={status}', flush=True)
+        if status in ('ERROR', 'CANCELLED', 'CANCELED'):
+            raise RuntimeError(f'KAGGLE_ACE_FATAL: kernel finished with status {status}')
         complete, state = _download_output_once(kernel_id, out_dir)
         print(f'KAGGLE_LAUNCH: output_state={state}', flush=True)
         if complete:
@@ -202,7 +212,8 @@ if __name__ == '__main__':
         'paid_services': False,
         'paid_gpu': False,
         'zero_cost': True,
+        'kaggle_kernel_strategy': 'persistent_status_aware_worker',
     })
     state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding='utf-8')
     (base.OUT / 'manifest.json').write_text(json.dumps({'videos': [state]}, ensure_ascii=False, indent=2), encoding='utf-8')
-    print('STATE_OK backend=kaggle_ace_step_gpu_worker kaggle=true')
+    print('STATE_OK backend=kaggle_ace_step_gpu_worker kaggle=true strategy=persistent_status_aware_worker')
