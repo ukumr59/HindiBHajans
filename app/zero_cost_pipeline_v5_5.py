@@ -30,13 +30,6 @@ def _require_kaggle():
 
 
 def _select_kernel() -> tuple[str, str]:
-    """Create a genuinely new Kaggle kernel with a title whose slug matches its id.
-
-    Kaggle links kernel titles and URL slugs. A previous implementation generated
-    a unique id but kept a fixed title, which made Kaggle warn that the title did
-    not resolve to the id and then return HTTP 409 from SaveKernel. For a new
-    kernel, both values must normalize to the same slug.
-    """
     stamp = str(time.time_ns())[-12:]
     slug = f'{BASE_SLUG}-{stamp}'
     title = f'Bhajan Aabha ACE-Step GPU Worker {stamp}'
@@ -69,7 +62,10 @@ def _prepare_kernel(kernel_id: str, title: str):
         'code_file': 'worker.py',
         'language': 'python',
         'kernel_type': 'script',
-        'is_private': True,
+        # This worker must be public because this account can push kernels but
+        # cannot call kernels.get on private kernels. The generated audio is
+        # retrieved through the public kernel-output endpoint.
+        'is_private': False,
         'enable_gpu': True,
         'enable_internet': True,
         'machine_shape': 'NvidiaTeslaT4',
@@ -80,7 +76,7 @@ def _prepare_kernel(kernel_id: str, title: str):
     }
     metadata_path = root / 'kernel-metadata.json'
     metadata_path.write_text(json.dumps(metadata, indent=2), encoding='utf-8')
-    print(f'KAGGLE_METADATA_READY: id={kernel_id} title={title} gpu=NvidiaTeslaT4', flush=True)
+    print(f'KAGGLE_METADATA_READY: id={kernel_id} title={title} gpu=NvidiaTeslaT4 public=true', flush=True)
     return root
 
 
@@ -90,8 +86,6 @@ def _configure_kaggle_cli():
 
 
 def _push_kernel(root: Path, kernel_id: str):
-    # A 409 is a real conflict for a brand-new slug. Do not waste three retries
-    # on it. A retry is retained only for a transient API conflict.
     for attempt in range(1, 3):
         print(f'KAGGLE_LAUNCH: push attempt {attempt}/2 kernel={kernel_id}', flush=True)
         p = _run('kaggle', 'kernels', 'push', '-p', str(root), check=False, capture=True)
@@ -109,7 +103,6 @@ def _push_kernel(root: Path, kernel_id: str):
 
 
 def _download_output_once(kernel_id: str, out_dir: Path) -> tuple[bool, str]:
-    """Use the output endpoint as the completion signal; kernels/status is forbidden for this account."""
     if out_dir.exists():
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True)
@@ -122,8 +115,12 @@ def _download_output_once(kernel_id: str, out_dir: Path) -> tuple[bool, str]:
         return True, 'COMPLETE'
     if p.returncode != 0:
         low = text.lower()
-        fatal_markers = ('permission denied', '403', '404', 'authentication', 'unauthorized', 'not found')
-        if any(marker in low for marker in fatal_markers) and 'has not finished' not in low and 'not finished' not in low:
+        # While a public kernel is still running, the output endpoint can report
+        # that output is not ready. Treat that as RUNNING; authentication/permission
+        # failures are fatal and should not be hidden by the polling loop.
+        fatal_markers = ('permission denied', '403', '404', 'authentication', 'unauthorized')
+        running_markers = ('has not finished', 'not finished', 'still running', 'no output')
+        if any(marker in low for marker in fatal_markers) and not any(marker in low for marker in running_markers):
             raise RuntimeError(f'KAGGLE_ACE_FATAL: output retrieval failed: {text[-1200:]}')
     return False, 'RUNNING'
 
@@ -137,9 +134,6 @@ def generate_music_kaggle() -> Path:
     print(f'KAGGLE_LAUNCH: pushing kernel={kernel_id} on free NvidiaTeslaT4 GPU', flush=True)
     _push_kernel(root, kernel_id)
 
-    # Do not call `kaggle kernels status`: the account can push successfully but
-    # is denied kernels.get. Polling the kernel output is sufficient and avoids
-    # the forbidden status endpoint entirely.
     out_dir = Path('kaggle_output')
     deadline = time.time() + 65 * 60
     poll = 0
