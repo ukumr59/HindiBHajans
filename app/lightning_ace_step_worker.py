@@ -28,15 +28,11 @@ def prepare():
     if not ACE.exists():
         run("git", "clone", "--depth", "1", "https://github.com/ACE-Step/ACE-Step-1.5.git", str(ACE))
 
-    # Resolve ACE-Step's uv sources. This installs the project with its
-    # pinned CUDA PyTorch stack instead of letting plain pip ignore uv sources.
     print("LIGHTNING_DEPS: installing uv", flush=True)
     run(sys.executable, "-m", "pip", "install", "-q", "-U", "uv")
     print("LIGHTNING_DEPS: resolving ACE-Step with uv tool.uv.sources", flush=True)
     run(sys.executable, "-m", "uv", "pip", "install", "--system", "-e", ".", cwd=ACE)
 
-    # FFmpeg must be discovered before subprocess.run(); otherwise a fresh
-    # Studio raises FileNotFoundError before any fallback can run.
     if shutil.which("ffmpeg") is None:
         print("LIGHTNING_DEPS: ffmpeg not found; installing system ffmpeg", flush=True)
         if shutil.which("sudo") is not None:
@@ -50,16 +46,17 @@ def prepare():
     run("ffmpeg", "-version")
 
     run(sys.executable, "-c", "import torch; print('LIGHTNING_TORCH_OK:', torch.__version__, 'CUDA=', torch.version.cuda, 'AVAILABLE=', torch.cuda.is_available())")
-
-    # ACE-Step is explicitly configured below for the PyTorch LM backend.
-    # nano-vLLM is optional for that backend and is not a valid preflight gate.
-    print("LIGHTNING_LLM_BACKEND: pt (nano-vLLM preflight skipped)", flush=True)
+    print("LIGHTNING_LLM_BACKEND: pt", flush=True)
 
 
 def generate(req: dict) -> Path:
+    # T4 is pre-Ampere. ACE-Step reports FP16 overflow on such GPUs, so use
+    # FP32 for generation explicitly rather than relying on an env-only hint.
+    os.environ["ACESTEP_DTYPE"] = "float32"
+    os.environ["ACESTEP_LLM_BACKEND"] = "pt"
     os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     os.environ.setdefault("ACESTEP_SAVE_MEMORY", "1")
-    os.environ.setdefault("ACESTEP_LLM_BACKEND", "pt")
+
     sys.path.insert(0, str(ACE))
     import torch
     from acestep.handler import AceStepHandler
@@ -69,6 +66,7 @@ def generate(req: dict) -> Path:
     if not torch.cuda.is_available():
         raise RuntimeError("LIGHTNING_ACE_FATAL: CUDA GPU is not available")
     print(f"LIGHTNING_ACE_GPU: {torch.cuda.get_device_name(0)} VRAM={torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f}GB", flush=True)
+    print("LIGHTNING_ACE_DTYPE: float32", flush=True)
 
     dit = AceStepHandler()
     dit.initialize_service(project_root=str(ACE), config_path="acestep-v15-turbo", device="cuda", offload_to_cpu=True)
@@ -84,6 +82,8 @@ def generate(req: dict) -> Path:
         use_constrained_decoding=True, inference_steps=8, guidance_scale=1.0, seed=-1,
         shift=3.0, infer_method="ode", sampler_mode="euler", dcw_enabled=True,
         dcw_mode="double", dcw_scaler=0.05, dcw_high_scaler=0.02, dcw_wavelet="haar",
+        # Prevent the generation call from selecting half precision on a T4.
+        dtype=torch.float32,
     )
     config = GenerationConfig(batch_size=1, use_random_seed=True, audio_format="wav")
     save_dir = WORK / "ace_output"
