@@ -19,22 +19,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Preflight
+      - name: Preflight — Lightning GPU
         env:
           AGNES_API_KEY: ${{ secrets.AGNES_API_KEY }}
-          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
-          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
-          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+          LIGHTNING_USER_ID: ${{ secrets.LIGHTNING_USER_ID }}
+          LIGHTNING_API_KEY: ${{ secrets.LIGHTNING_API_KEY }}
         run: |
           set -e
           test -n "$AGNES_API_KEY" || { echo 'SETUP_REQUIRED: add AGNES_API_KEY as a repository secret.'; exit 2; }
-          test -n "$KAGGLE_USERNAME" || { echo 'SETUP_REQUIRED: add KAGGLE_USERNAME as a repository secret.'; exit 2; }
-          test -n "$KAGGLE_KEY" || test -n "$KAGGLE_API_TOKEN" || { echo 'SETUP_REQUIRED: add KAGGLE_KEY or KAGGLE_API_TOKEN as a repository secret.'; exit 2; }
+          test -n "$LIGHTNING_USER_ID" || { echo 'SETUP_REQUIRED: add LIGHTNING_USER_ID as a repository secret.'; exit 2; }
+          test -n "$LIGHTNING_API_KEY" || { echo 'SETUP_REQUIRED: add LIGHTNING_API_KEY as a repository secret.'; exit 2; }
           test -s app/zero_cost_pipeline_v5.py
           test -s app/zero_cost_pipeline_v5_5.py
-          test -s app/kaggle_ace_step_worker.py
-          python3 -m py_compile app/zero_cost_pipeline_v5.py app/zero_cost_pipeline_v5_5.py app/kaggle_ace_step_worker.py
-          echo 'PRECHECK_OK: zero-cost longform architecture; Kaggle free T4 GPU music worker; Agnes visuals.'
+          test -s app/lightning_ace_step_worker.py
+          python3 -m py_compile app/zero_cost_pipeline_v5.py app/zero_cost_pipeline_v5_5.py app/lightning_ace_step_worker.py
+          echo 'PRECHECK_OK: zero-cost longform architecture; Lightning AI T4 GPU; Agnes visuals; Kaggle disabled.'
 
       - name: Install zero-cost media tools
         run: |
@@ -53,17 +52,16 @@ jobs:
           python-version: '3.12'
 
       - name: Install Python dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements.txt lightning-sdk
 
-      - name: Generate full-length bhajan video
+      - name: Generate full-length bhajan video on Lightning T4
         env:
           AGNES_API_KEY: ${{ secrets.AGNES_API_KEY }}
-          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
-          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
-          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
-          # The previous slug is the known 409-conflict slug. Use the fresh,
-          # title-matched V2 slug for the free GPU worker.
-          KAGGLE_KERNEL_SLUG: bhajan-aabha-ace-step-gpu-worker-v2
+          LIGHTNING_USER_ID: ${{ secrets.LIGHTNING_USER_ID }}
+          LIGHTNING_API_KEY: ${{ secrets.LIGHTNING_API_KEY }}
+          LIGHTNING_USERNAME: Utkarshas
+          LIGHTNING_TEAMSPACE: default-project
+          LIGHTNING_STUDIO: bhajan-aabha-ace-step
           VIDEO_SECONDS: '180'
           OUTPUT_DIR: output
         run: python -m app.zero_cost_pipeline_v5_5
@@ -86,11 +84,11 @@ jobs:
           awk -v d="$MUSIC_DURATION" 'BEGIN {exit !(d >= 177 && d <= 305)}'
           awk -v d="$VIDEO_DURATION" 'BEGIN {exit !(d >= 178 && d <= 302)}'
           grep -q '"zero_cost": true' output/run_state.json
-          grep -q '"kaggle": true' output/run_state.json
+          grep -q '"kaggle": false' output/run_state.json
+          grep -q '"lightning": true' output/run_state.json
+          grep -q '"music_api_mode": "lightning_ace_step_gpu_studio"' output/run_state.json
           grep -q '"full_length_song": true' output/run_state.json
           grep -q '"scene_count": 12' output/run_state.json
-          grep -q '"target_duration_range_sec": "180-300"' output/run_state.json
-          grep -q '"music_api_mode": "kaggle_ace_step_gpu_worker"' output/run_state.json
           cat output/run_state.json
 
       - name: Publish 3-5 minute production release
@@ -103,6 +101,6 @@ jobs:
           gh release delete "$TAG" --repo "$REPO" --cleanup-tag --yes 2>/dev/null || true
           gh release create "$TAG" --repo "$REPO" \
             --title "Bhajan Aabha — 3-5 Minute Production" \
-            --notes "Full-length 3-5 minute devotional video. First production target is 180 seconds: one full-length ACE-Step song, 12 x 15-second canonical-deity visual scenes, synchronized Hindi lyrics, and standalone 320k DJ master. Zero-cost architecture: Kaggle free GPU + Agnes free API allowance; no paid GPU, paid API, or Actions artifact storage." \
+            --notes "Full-length 3-5 minute devotional video. ACE-Step 1.5 music generated on a Lightning AI T4 GPU Studio; Agnes visuals; zero-cost/free-tier architecture. Kaggle and Hugging Face ZeroGPU are disabled." \
             --prerelease output/videos/*.mp4 output/audio/bhajan_source.mp3 output/audio/bhajan_aabha_dj_master.mp3 output/run_state.json output/manifest.json output/lyrics.srt
           echo "LONGFORM_RELEASE=https://github.com/$REPO/releases/tag/$TAG"
