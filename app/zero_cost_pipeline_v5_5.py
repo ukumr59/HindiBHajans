@@ -14,6 +14,7 @@ import app.zero_cost_pipeline_v5_2 as music
 
 base = longform.base
 KAGGLE_USERNAME = os.getenv('KAGGLE_USERNAME', '').strip()
+KAGGLE_KEY = os.getenv('KAGGLE_KEY', '').strip()
 BASE_SLUG = 'bhajan-aabha-ace-step-gpu-worker'
 
 
@@ -25,7 +26,12 @@ def _run(*args, cwd=None, check=True, capture=False):
 def _require_kaggle():
     if not KAGGLE_USERNAME:
         raise RuntimeError('SETUP_REQUIRED: KAGGLE_USERNAME repository secret is missing')
-    if not os.getenv('KAGGLE_KEY') and not os.getenv('KAGGLE_API_TOKEN'):
+    # Prefer the legacy username/key pair when both credential styles exist.
+    # The current Kaggle CLI prioritizes KAGGLE_API_TOKEN over legacy credentials,
+    # and the token-backed path is the one returning Permission kernels.get denied
+    # for this public worker. The legacy key already has the permissions needed
+    # for push/status/output in this workflow.
+    if not KAGGLE_KEY and not os.getenv('KAGGLE_API_TOKEN'):
         raise RuntimeError('SETUP_REQUIRED: KAGGLE_KEY or KAGGLE_API_TOKEN repository secret is missing')
 
 
@@ -62,9 +68,8 @@ def _prepare_kernel(kernel_id: str, title: str):
         'code_file': 'worker.py',
         'language': 'python',
         'kernel_type': 'script',
-        # This worker must be public because this account can push kernels but
-        # cannot call kernels.get on private kernels. The generated audio is
-        # retrieved through the public kernel-output endpoint.
+        # Keep the worker public. Output retrieval is performed with the account's
+        # legacy Kaggle credentials rather than the newer token-precedence path.
         'is_private': False,
         'enable_gpu': True,
         'enable_internet': True,
@@ -82,6 +87,15 @@ def _prepare_kernel(kernel_id: str, title: str):
 
 def _configure_kaggle_cli():
     _run('python', '-m', 'pip', 'install', '-q', '-U', 'kaggle')
+    if KAGGLE_KEY:
+        # Kaggle CLI gives KAGGLE_API_TOKEN precedence over legacy credentials.
+        # Remove the token from this process so every CLI call below uses the
+        # known-good KAGGLE_USERNAME + KAGGLE_KEY pair.
+        os.environ.pop('KAGGLE_API_TOKEN', None)
+        os.environ.pop('KAGGLE_ACCESS_TOKEN', None)
+        print('KAGGLE_AUTH: using legacy KAGGLE_USERNAME + KAGGLE_KEY credentials', flush=True)
+    else:
+        print('KAGGLE_AUTH: using KAGGLE_API_TOKEN fallback', flush=True)
     print(f'KAGGLE_LAUNCH: authenticated as {KAGGLE_USERNAME}', flush=True)
 
 
@@ -115,10 +129,18 @@ def _download_output_once(kernel_id: str, out_dir: Path) -> tuple[bool, str]:
         return True, 'COMPLETE'
     if p.returncode != 0:
         low = text.lower()
-        # While a public kernel is still running, the output endpoint can report
-        # that output is not ready. Treat that as RUNNING; authentication/permission
-        # failures are fatal and should not be hidden by the polling loop.
-        fatal_markers = ('permission denied', '403', '404', 'authentication', 'unauthorized')
+        # A permission/authentication error is fatal. In particular, match the
+        # exact Kaggle message "Permission 'kernels.get' was denied" so this
+        # cannot silently enter another endless polling loop.
+        fatal_markers = (
+            'permission',
+            '403',
+            '404',
+            'authentication',
+            'unauthorized',
+            'forbidden',
+            'kernels.get',
+        )
         running_markers = ('has not finished', 'not finished', 'still running', 'no output')
         if any(marker in low for marker in fatal_markers) and not any(marker in low for marker in running_markers):
             raise RuntimeError(f'KAGGLE_ACE_FATAL: output retrieval failed: {text[-1200:]}')
