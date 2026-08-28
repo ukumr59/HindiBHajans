@@ -31,17 +31,16 @@ def prepare():
     if not ACE.exists():
         run("git", "clone", "--depth", "1", "https://github.com/ACE-Step/ACE-Step-1.5.git", str(ACE))
 
-    # IMPORTANT: ACE-Step 1.5 uses uv dependency sources. Its pyproject maps
+    # ACE-Step 1.5 uses uv dependency sources. Its pyproject maps
     # Linux x86_64 torch/vision/audio to the official PyTorch CUDA 12.8 index
     # and maps nano-vllm to the bundled local source. Plain pip ignores those
-    # [tool.uv.sources] mappings, which caused the old worker to fail with
-    # "No matching distribution" for torch==2.10.0+cu128 and/or nano-vllm.
-    # Use uv against the existing Studio Python so the upstream dependency
-    # contract is resolved exactly as ACE-Step defines it.
+    # [tool.uv.sources] mappings, so use uv against the existing Studio Python.
+    # IMPORTANT: do not pass --no-cache; uv's editable/local-source installation
+    # requires its cache and otherwise fails before installation completes.
     print("LIGHTNING_DEPS: installing uv", flush=True)
     run(sys.executable, "-m", "pip", "install", "-q", "-U", "uv")
     print("LIGHTNING_DEPS: resolving ACE-Step with uv tool.uv.sources", flush=True)
-    run(sys.executable, "-m", "uv", "pip", "install", "--system", "-e", ".", "--no-cache", cwd=ACE)
+    run(sys.executable, "-m", "uv", "pip", "install", "--system", "-e", ".", cwd=ACE)
 
     # The 5Hz LM is explicitly run with the PyTorch backend below. This avoids
     # nano-vLLM/flash-attention CUDA-graph issues on some hosted GPUs while
