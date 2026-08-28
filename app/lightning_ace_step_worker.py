@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
 
 # Lightning Studio executes uploaded files from /teamspace/studios/this_studio.
-# Keep all worker input/output relative to this script instead of Path.home(),
-# because the Studio user's HOME is not the upload working directory.
 STUDIO_ROOT = Path(__file__).resolve().parent
 WORK = STUDIO_ROOT / "bhajan_aabha_worker"
 INPUT = STUDIO_ROOT / "bhajan_request.json"
@@ -31,26 +30,28 @@ def prepare():
     if not ACE.exists():
         run("git", "clone", "--depth", "1", "https://github.com/ACE-Step/ACE-Step-1.5.git", str(ACE))
 
-    # ACE-Step 1.5 uses uv dependency sources. Its pyproject maps
-    # Linux x86_64 torch/vision/audio to the official PyTorch CUDA 12.8 index
-    # and maps nano-vllm to the bundled local source. Plain pip ignores those
+    # ACE-Step 1.5 uses uv dependency sources. Plain pip ignores the
     # [tool.uv.sources] mappings, so use uv against the existing Studio Python.
-    # IMPORTANT: do not pass --no-cache; uv's editable/local-source installation
-    # requires its cache and otherwise fails before installation completes.
     print("LIGHTNING_DEPS: installing uv", flush=True)
     run(sys.executable, "-m", "pip", "install", "-q", "-U", "uv")
     print("LIGHTNING_DEPS: resolving ACE-Step with uv tool.uv.sources", flush=True)
     run(sys.executable, "-m", "uv", "pip", "install", "--system", "-e", ".", cwd=ACE)
 
-    # The 5Hz LM is explicitly run with the PyTorch backend below. This avoids
-    # nano-vLLM/flash-attention CUDA-graph issues on some hosted GPUs while
-    # still allowing the bundled nano-vllm package to be installed correctly.
-    if subprocess.run(["ffmpeg", "-version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
-        run("sudo", "apt-get", "update", "-qq")
-        run("sudo", "apt-get", "install", "-y", "-qq", "ffmpeg")
+    # IMPORTANT: use shutil.which before invoking ffmpeg. subprocess.run()
+    # raises FileNotFoundError when the executable is absent, so the previous
+    # check never reached the installer on a fresh Lightning Studio.
+    if shutil.which("ffmpeg") is None:
+        print("LIGHTNING_DEPS: ffmpeg not found; installing system ffmpeg", flush=True)
+        if shutil.which("sudo") is not None:
+            run("sudo", "apt-get", "update", "-qq")
+            run("sudo", "apt-get", "install", "-y", "-qq", "ffmpeg")
+        else:
+            run("apt-get", "update", "-qq")
+            run("apt-get", "install", "-y", "-qq", "ffmpeg")
+    if shutil.which("ffmpeg") is None:
+        raise RuntimeError("LIGHTNING_ACE_FATAL: ffmpeg is unavailable after installation attempt")
+    run("ffmpeg", "-version")
 
-    # Fail early with a useful diagnostic instead of entering generation with
-    # an incomplete CUDA environment.
     run(sys.executable, "-c", "import torch; print('LIGHTNING_TORCH_OK:', torch.__version__, 'CUDA=', torch.version.cuda, 'AVAILABLE=', torch.cuda.is_available())")
     run(sys.executable, "-c", "import nano_vllm; print('LIGHTNING_NANOVLLM_OK')")
 
