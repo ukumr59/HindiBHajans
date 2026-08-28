@@ -31,19 +31,29 @@ def prepare():
     if not ACE.exists():
         run("git", "clone", "--depth", "1", "https://github.com/ACE-Step/ACE-Step-1.5.git", str(ACE))
 
-    # ACE-Step declares nano-vllm as a local uv source. Plain pip does not
-    # understand [tool.uv.sources], so `pip install -e .` otherwise tries to
-    # download a package literally named nano-vllm from PyPI and fails.
-    # Install the bundled local package first, then install ACE-Step normally.
-    nano_vllm = ACE / "acestep" / "third_parts" / "nano-vllm"
-    if not nano_vllm.exists():
-        raise RuntimeError(f"LIGHTNING_ACE_FATAL: bundled nano-vllm source missing at {nano_vllm}")
-    run(sys.executable, "-m", "pip", "install", "-e", str(nano_vllm), "--no-deps", "--quiet")
-    run(sys.executable, "-m", "pip", "install", "-e", ".", "--quiet", cwd=ACE)
+    # IMPORTANT: ACE-Step 1.5 uses uv dependency sources. Its pyproject maps
+    # Linux x86_64 torch/vision/audio to the official PyTorch CUDA 12.8 index
+    # and maps nano-vllm to the bundled local source. Plain pip ignores those
+    # [tool.uv.sources] mappings, which caused the old worker to fail with
+    # "No matching distribution" for torch==2.10.0+cu128 and/or nano-vllm.
+    # Use uv against the existing Studio Python so the upstream dependency
+    # contract is resolved exactly as ACE-Step defines it.
+    print("LIGHTNING_DEPS: installing uv", flush=True)
+    run(sys.executable, "-m", "pip", "install", "-q", "-U", "uv")
+    print("LIGHTNING_DEPS: resolving ACE-Step with uv tool.uv.sources", flush=True)
+    run(sys.executable, "-m", "uv", "pip", "install", "--system", "-e", ".", "--no-cache", cwd=ACE)
 
+    # The 5Hz LM is explicitly run with the PyTorch backend below. This avoids
+    # nano-vLLM/flash-attention CUDA-graph issues on some hosted GPUs while
+    # still allowing the bundled nano-vllm package to be installed correctly.
     if subprocess.run(["ffmpeg", "-version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
         run("sudo", "apt-get", "update", "-qq")
         run("sudo", "apt-get", "install", "-y", "-qq", "ffmpeg")
+
+    # Fail early with a useful diagnostic instead of entering generation with
+    # an incomplete CUDA environment.
+    run(sys.executable, "-c", "import torch; print('LIGHTNING_TORCH_OK:', torch.__version__, 'CUDA=', torch.version.cuda, 'AVAILABLE=', torch.cuda.is_available())")
+    run(sys.executable, "-c", "import nano_vllm; print('LIGHTNING_NANOVLLM_OK')")
 
 
 def generate(req: dict) -> Path:
