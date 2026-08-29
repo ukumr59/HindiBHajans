@@ -16,8 +16,6 @@ INPUT = STUDIO_ROOT / "bhajan_request.json"
 OUTPUT = WORK / "bhajan_source.mp3"
 ACE = WORK / "ACE-Step-1.5"
 
-# Pin the exact upstream revision used by this worker.  This prevents a
-# persistent Lightning Studio from silently running an older ACE-Step checkout.
 ACE_COMMIT = "7202bc354d7fc31d1c0e5a90b0b49fb610e52362"
 ACE_REPO = "https://github.com/ACE-Step/ACE-Step-1.5.git"
 
@@ -28,11 +26,9 @@ def run(*args, cwd=None):
 
 
 def pin_ace_checkout() -> None:
-    """Create or reset the local ACE-Step checkout to the pinned revision."""
     if not ACE.exists():
         run("git", "clone", "--no-tags", "--depth", "1", ACE_REPO, str(ACE))
     else:
-        # Lightning Studios are persistent.  Never trust a stale local clone.
         run("git", "fetch", "--depth", "1", "origin", ACE_COMMIT, cwd=ACE)
     run("git", "reset", "--hard", ACE_COMMIT, cwd=ACE)
     actual = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ACE, text=True).strip()
@@ -42,16 +38,14 @@ def pin_ace_checkout() -> None:
 
 
 def patch_ace_t4_precision() -> None:
-    """Force the real ACE-Step DiT CUDA dtype to FP32 on pre-Ampere GPUs."""
+    """Patch the exact upstream CUDA dtype branch; T4 must use FP32."""
     target = ACE / "acestep/core/generation/handler/init_service_orchestrator.py"
     if not target.exists():
         raise RuntimeError(f"LIGHTNING_ACE_FATAL: missing ACE-Step orchestrator: {target}")
 
     text = target.read_text(encoding="utf-8")
-    # Replace the complete CUDA dtype-selection branch rather than depending on
-    # one exact upstream formatting variant.
     pattern = re.compile(
-        r"(?ms)^(\s*)elif resolved_device == \"cuda\":\n.*?(?=^\s*elif resolved_device == )"
+        r'(?ms)^(\s*)elif resolved_device == "cuda":\n.*?(?=^\s*else:\n\s*self\.dtype = torch\.bfloat16)'
     )
     match = pattern.search(text)
     if not match:
@@ -60,26 +54,23 @@ def patch_ace_t4_precision() -> None:
     indent = match.group(1)
     replacement = (
         f'{indent}elif resolved_device == "cuda":\n'
-        f'{indent}    # T4/Turing has no native BF16; FP16 can overflow during diffusion.\n'
-        f'{indent}    # Honor ACESTEP_DTYPE explicitly so the actual DiT is constructed in FP32.\n'
+        f'{indent}    # T4/Turing is pre-Ampere. Force FP32 when requested.\n'
         f'{indent}    env_dtype_str = os.environ.get("ACESTEP_DTYPE", "").strip().lower()\n'
-        f'{indent}    if env_dtype_str in ("float32", "float16", "bfloat16"):\n'
-        f'{indent}        self.dtype = getattr(torch, env_dtype_str)\n'
-        f'{indent}        logger.info(\n'
-        f'{indent}            f"[initialize_service] ACESTEP_DTYPE={{env_dtype_str}} override applied: "\n'
-        f'{indent}            f"using dtype={{self.dtype}}."\n'
-        f'{indent}        )\n'
+        f'{indent}    if env_dtype_str == "float32":\n'
+        f'{indent}        self.dtype = torch.float32\n'
+        f'{indent}        logger.info("[initialize_service] ACESTEP_DTYPE=float32 override applied.")\n'
+        f'{indent}    elif env_dtype_str == "float16":\n'
+        f'{indent}        self.dtype = torch.float16\n'
+        f'{indent}    elif env_dtype_str == "bfloat16":\n'
+        f'{indent}        self.dtype = torch.bfloat16\n'
         f'{indent}    elif gpu_config.cuda_supports_bfloat16():\n'
         f'{indent}        self.dtype = torch.bfloat16\n'
         f'{indent}    else:\n'
         f'{indent}        self.dtype = torch.float16\n'
-        f'{indent}        logger.info(\n'
-        f'{indent}            "[initialize_service] Pre-Ampere CUDA detected: "\n'
-        f'{indent}            "using float16 instead of bfloat16."\n'
-        f'{indent}        )\n'
+        f'{indent}        logger.info("[initialize_service] Pre-Ampere CUDA detected: using float16 instead of bfloat16.")\n'
     )
-    target.write_text(text[: match.start()] + replacement + text[match.end() :], encoding="utf-8")
-    print("LIGHTNING_ACE_PATCH: real CUDA dtype selection patched; T4 will use FP32", flush=True)
+    target.write_text(text[:match.start()] + replacement + text[match.end():], encoding="utf-8")
+    print("LIGHTNING_ACE_PATCH_OK: CUDA dtype branch patched for T4", flush=True)
 
 
 def prepare():
@@ -107,7 +98,6 @@ def prepare():
 
 
 def generate(req: dict) -> Path:
-    # T4/Turing numerical-stability settings.
     os.environ["ACESTEP_DTYPE"] = "float32"
     os.environ["ACESTEP_LLM_BACKEND"] = "pt"
     os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
@@ -137,7 +127,6 @@ def generate(req: dict) -> Path:
     if not ok:
         raise RuntimeError(f"LIGHTNING_ACE_FATAL: DiT initialization failed: {status}")
 
-    # Verify the actual loaded model, not merely the environment variable.
     model_dtype = None
     model = getattr(dit, "model", None)
     if model is not None:
@@ -166,10 +155,6 @@ def generate(req: dict) -> Path:
         raise RuntimeError(f"LIGHTNING_ACE_FATAL: 5Hz LM initialization failed: {llm_status}")
 
     duration = float(req.get("duration", 180))
-    # Keep this list deliberately limited to the public GenerationParams fields
-    # used by ACE-Step's own run_generate_test.py.  In particular, NEVER pass
-    # dtype, shift, sampler_mode or dcw_* here: those are not GenerationParams
-    # constructor arguments and previously caused the remote worker to crash.
     candidate_params = {
         "task_type": "text2music",
         "caption": req["caption"],
