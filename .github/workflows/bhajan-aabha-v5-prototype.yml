@@ -8,7 +8,7 @@ permissions:
 
 concurrency:
   group: bhajan-aabha-longform
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   generate-longform:
@@ -132,4 +132,4 @@ jobs:
             --title "Bhajan Aabha — 3-5 Minute Production" \
             --notes "Full-length 3-5 minute devotional video. ACE-Step 1.5 music generated on a Lightning AI T4 GPU Studio; Agnes visuals; zero-cost/free-tier architecture. Kaggle and Hugging Face ZeroGPU are disabled." \
             --prerelease output/videos/*.mp4 output/audio/bhajan_source.mp3 output/audio/bhajan_aabha_dj_master.mp3 output/run_state.json output/manifest.json output/lyrics.srt
-          echo "LONGFORM_RELEASE=https://github.com/$REPO/releases/tag/$TAG"
+          echo "LONGFORM_RELEASE=https://github.com/$REPO/releases/tag=$TAG"
