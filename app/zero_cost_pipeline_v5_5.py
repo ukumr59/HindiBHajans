@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
 from pathlib import Path
 
 import app.zero_cost_pipeline_v5_4 as longform
@@ -36,6 +37,19 @@ def _studio():
     else:
         kwargs["user"] = LIGHTNING_USERNAME
     return Studio(**kwargs)
+
+
+def _stop_studio_nonblocking(studio) -> None:
+    """Best-effort cleanup that can never block the production pipeline."""
+    def _stop() -> None:
+        try:
+            studio.stop()
+            print("LIGHTNING_CLEANUP_OK: dedicated Studio stop requested", flush=True)
+        except Exception as exc:
+            print(f"LIGHTNING_CLEANUP_WARNING: {exc}", flush=True)
+
+    print("LIGHTNING_LAUNCH: requesting dedicated Studio stop (non-blocking)", flush=True)
+    threading.Thread(target=_stop, name="lightning-stop", daemon=True).start()
 
 
 def generate_music_lightning() -> Path:
@@ -88,11 +102,7 @@ def generate_music_lightning() -> Path:
         return local_output
     finally:
         if started_here:
-            try:
-                print("LIGHTNING_LAUNCH: stopping dedicated Studio", flush=True)
-                studio.stop()
-            except Exception as exc:
-                print(f"LIGHTNING_CLEANUP_WARNING: {exc}", flush=True)
+            _stop_studio_nonblocking(studio)
 
 
 music.generate_music_gradio = generate_music_lightning
