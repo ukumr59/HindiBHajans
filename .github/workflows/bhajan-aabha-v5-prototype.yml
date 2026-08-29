@@ -89,7 +89,11 @@ jobs:
           LIGHTNING_STUDIO: bhajan-aabha-ace-step
           VIDEO_SECONDS: '180'
           OUTPUT_DIR: output
-        run: python -m app.zero_cost_pipeline_v5_5
+          PYTHONUNBUFFERED: '1'
+          AGNES_VIDEO_POLL_TIMEOUT: '900'
+          AGNES_VIDEO_POLL_INTERVAL: '10'
+          AGNES_VIDEO_RPM_GUARD: '70'
+        run: python -u -m app.zero_cost_pipeline_v5_5
 
       - name: Validate output
         run: |
