@@ -67,7 +67,7 @@ def generate_music_lightning() -> Path:
     }
     request_path = Path(tempfile.mkdtemp(prefix="lightning_bhajan_")) / "bhajan_request.json"
     request_path.write_text(json.dumps(request, ensure_ascii=False, indent=2), encoding="utf-8")
-    worker = Path(__file__).with_name("lightning_ace_step_worker.py")
+    worker = Path(__file__).with_name("lightning_ace_step_worker_v2.py")
 
     studio = _studio()
     started_here = False
@@ -114,7 +114,7 @@ if __name__ == "__main__":
     state_path = base.OUT / "run_state.json"
     state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
     state.update({
-        "architecture": "v5.6-lightning-gpu-longform",
+        "architecture": "v5.7-lightning-gpu-longform",
         "music_backend": "ACE-Step 1.5 on Lightning AI T4 Studio",
         "music_api_mode": "lightning_ace_step_gpu_studio",
         "music_model": "acestep-v15-turbo",
@@ -131,4 +131,4 @@ if __name__ == "__main__":
     })
     state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
     (base.OUT / "manifest.json").write_text(json.dumps({"videos": [state]}, ensure_ascii=False, indent=2), encoding="utf-8")
-    print("STATE_OK backend=lightning_ace_step_gpu_studio kaggle=false zero_cost=true machine=T4")
+    print("STATE_OK backend=lightning_ace_step_gpu_longform kaggle=false zero_cost=true machine=T4")
