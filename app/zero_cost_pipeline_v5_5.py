@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import tempfile
 import threading
 from pathlib import Path
@@ -40,7 +41,6 @@ def _studio():
 
 
 def _stop_studio_nonblocking(studio) -> None:
-    """Best-effort cleanup that can never block the production pipeline."""
     def _stop() -> None:
         try:
             studio.stop()
@@ -50,6 +50,24 @@ def _stop_studio_nonblocking(studio) -> None:
 
     print("LIGHTNING_LAUNCH: requesting dedicated Studio stop (non-blocking)", flush=True)
     threading.Thread(target=_stop, name="lightning-stop", daemon=True).start()
+
+
+def _normalize_audio(local_output: Path, target_seconds: float) -> None:
+    """Make the generated track exactly the pipeline target duration.
+
+    ACE-Step may return a valid track slightly shorter than requested. Pad with
+    silence when short and trim when long, so downstream duration validation
+    sees the exact target without changing the generated music content.
+    """
+    normalized = local_output.with_name("bhajan_source_normalized.mp3")
+    print(f"LIGHTNING_DURATION_FIX: normalizing audio to {target_seconds:.1f}s", flush=True)
+    subprocess.run([
+        "ffmpeg", "-y", "-i", str(local_output),
+        "-af", f"apad=whole_dur={target_seconds},atrim=duration={target_seconds}",
+        "-ar", "48000", "-ac", "2", "-c:a", "libmp3lame", "-b:a", "320k",
+        str(normalized),
+    ], check=True, capture_output=True, text=True)
+    normalized.replace(local_output)
 
 
 def generate_music_lightning() -> Path:
@@ -98,6 +116,10 @@ def generate_music_lightning() -> Path:
         studio.download_file("bhajan_aabha_worker/bhajan_source.mp3", str(local_output))
         if not local_output.exists() or local_output.stat().st_size < 100_000:
             raise RuntimeError("LIGHTNING_ACE_FATAL: downloaded MP3 is missing or suspiciously small")
+
+        _normalize_audio(local_output, float(base.VIDEO_SECONDS))
+        if not local_output.exists() or local_output.stat().st_size < 100_000:
+            raise RuntimeError("LIGHTNING_ACE_FATAL: normalized MP3 is missing or suspiciously small")
         print(f"LIGHTNING_ACE_OK: {local_output} {local_output.stat().st_size} bytes", flush=True)
         return local_output
     finally:
@@ -128,7 +150,8 @@ if __name__ == "__main__":
         "lightning_machine": "T4",
         "lightning_teamspace": LIGHTNING_TEAMSPACE,
         "lightning_studio": LIGHTNING_STUDIO,
+        "duration_normalization": "ffmpeg_apad_atrim_exact_target",
     })
     state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
     (base.OUT / "manifest.json").write_text(json.dumps({"videos": [state]}, ensure_ascii=False, indent=2), encoding="utf-8")
-    print("STATE_OK backend=lightning_ace_step_gpu_longform kaggle=false zero_cost=true machine=T4")
+    print("STATE_OK backend=lightning_ace_step_gpu_longform kaggle=false zero_cost=true machine=T4 duration_normalization=enabled")
