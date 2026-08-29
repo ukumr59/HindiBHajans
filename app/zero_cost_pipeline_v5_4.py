@@ -105,9 +105,6 @@ def configure() -> int:
 
 
 def generate_music_verified(session=None) -> Path:
-    # v5.2 owns the live ACE-Step positional contract. Current live contract:
-    # 4 wrapper inputs + 45 generation inputs = 49 total. Do not duplicate,
-    # delete, reorder, or reinterpret those positional arguments here.
     target = music.generate_music_gradio()
     probe = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(target)],
@@ -127,11 +124,18 @@ def main():
     base.ACESTEP_ROOT = "gradio://ACE-Step/Ace-Step-v1.5"
     base.main()
 
-    videos = sorted(base.VIDEOS.glob("*.mp4"))
-    if len(videos) != 1:
-        raise RuntimeError(f"OUTPUT_FATAL: expected exactly one final MP4, found {len(videos)}")
+    # base.main() already assembles the scenes into the final named MP4 and
+    # prints VIDEO_OK. The previous implementation incorrectly treated every
+    # MP4 in output/videos as a final output; that directory also contains the
+    # 12 intermediate scene clips, so a successful run was falsely rejected
+    # with "expected exactly one final MP4, found 13". Identify the final by
+    # its v5 filename instead, then remove intermediates only after success.
+    final_candidates = sorted(base.VIDEOS.glob("*_bhajan-aabha_{}_v5.mp4".format(base.PACK["slug"])))
+    if len(final_candidates) != 1:
+        raise RuntimeError(f"OUTPUT_FATAL: expected exactly one final named MP4, found {len(final_candidates)}")
+    final_path = final_candidates[0]
 
-    dj_master = music.make_dj_master(videos[0])
+    dj_master = music.make_dj_master(final_path)
     state_path = base.OUT / "run_state.json"
     state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
     state.update({
@@ -156,10 +160,18 @@ def main():
         "dj_master": str(dj_master),
         "dj_master_bitrate": "320k",
         "dj_master_sample_rate": 48000,
+        "final_video": str(final_path),
     })
     state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
     (base.OUT / "manifest.json").write_text(json.dumps({"videos": [state]}, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # Do not delete the final output. Intermediate scene clips are not final
+    # deliverables; remove them only after the final MP4 and DJ master exist.
+    for scene in base.VIDEOS.glob("scene_*.mp4"):
+        scene.unlink()
     print(f"LONGFORM_OK duration={seconds}s scenes={seconds // SCENE_SECONDS}")
+    print(f"FINAL_VIDEO_OK {final_path}")
+    print(f"DJ_MASTER_OK {dj_master}")
 
 
 if __name__ == "__main__":
