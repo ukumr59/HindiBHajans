@@ -2,9 +2,15 @@ name: Bhajan Automation
 
 on:
   schedule:
-    - cron: '0 23 * * *'
+    - cron: '30 21 * * *'
       timezone: 'Asia/Kolkata'
   workflow_dispatch:
+    inputs:
+      publish_youtube:
+        description: 'Publish generated videos to YouTube during this manual run'
+        required: false
+        default: false
+        type: boolean
 
 # HARD CONSTRAINT: zero rupees now and forever. GitHub-hosted runner only.
 # No Kaggle, GPU rental, paid API, paid storage, or Actions artifacts.
@@ -14,6 +20,9 @@ permissions:
 concurrency:
   group: bhajan-aabha-daily
   cancel-in-progress: false
+
+env:
+  YOUTUBE_TOKEN_JSON: ${{ secrets.YOUTUBE_TOKEN_JSON }}
 
 jobs:
   generate-bhajans:
@@ -51,6 +60,51 @@ jobs:
       - name: Install zero-cost generator dependencies
         run: pip install -r requirements.txt
 
+      - name: Prepare YouTube OAuth credentials
+        run: |
+          set -euo pipefail
+          test -n "$YOUTUBE_TOKEN_JSON" || { echo 'SETUP_REQUIRED: YOUTUBE_TOKEN_JSON repository secret is missing.'; exit 2; }
+          python - <<'PY'
+          import json, os
+          data = json.loads(os.environ['YOUTUBE_TOKEN_JSON'])
+          for key in ('client_id', 'client_secret', 'refresh_token'):
+              value = data.get(key)
+              if not value:
+                  raise SystemExit(f'SETUP_REQUIRED: token JSON is missing {key}')
+              with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as f:
+                  f.write(f'YOUTUBE_{key.upper()}={value}\n')
+          print('YOUTUBE_OAUTH_JSON_OK: client_id, client_secret and refresh_token found.')
+          PY
+
+      - name: Verify YouTube OAuth connection
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from google.auth.transport.requests import Request
+          from google.oauth2.credentials import Credentials
+          from googleapiclient.discovery import build
+
+          scopes = ['https://www.googleapis.com/auth/youtube.upload']
+          creds = Credentials(
+              token=None,
+              refresh_token=__import__('os').environ['YOUTUBE_REFRESH_TOKEN'],
+              token_uri='https://oauth2.googleapis.com/token',
+              client_id=__import__('os').environ['YOUTUBE_CLIENT_ID'],
+              client_secret=__import__('os').environ['YOUTUBE_CLIENT_SECRET'],
+              scopes=scopes,
+          )
+          creds.refresh(Request())
+          youtube = build('youtube', 'v3', credentials=creds, cache_discovery=False)
+          response = youtube.channels().list(part='id,snippet', mine=True).execute()
+          items = response.get('items', [])
+          if not items:
+              raise SystemExit('YOUTUBE_AUTH_FAILED: authenticated account has no accessible YouTube channel.')
+          channel = items[0]
+          print('YOUTUBE_CONNECTION_OK')
+          print('YOUTUBE_CHANNEL_ID=' + channel['id'])
+          print('YOUTUBE_CHANNEL_TITLE=' + channel['snippet']['title'])
+          PY
+
       - name: Generate videos with zero-cost v4 pipeline
         env:
           MAX_VIDEOS: '3'
@@ -83,10 +137,28 @@ jobs:
           TAG="bhajan-aabha-latest"
           gh release delete "$TAG" --repo "$REPO" --cleanup-tag --yes 2>/dev/null || true
           gh release create "$TAG" --repo "$REPO" --title "Bhajan Aabha — Latest Output" --notes "Zero-cost Bhajan Aabha output. Procedural visuals + locally synthesized Hindi narration. No Kaggle, paid API, GPU rental, external media download, or Actions artifact storage." --prerelease output/videos/*.mp4 output/*.json
-          echo "Release published: https://github.com/$REPO/releases/tag/$TAG"
+          echo "Release published: https://github.com/$REPO/releases/tag=$TAG"
+
+      - name: Publish to YouTube — scheduled or explicitly enabled manual run
+        if: ${{ github.event_name == 'schedule' || inputs.publish_youtube == true }}
+        env:
+          YOUTUBE_PRIVACY_STATUS: public
+          PYTHONUNBUFFERED: '1'
+        run: |
+          set -euo pipefail
+          for video in output/videos/*.mp4; do
+            echo "Uploading $video"
+            python -u -m app.youtube_publisher "$video"
+          done
 
       - name: Publish status
         run: |
-          echo 'YouTube/Facebook publishing is intentionally gated until channel OAuth credentials are configured.'
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            echo 'Scheduled run: YouTube publication enabled.'
+          elif [ "${{ inputs.publish_youtube }}" = "true" ]; then
+            echo 'Manual run: YouTube publication enabled.'
+          else
+            echo 'Manual connection-test run: YouTube upload skipped.'
+          fi
           echo 'ZERO_COST=true | KAGGLE=false | PAID_SERVICES=false | ACTIONS_ARTIFACTS=false'
           echo 'Video delivery is through the latest GitHub release.'
