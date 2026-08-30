@@ -24,6 +24,9 @@ LIGHTNING_STUDIO = os.getenv("LIGHTNING_STUDIO", "bhajan-aabha-ace-step").strip(
 VIDEO_POLL_TIMEOUT = int(os.getenv("AGNES_VIDEO_POLL_TIMEOUT", "900"))
 VIDEO_POLL_INTERVAL = int(os.getenv("AGNES_VIDEO_POLL_INTERVAL", "10"))
 VIDEO_RPM_GUARD = int(os.getenv("AGNES_VIDEO_RPM_GUARD", "70"))
+VIDEO_DOWNLOAD_TIMEOUT = int(os.getenv("AGNES_VIDEO_DOWNLOAD_TIMEOUT", "600"))
+VIDEO_DOWNLOAD_RETRIES = int(os.getenv("AGNES_VIDEO_DOWNLOAD_RETRIES", "5"))
+VIDEO_DOWNLOAD_BACKOFF = int(os.getenv("AGNES_VIDEO_DOWNLOAD_BACKOFF", "15"))
 
 
 def _require_lightning() -> None:
@@ -115,6 +118,58 @@ def generate_music_lightning() -> Path:
             _stop_studio_nonblocking(studio)
 
 
+def _download_video_resilient(session: requests.Session, url: str, path: Path, *, min_bytes: int = 50_000) -> None:
+    """Download an Agnes MP4 robustly; never leave a partial file as a valid scene."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    partial = path.with_suffix(path.suffix + ".part")
+    last_error = None
+    timeout = (30, VIDEO_DOWNLOAD_TIMEOUT)
+
+    for attempt in range(1, VIDEO_DOWNLOAD_RETRIES + 1):
+        try:
+            if partial.exists():
+                partial.unlink()
+            print(
+                f"VIDEO_DOWNLOAD: attempt={attempt}/{VIDEO_DOWNLOAD_RETRIES} "
+                f"timeout={VIDEO_DOWNLOAD_TIMEOUT}s target={path.name}",
+                flush=True,
+            )
+            with session.get(url, stream=True, timeout=timeout) as response:
+                response.raise_for_status()
+                with partial.open("wb") as handle:
+                    for chunk in response.iter_content(chunk_size=1024 * 1024):
+                        if chunk:
+                            handle.write(chunk)
+
+            size = partial.stat().st_size if partial.exists() else 0
+            if size < min_bytes:
+                raise RuntimeError(f"downloaded file is suspiciously small: {size} bytes")
+            partial.replace(path)
+            print(f"VIDEO_DOWNLOAD_OK: {path} {size} bytes", flush=True)
+            return
+        except (requests.RequestException, OSError, RuntimeError) as exc:
+            last_error = exc
+            print(
+                f"VIDEO_DOWNLOAD_WARNING: attempt={attempt}/{VIDEO_DOWNLOAD_RETRIES} "
+                f"failed: {exc}",
+                flush=True,
+            )
+            try:
+                if partial.exists():
+                    partial.unlink()
+            except OSError:
+                pass
+            if attempt < VIDEO_DOWNLOAD_RETRIES:
+                delay = min(120, VIDEO_DOWNLOAD_BACKOFF * attempt)
+                print(f"VIDEO_DOWNLOAD_RETRY: waiting {delay}s before retry", flush=True)
+                time.sleep(delay)
+
+    raise RuntimeError(
+        f"VIDEO_FATAL: Agnes video download failed after {VIDEO_DOWNLOAD_RETRIES} attempts; "
+        f"last error: {last_error}"
+    )
+
+
 def generate_video_clip_resilient(session: requests.Session, image_url: str, prompt: str, index: int) -> Path:
     scene_count = len(base.PACK.get("scene_prompts", [])) or 1
     path = base.VIDEOS / f"scene_{index}.mp4"
@@ -165,7 +220,7 @@ def generate_video_clip_resilient(session: requests.Session, image_url: str, pro
             url = status.get("url") or status.get("video_url") or status.get("remixed_from_video_id")
             if not url:
                 raise RuntimeError(f"VIDEO_FATAL: completed response has no video URL: {status}")
-            base.download(session, url, path, min_bytes=50_000)
+            _download_video_resilient(session, url, path, min_bytes=50_000)
             print(f"VIDEO_OK: scene={index}/{scene_count} downloaded={path.stat().st_size} bytes", flush=True)
             return path
         if state == "failed":
@@ -197,6 +252,9 @@ if __name__ == "__main__":
         "video_poll_timeout_sec": VIDEO_POLL_TIMEOUT,
         "video_poll_interval_sec": VIDEO_POLL_INTERVAL,
         "video_rpm_guard_sec": VIDEO_RPM_GUARD,
+        "video_download_timeout_sec": VIDEO_DOWNLOAD_TIMEOUT,
+        "video_download_retries": VIDEO_DOWNLOAD_RETRIES,
+        "video_download_backoff_sec": VIDEO_DOWNLOAD_BACKOFF,
         "video_backend": "Agnes Video v2.0 img2video",
     })
     state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
