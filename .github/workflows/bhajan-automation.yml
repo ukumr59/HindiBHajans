@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       publish_youtube:
-        description: 'Publish generated videos to YouTube during this manual run'
+        description: 'Publish generated video to YouTube during this manual run'
         required: false
         default: false
         type: boolean
@@ -26,7 +26,7 @@ env:
 
 jobs:
   generate-bhajans:
-    name: Generate 1-3 Bhajan Aabha videos
+    name: Generate 1 Bhajan Aabha video
     runs-on: ubuntu-latest
     timeout-minutes: 55
     steps:
@@ -68,28 +68,26 @@ jobs:
           print('YOUTUBE_CHANNEL_TITLE=' + items[0]['snippet']['title'])
           PY
 
-      - name: Generate videos with resilient v5.5 pipeline
+      - name: Generate exactly one video with resilient v5.5 pipeline
         env:
-          MAX_VIDEOS: '3'
+          MAX_VIDEOS: '1'
           VIDEO_SECONDS: '45'
           OUTPUT_DIR: output
         run: python -m app.zero_cost_pipeline_v5_5
 
-      - name: Validate generated outputs
+      - name: Validate generated output
         run: |
           set -euo pipefail
           test -s output/run_state.json
           COUNT=$(find output/videos -maxdepth 1 -type f -name '*.mp4' | wc -l)
           echo "Generated videos: $COUNT"
-          test "$COUNT" -ge 1
-          test "$COUNT" -le 3
-          for f in output/videos/*.mp4; do
-            test -s "$f"
-            ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "$f" | grep -q '720,1280'
-            ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$f" | grep -q 'aac'
-          done
+          test "$COUNT" -eq 1
+          VIDEO=$(find output/videos -maxdepth 1 -type f -name '*.mp4' | head -1)
+          test -s "$VIDEO"
+          ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "$VIDEO" | grep -q '720,1280'
+          ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$VIDEO" | grep -q 'aac'
 
-      - name: Publish latest videos to GitHub release
+      - name: Publish latest video to GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -106,17 +104,15 @@ jobs:
           PYTHONUNBUFFERED: '1'
         run: |
           set -euo pipefail
-          for video in output/videos/*.mp4; do
-            echo "Uploading $video"
-            python -u -m app.youtube_publisher "$video"
-          done
+          VIDEO=$(find output/videos -maxdepth 1 -type f -name '*.mp4' | head -1)
+          python -u -m app.youtube_publisher "$VIDEO"
 
       - name: Publish status
         run: |
           if [ "${{ github.event_name }}" = "schedule" ]; then
-            echo 'Scheduled run: YouTube publication enabled.'
+            echo 'Scheduled run: one video generated and YouTube publication enabled.'
           elif [ "${{ inputs.publish_youtube }}" = "true" ]; then
-            echo 'Manual run: YouTube publication enabled.'
+            echo 'Manual run: one video generated and YouTube publication enabled.'
           else
-            echo 'Manual run: YouTube upload skipped.'
+            echo 'Manual run: one video generated; YouTube upload skipped.'
           fi
