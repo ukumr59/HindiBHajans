@@ -32,8 +32,9 @@ jobs:
           test -s app/zero_cost_pipeline_v5.py
           test -s app/zero_cost_pipeline_v5_5.py
           test -s app/lightning_ace_step_worker.py
-          python3 -m py_compile app/zero_cost_pipeline_v5.py app/zero_cost_pipeline_v5_5.py app/lightning_ace_step_worker.py
-          echo 'PRECHECK_OK: zero-cost longform architecture; Lightning AI T4 GPU; Agnes visuals; Kaggle disabled.'
+          test -s app/youtube_publisher.py
+          python3 -m py_compile app/zero_cost_pipeline_v5.py app/zero_cost_pipeline_v5_5.py app/lightning_ace_step_worker.py app/youtube_publisher.py
+          echo 'PRECHECK_OK: zero-cost longform architecture; Lightning AI T4 GPU; Agnes visuals; YouTube publisher present.'
 
       - name: Install zero-cost media tools
         run: |
@@ -118,6 +119,7 @@ jobs:
           grep -q '"music_api_mode": "lightning_ace_step_gpu_studio"' output/run_state.json
           grep -q '"full_length_song": true' output/run_state.json
           grep -q '"scene_count": 12' output/run_state.json
+          echo "FINAL_VIDEO=$(find output/videos -maxdepth 1 -type f -name '*.mp4' | head -1)" >> "$GITHUB_ENV"
           cat output/run_state.json
 
       - name: Publish 3-5 minute production release
@@ -133,3 +135,22 @@ jobs:
             --notes "Full-length 3-5 minute devotional video. ACE-Step 1.5 music generated on a Lightning AI T4 GPU Studio; Agnes visuals; zero-cost/free-tier architecture. Kaggle and Hugging Face ZeroGPU are disabled." \
             --prerelease output/videos/*.mp4 output/audio/bhajan_source.mp3 output/audio/bhajan_aabha_dj_master.mp3 output/run_state.json output/manifest.json output/lyrics.srt
           echo "LONGFORM_RELEASE=https://github.com/$REPO/releases/tag=$TAG"
+
+      - name: Publish to YouTube — one-time OAuth, continuous refresh
+        env:
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+          YOUTUBE_PRIVACY_STATUS: public
+          PYTHONUNBUFFERED: '1'
+        run: |
+          set -euo pipefail
+          if [ -z "$YOUTUBE_CLIENT_ID" ] || [ -z "$YOUTUBE_CLIENT_SECRET" ] || [ -z "$YOUTUBE_REFRESH_TOKEN" ]; then
+            echo 'YOUTUBE_PUBLISH_SKIPPED: add YOUTUBE_CLIENT_ID, YOUTUBE_CLIENT_SECRET and YOUTUBE_REFRESH_TOKEN repository secrets.'
+            exit 0
+          fi
+          python -u -m app.youtube_publisher "$FINAL_VIDEO" | tee youtube_publish.log
+          URL=$(grep '^YOUTUBE_URL=' youtube_publish.log | tail -1 | cut -d= -f2-)
+          test -n "$URL"
+          echo "### YouTube publication" >> "$GITHUB_STEP_SUMMARY"
+          echo "Published: $URL" >> "$GITHUB_STEP_SUMMARY"
