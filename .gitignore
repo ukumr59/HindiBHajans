@@ -1,0 +1,6 @@
+youtube_token.json
+client_secret*.json
+*.client_secret.json
+__pycache__/
+*.pyc
+output/
