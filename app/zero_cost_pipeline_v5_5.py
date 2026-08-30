@@ -23,7 +23,6 @@ LIGHTNING_STUDIO = os.getenv("LIGHTNING_STUDIO", "bhajan-aabha-ace-step").strip(
 
 VIDEO_POLL_TIMEOUT = int(os.getenv("AGNES_VIDEO_POLL_TIMEOUT", "900"))
 VIDEO_POLL_INTERVAL = int(os.getenv("AGNES_VIDEO_POLL_INTERVAL", "10"))
-VIDEO_RPM_GUARD = int(os.getenv("AGNES_VIDEO_RPM_GUARD", "70"))
 VIDEO_DOWNLOAD_TIMEOUT = int(os.getenv("AGNES_VIDEO_DOWNLOAD_TIMEOUT", "600"))
 VIDEO_DOWNLOAD_RETRIES = int(os.getenv("AGNES_VIDEO_DOWNLOAD_RETRIES", "5"))
 VIDEO_DOWNLOAD_BACKOFF = int(os.getenv("AGNES_VIDEO_DOWNLOAD_BACKOFF", "15"))
@@ -176,9 +175,11 @@ def generate_video_clip_resilient(session: requests.Session, image_url: str, pro
     if path.exists() and path.stat().st_size >= 50_000:
         print(f"VIDEO: scene={index}/{scene_count} cached; skipping generation", flush=True)
         return path
-    if index > 1:
-        print(f"VIDEO: Agnes free-tier RPM guard; waiting {VIDEO_RPM_GUARD}s before scene {index}/{scene_count}", flush=True)
-        time.sleep(VIDEO_RPM_GUARD)
+
+    # IMPORTANT: Do not add an artificial per-scene delay here.
+    # Agnes generation/polling is already asynchronous and rate-limit responses
+    # are handled by the request/poll retry logic below. The previous fixed 70s
+    # sleep made every scene after scene 1 unnecessarily slow.
     payload = {
         "model": "agnes-video-v2.0", "prompt": prompt, "image": image_url,
         "width": base.WIDTH, "height": base.HEIGHT,
@@ -251,7 +252,7 @@ if __name__ == "__main__":
         "duration_normalization": "ffmpeg_apad_atrim_exact_target",
         "video_poll_timeout_sec": VIDEO_POLL_TIMEOUT,
         "video_poll_interval_sec": VIDEO_POLL_INTERVAL,
-        "video_rpm_guard_sec": VIDEO_RPM_GUARD,
+        "video_rpm_guard_sec": 0,
         "video_download_timeout_sec": VIDEO_DOWNLOAD_TIMEOUT,
         "video_download_retries": VIDEO_DOWNLOAD_RETRIES,
         "video_download_backoff_sec": VIDEO_DOWNLOAD_BACKOFF,
@@ -259,4 +260,4 @@ if __name__ == "__main__":
     })
     state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
     (base.OUT / "manifest.json").write_text(json.dumps({"videos": [state]}, ensure_ascii=False, indent=2), encoding="utf-8")
-    print("STATE_OK backend=lightning_ace_step_gpu_longform_resilient_video kaggle=false zero_cost=true machine=T4", flush=True)
+    print("STATE_OK backend=lightning_ace_step_gpu_longform_resilient_video kaggle=false zero_cost=true machine=T4 video_rpm_guard=0", flush=True)
