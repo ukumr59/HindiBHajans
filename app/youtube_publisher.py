@@ -14,28 +14,39 @@ from googleapiclient.http import MediaFileUpload
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 TOKEN_URI = "https://oauth2.googleapis.com/token"
 
-DEFAULT_TITLE = "श्री राम जय राम | जय जय राम | भक्ति की मधुर धुन | भजन आभा"
+DEFAULT_TITLE = "श्री राम जय राम | जय जय राम | नया हिंदी भजन | भजन आभा"
 DEFAULT_DESCRIPTION = """🙏 भजन आभा में आपका स्वागत है।
 
-यह मौलिक हिंदी भक्ति गीत श्री राम की भक्ति, शांति और सकारात्मक ऊर्जा को समर्पित है।
+श्री राम की भक्ति, शांति और सकारात्मक ऊर्जा से भरपूर यह मौलिक हिंदी भक्ति गीत आपके मन को सुकून और भक्ति से जोड़ने के लिए प्रस्तुत है।
 
 🎵 भजन: श्री राम जय राम
 🛕 चैनल: भजन आभा
 🇮🇳 भाषा: हिंदी
+🎧 शैली: आधुनिक भक्ति संगीत / Devotional Music
 
-यदि आपको यह भजन पसंद आए तो वीडियो को Like करें, अपने परिवार और मित्रों के साथ Share करें और Bhajan Aabha को Subscribe करें। 🔔
+अगर आपको यह श्री राम भजन पसंद आए तो:
+👍 वीडियो को Like करें
+💬 Comment में 'जय श्री राम' लिखें
+📲 परिवार और मित्रों के साथ Share करें
+🔔 Bhajan Aabha को Subscribe करें और नए हिंदी भजनों के लिए Bell दबाएं।
+
+ऐसे ही नए हिंदी भजन, राम भजन, भक्ति गीत और devotional songs के लिए Bhajan Aabha से जुड़े रहें।
 
 जय श्री राम 🙏
 
-#भजनआभा #श्रीराम #रामभजन #भक्ति #भजन #जयश्रीराम #हिंदीभजन #DevotionalSongs #RamBhajan
+#भजनआभा #श्रीराम #रामभजन #श्रीरामभजन #जयश्रीराम #हिंदीभजन #भक्ति #भक्तिगीत #रामनाम #भजन #DevotionalSongs #RamBhajan #HindiBhajan #BhaktiSong
 """
 
+# SEO keyword set: Hindi + transliterated English + high-intent devotional queries.
+# Kept within YouTube's 500-character tag limit by _tags().
 DEFAULT_TAGS = [
     "bhajan aabha", "भजन आभा", "shri ram", "श्री राम", "ram bhajan", "राम भजन",
-    "jai shree ram", "जय श्री राम", "shri ram jai ram", "श्री राम जय राम",
-    "hindi bhajan", "हिंदी भजन", "bhakti geet", "भक्ति गीत", "devotional song",
-    "devotional songs", "bhakti song", "morning bhajan", "राम नाम", "sanatan bhajan",
-    "new bhajan", "latest bhajan", "devotional music", "hindu devotional song",
+    "shri ram bhajan", "श्री राम भजन", "jai shree ram", "जय श्री राम",
+    "shri ram jai ram", "श्री राम जय राम", "hindi bhajan", "हिंदी भजन",
+    "new hindi bhajan", "नया हिंदी भजन", "bhakti geet", "भक्ति गीत",
+    "devotional song", "devotional songs", "bhakti song", "राम नाम",
+    "ram naam", "sanatan bhajan", "सनातन भजन", "morning bhajan", "सुबह का भजन",
+    "devotional music", "hindu devotional song", "latest bhajan", "new bhajan",
 ]
 
 
@@ -106,6 +117,8 @@ def upload(video_path: Path) -> str:
         },
     }
 
+    print(f"YOUTUBE_SEO: title={title}")
+    print(f"YOUTUBE_SEO: tags={len(_tags())} keywords; description={len(description)} chars; language=hi")
     media = MediaFileUpload(str(video_path), mimetype="video/mp4", chunksize=8 * 1024 * 1024, resumable=True)
     request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
     response = None
@@ -127,7 +140,7 @@ def upload(video_path: Path) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Upload a validated Bhajan Aabha MP4 to YouTube")
+    parser = argparse.ArgumentParser(description="Upload a validated Bhajan Aabha MP4 to YouTube with SEO metadata")
     parser.add_argument("video", type=Path)
     args = parser.parse_args()
     upload(args.video)
