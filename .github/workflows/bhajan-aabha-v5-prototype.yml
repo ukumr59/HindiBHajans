@@ -93,7 +93,6 @@ jobs:
           PYTHONUNBUFFERED: '1'
           AGNES_VIDEO_POLL_TIMEOUT: '900'
           AGNES_VIDEO_POLL_INTERVAL: '10'
-          AGNES_VIDEO_RPM_GUARD: '70'
         run: python -u -m app.zero_cost_pipeline_v5_5
 
       - name: Validate output
