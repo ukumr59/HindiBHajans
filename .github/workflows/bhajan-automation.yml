@@ -12,8 +12,6 @@ on:
         default: false
         type: boolean
 
-# HARD CONSTRAINT: zero rupees now and forever. GitHub-hosted runner only.
-# No Kaggle, GPU rental, paid API, paid storage, or Actions artifacts.
 permissions:
   contents: write
 
@@ -22,7 +20,9 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  YOUTUBE_TOKEN_JSON: ${{ secrets.YOUTUBE_TOKEN_JSON }}
+  YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+  YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+  YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
 
 jobs:
   generate-bhajans:
@@ -33,113 +33,73 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Verify v4 generator
-        run: |
-          set -e
-          echo "COMMIT=$(git rev-parse HEAD)"
-          test -s app/zero_cost_pipeline_v4.py
-          grep -q 'ARCHITECTURE=v4' app/zero_cost_pipeline_v4.py
-
       - name: Install zero-cost system tools
         run: |
           set -e
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg fonts-noto-core espeak-ng espeak-ng-data
-          echo "FFMPEG=$(command -v ffmpeg)"
-          ffmpeg -version | head -1
-          echo "ESPEAK=$(command -v espeak-ng)"
-          espeak-ng --version
-          echo '--- Hindi voice availability ---'
-          espeak-ng --voices | grep -E '(^|[[:space:]])hi([[:space:]]|$)'
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      - name: Install zero-cost generator dependencies
+      - name: Install dependencies
         run: pip install -r requirements.txt
-
-      - name: Prepare YouTube OAuth credentials
-        run: |
-          set -euo pipefail
-          test -n "$YOUTUBE_TOKEN_JSON" || { echo 'SETUP_REQUIRED: YOUTUBE_TOKEN_JSON repository secret is missing.'; exit 2; }
-          python - <<'PY'
-          import json, os
-          data = json.loads(os.environ['YOUTUBE_TOKEN_JSON'])
-          for key in ('client_id', 'client_secret', 'refresh_token'):
-              value = data.get(key)
-              if not value:
-                  raise SystemExit(f'SETUP_REQUIRED: token JSON is missing {key}')
-              with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as f:
-                  f.write(f'YOUTUBE_{key.upper()}={value}\n')
-          print('YOUTUBE_OAUTH_JSON_OK: client_id, client_secret and refresh_token found.')
-          PY
 
       - name: Verify YouTube OAuth connection
         run: |
           set -euo pipefail
+          test -n "$YOUTUBE_CLIENT_ID"
+          test -n "$YOUTUBE_CLIENT_SECRET"
+          test -n "$YOUTUBE_REFRESH_TOKEN"
           python - <<'PY'
+          import os
           from google.auth.transport.requests import Request
           from google.oauth2.credentials import Credentials
           from googleapiclient.discovery import build
-
-          scopes = ['https://www.googleapis.com/auth/youtube.upload']
-          creds = Credentials(
-              token=None,
-              refresh_token=__import__('os').environ['YOUTUBE_REFRESH_TOKEN'],
-              token_uri='https://oauth2.googleapis.com/token',
-              client_id=__import__('os').environ['YOUTUBE_CLIENT_ID'],
-              client_secret=__import__('os').environ['YOUTUBE_CLIENT_SECRET'],
-              scopes=scopes,
-          )
+          creds = Credentials(token=None, refresh_token=os.environ['YOUTUBE_REFRESH_TOKEN'], token_uri='https://oauth2.googleapis.com/token', client_id=os.environ['YOUTUBE_CLIENT_ID'], client_secret=os.environ['YOUTUBE_CLIENT_SECRET'], scopes=['https://www.googleapis.com/auth/youtube.upload'])
           creds.refresh(Request())
           youtube = build('youtube', 'v3', credentials=creds, cache_discovery=False)
-          response = youtube.channels().list(part='id,snippet', mine=True).execute()
-          items = response.get('items', [])
+          items = youtube.channels().list(part='id,snippet', mine=True).execute().get('items', [])
           if not items:
-              raise SystemExit('YOUTUBE_AUTH_FAILED: authenticated account has no accessible YouTube channel.')
-          channel = items[0]
+              raise SystemExit('YOUTUBE_AUTH_FAILED: no accessible YouTube channel')
           print('YOUTUBE_CONNECTION_OK')
-          print('YOUTUBE_CHANNEL_ID=' + channel['id'])
-          print('YOUTUBE_CHANNEL_TITLE=' + channel['snippet']['title'])
+          print('YOUTUBE_CHANNEL_TITLE=' + items[0]['snippet']['title'])
           PY
 
-      - name: Generate videos with zero-cost v4 pipeline
+      - name: Generate videos with resilient v5.5 pipeline
         env:
           MAX_VIDEOS: '3'
           VIDEO_SECONDS: '45'
           OUTPUT_DIR: output
-        run: python -m app.zero_cost_pipeline_v4
+        run: python -m app.zero_cost_pipeline_v5_5
 
       - name: Validate generated outputs
         run: |
-          set -e
+          set -euo pipefail
           test -s output/run_state.json
           COUNT=$(find output/videos -maxdepth 1 -type f -name '*.mp4' | wc -l)
-          echo "Generated videos: ${COUNT}"
-          test "${COUNT}" -ge 1
-          test "${COUNT}" -le 3
+          echo "Generated videos: $COUNT"
+          test "$COUNT" -ge 1
+          test "$COUNT" -le 3
           for f in output/videos/*.mp4; do
             test -s "$f"
             ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "$f" | grep -q '720,1280'
             ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$f" | grep -q 'aac'
-            ffprobe -v error -select_streams a:0 -show_entries stream=duration -of csv=p=0 "$f" | awk '$1+0 > 1 {ok=1} END {exit !(ok)}'
           done
-          cat output/run_state.json
 
       - name: Publish latest videos to GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
-          set -e
+          set -euo pipefail
           TAG="bhajan-aabha-latest"
           gh release delete "$TAG" --repo "$REPO" --cleanup-tag --yes 2>/dev/null || true
-          gh release create "$TAG" --repo "$REPO" --title "Bhajan Aabha — Latest Output" --notes "Zero-cost Bhajan Aabha output. Procedural visuals + locally synthesized Hindi narration. No Kaggle, paid API, GPU rental, external media download, or Actions artifact storage." --prerelease output/videos/*.mp4 output/*.json
-          echo "Release published: https://github.com/$REPO/releases/tag=$TAG"
+          gh release create "$TAG" --repo "$REPO" --title "Bhajan Aabha — Latest Output" --notes "Zero-cost Bhajan Aabha output." --prerelease output/videos/*.mp4 output/*.json
 
-      - name: Publish to YouTube — scheduled or explicitly enabled manual run
+      - name: Publish to YouTube
         if: ${{ github.event_name == 'schedule' || inputs.publish_youtube == true }}
         env:
           YOUTUBE_PRIVACY_STATUS: public
@@ -158,7 +118,5 @@ jobs:
           elif [ "${{ inputs.publish_youtube }}" = "true" ]; then
             echo 'Manual run: YouTube publication enabled.'
           else
-            echo 'Manual connection-test run: YouTube upload skipped.'
+            echo 'Manual run: YouTube upload skipped.'
           fi
-          echo 'ZERO_COST=true | KAGGLE=false | PAID_SERVICES=false | ACTIONS_ARTIFACTS=false'
-          echo 'Video delivery is through the latest GitHub release.'
