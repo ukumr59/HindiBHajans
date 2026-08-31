@@ -43,16 +43,14 @@ def long_lyrics(seconds: int) -> str:
 
 
 def scene_prompts(count: int) -> list[str]:
-    # Text prompts are retained only for metadata compatibility. The stock
-    # visual pipeline overrides the image/video generators and does not send
-    # these prompts to Agnes.
+    # Metadata-only scene labels. The stock visual wrapper replaces the base
+    # Agnes video generator before base.main() is called.
     return [f"Unique devotional stock-footage scene {i + 1}" for i in range(count)]
 
 
 def make_srt(path: Path, seconds: int):
-    # Deliberately disabled: generated lyric timing was not reliably aligned
-    # to the sung vocal track. The production video must contain NO burned-in
-    # Hindi subtitles and no subtitle sidecar is published.
+    # Burned-in Hindi subtitles are deliberately disabled because the generated
+    # vocal timing is not reliable enough to claim word-level synchronization.
     path.unlink(missing_ok=True)
 
 
@@ -64,10 +62,15 @@ def configure() -> int:
     base.PACK["music_prompt"] = DJ_PROMPT
     base.PACK["scene_prompts"] = scene_prompts(seconds // SCENE_SECONDS)
     base.make_srt = lambda path: make_srt(path, seconds)
+    # The stock-video architecture must not require an Agnes API key. The base
+    # module is shared with the legacy Agnes implementation, so replace its
+    # environment gate for this production path.
+    base.require_env = lambda: None
     print(f"ARCHITECTURE=v5.4 CLEAN_FULL_LENGTH ZERO_COST=true VIDEO_SECONDS={seconds} SCENES={seconds // SCENE_SECONDS}")
     print("VISUAL_BACKEND=Pexels stock video API")
     print("SUBTITLES=disabled")
-    print("MUSIC_BACKEND=ACE-Step v1.5 official public ZeroGPU Space via live Gradio API")
+    print("AGNES_API_KEY=not_required_for_stock_visual_pipeline")
+    print("MUSIC_BACKEND=ACE-Step v1.5 on Lightning T4")
     print("MUSIC_DURATION=single full-length song; no looping")
     print("MUSIC_STYLE=LOUD_MODERN_DEVOTIONAL_EDM_DJ_READY bpm=128")
     return seconds
@@ -110,9 +113,11 @@ def main():
         "pexels_no_reuse": True,
         "subtitles": False,
         "hindi_subtitles": False,
-        "music_backend": "ACE-Step v1.5 official Hugging Face ZeroGPU Space via Gradio Client",
-        "music_api_mode": "live_gradio_49_input_contract",
-        "music_input_contract": "4 wrapper + 45 generation = 49 total",
+        "agnes_api_key_required": False,
+        "agnes_video_generation": False,
+        "agnes_image_generation": False,
+        "music_backend": "ACE-Step v1.5 on Lightning T4",
+        "music_api_mode": "lightning_ace_step_gpu_studio",
         "music_style": "LOUD_MODERN_DEVOTIONAL_EDM_DJ_READY",
         "bpm": 128,
         "time_signature": "4/4",
