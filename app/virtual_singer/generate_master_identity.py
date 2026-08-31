@@ -28,7 +28,16 @@ def load_reference(reference_path: str | None) -> Image.Image:
     if reference_path:
         path = Path(reference_path)
         if not path.is_file():
-            raise RuntimeError(f"Reference image not found: {path}")
+            candidates = [
+                Path.cwd() / path,
+                Path('/teamspace/studios/this_studio') / path,
+                Path('/teamspace/studios/this_studio/virtual_singer_master_run_v8') / path,
+                Path('/teamspace/studios/this_studio/virtual_singer_master_run_v9') / path,
+            ]
+            path = next((p for p in candidates if p.is_file()), path)
+        if not path.is_file():
+            raise RuntimeError(f"Reference image not found: {reference_path}; cwd={Path.cwd()}")
+        print(f"REFERENCE_PATH_RESOLVED={path}", flush=True)
         return Image.open(path).convert("RGB")
     raw = os.environ.get("SINGER_REFERENCE_B64")
     if not raw:
@@ -65,10 +74,6 @@ def main() -> None:
         image_encoder_folder="models/image_encoder",
     )
 
-    # T4/CPU-offload runs can leave the CLIP vision encoder in float16 while
-    # its convolution receives a CPU float16 tensor. CPU float16 convolution
-    # is not reliably supported. Keep only the vision encoder in float32;
-    # the SDXL denoiser/VAEs remain float16 for T4 memory efficiency.
     if getattr(pipe, "image_encoder", None) is not None:
         pipe.image_encoder = pipe.image_encoder.float()
         print("IP_ADAPTER_IMAGE_ENCODER_DTYPE=float32", flush=True)
