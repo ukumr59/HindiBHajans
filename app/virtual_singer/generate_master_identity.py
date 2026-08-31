@@ -1,70 +1,114 @@
 from __future__ import annotations
 
 import argparse
-import json
+import base64
+import io
 import os
 from pathlib import Path
 
+import cv2
+import numpy as np
 import torch
-from diffusers import DiffusionPipeline
+from PIL import Image
+from insightface.app import FaceAnalysis
+from diffusers import ControlNetModel
+
+from pipeline_stable_diffusion_xl_instantid import (
+    StableDiffusionXLInstantIDPipeline,
+    draw_kps,
+)
 
 ROOT = Path(__file__).resolve().parent
-CONFIG = ROOT / "identity_config.json"
-MODEL_ID = os.getenv("VIRTUAL_SINGER_IMAGE_MODEL", "stabilityai/stable-diffusion-xl-base-1.0")
+CHECKPOINT_ROOT = ROOT / "checkpoints"
+INSTANTID_ROOT = CHECKPOINT_ROOT / "InstantID"
+FACE_MODEL_ROOT = ROOT / "models"
+BASE_MODEL = os.getenv("VIRTUAL_SINGER_BASE_MODEL", "stabilityai/stable-diffusion-xl-base-1.0")
 
-# The singer is fictional, while the visual design is derived from the user's
-# supplied self-photo: glasses, hairstyle, facial structure and general build.
-MASTER_PROMPT = (
-    "Photorealistic cinematic portrait of a fictional Indian male devotional singer, age around 30, "
-    "with facial features closely matching the approved self-reference design: warm medium-brown skin, "
-    "short neatly combed black hair with a clean side part, broad forehead, distinctive oval-to-rectangular "
-    "face, dark brown eyes, straight medium-width nose, natural medium lips, clean-shaven face, "
-    "defined but natural jawline, average-to-fit adult physique, and rectangular black eyeglasses with "
-    "thin dark frames. Keep the eyeglasses as a permanent identity feature. Calm sincere devotional "
-    "expression, approachable and humble presence. The character is fictional and must remain one consistent "
-    "person. Wearing a simple cream kurta and beige stole, standing in a softly lit ancient Hindu temple "
-    "with warm diyas in the background. Centered three-quarter chest-up portrait, natural skin texture, "
-    "realistic facial proportions, cinematic Indian devotional cinema, 85mm portrait lens, shallow depth "
-    "of field, soft volumetric temple light, highly detailed, one person only, no text, no watermark, "
-    "no tilak, no earrings, no facial hair, no ornate jewelry."
+PROMPT = (
+    "photorealistic Indian male devotional singer, approximately 30 years old, "
+    "preserve the exact facial identity from the supplied reference photograph, "
+    "short neatly side-parted black hair, rectangular dark eyeglasses, clean-shaven, "
+    "natural medium-brown skin, realistic adult male physique, calm sincere expression, "
+    "simple cream kurta and beige stole, ancient Hindu temple softly lit by diyas, "
+    "cinematic devotional photography, natural skin texture, realistic proportions, "
+    "chest-up three-quarter portrait, centered subject, 85mm lens, shallow depth of field"
 )
+NEGATIVE = (
+    "different person, altered identity, no glasses, different glasses, sunglasses, "
+    "long hair, beard, moustache, tilak, earrings, ornate jewelry, deity, crown, "
+    "extra people, distorted face, duplicate person, text, watermark, cartoon, anime"
+)
+
+
+def load_reference() -> Image.Image:
+    raw = os.environ.get("SINGER_REFERENCE_B64")
+    if not raw:
+        raise RuntimeError(
+            "SINGER_REFERENCE_B64 is missing. Add the user's reference photo as a base64 "
+            "GitHub Actions repository secret before running this workflow."
+        )
+    try:
+        return Image.open(io.BytesIO(base64.b64decode(raw))).convert("RGB")
+    except Exception as exc:
+        raise RuntimeError("SINGER_REFERENCE_B64 is not valid base64 image data") from exc
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--seed", type=int, default=71284)
-    parser.add_argument("--steps", type=int, default=30)
-    parser.add_argument("--output", default="virtual_singer_master.png")
+    parser.add_argument("--seed", type=int, default=81273)
+    parser.add_argument("--steps", type=int, default=25)
+    parser.add_argument("--output", default="virtual_singer_master_v3.png")
     args = parser.parse_args()
 
-    config = json.loads(CONFIG.read_text(encoding="utf-8"))
-    negative = config["negative_prompt"] + ", sunglasses, rimless glasses, different eyeglasses, missing glasses"
-    generator = torch.Generator(device="cuda").manual_seed(args.seed)
+    reference = load_reference()
+    reference_path = ROOT / "reference_input.jpg"
+    reference.save(reference_path, quality=95)
 
-    print(f"VIRTUAL_SINGER_MODEL={MODEL_ID}", flush=True)
-    print(f"VIRTUAL_SINGER_SEED={args.seed}", flush=True)
-    print("VIRTUAL_SINGER_IDENTITY_SOURCE=approved_self_reference_traits", flush=True)
+    print("VIRTUAL_SINGER_IDENTITY_SOURCE=actual_user_reference_photo", flush=True)
+    print(f"VIRTUAL_SINGER_BASE_MODEL={BASE_MODEL}", flush=True)
 
-    pipe = DiffusionPipeline.from_pretrained(
-        MODEL_ID,
+    face_app = FaceAnalysis(
+        name="antelopev2",
+        root=str(FACE_MODEL_ROOT),
+        providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
+    )
+    face_app.prepare(ctx_id=0, det_size=(640, 640))
+    faces = face_app.get(cv2.cvtColor(np.array(reference), cv2.COLOR_RGB2BGR))
+    if not faces:
+        raise RuntimeError("No face detected in the supplied reference photograph")
+    face = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
+    face_emb = face.embedding
+    face_kps = draw_kps(reference, face.kps)
+
+    controlnet = ControlNetModel.from_pretrained(
+        str(INSTANTID_ROOT / "ControlNetModel"),
         torch_dtype=torch.float16,
-        use_safetensors=True,
-        variant="fp16",
+    )
+    pipe = StableDiffusionXLInstantIDPipeline.from_pretrained(
+        BASE_MODEL,
+        controlnet=controlnet,
+        torch_dtype=torch.float16,
     )
     pipe.enable_model_cpu_offload()
-    if hasattr(pipe, "vae") and hasattr(pipe.vae, "enable_slicing"):
+    if hasattr(pipe, "vae"):
         pipe.vae.enable_slicing()
-    if hasattr(pipe, "vae") and hasattr(pipe.vae, "enable_tiling"):
         pipe.vae.enable_tiling()
 
+    pipe.load_ip_adapter_instantid(str(INSTANTID_ROOT / "ip-adapter.bin"))
+
+    generator = torch.Generator(device="cuda").manual_seed(args.seed)
     image = pipe(
-        prompt=MASTER_PROMPT,
-        negative_prompt=negative,
-        height=1024,
-        width=768,
+        PROMPT,
+        negative_prompt=NEGATIVE,
+        image_embeds=face_emb,
+        image=face_kps,
+        controlnet_conditioning_scale=0.92,
+        ip_adapter_scale=0.92,
         num_inference_steps=args.steps,
-        guidance_scale=6.5,
+        guidance_scale=5.0,
         generator=generator,
+        height=768,
+        width=576,
     ).images[0]
 
     output = Path(args.output)
