@@ -20,18 +20,17 @@ env:
   YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
   YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
   YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
-  PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
 
 jobs:
   generate-longform:
-    name: Generate Bhajan Aabha 3-5 minute video with unique Pexels visuals
+    name: Generate Bhajan Aabha 3-5 minute video with free Wan2.1 visuals
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 300
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Preflight — Lightning GPU credentials
+      - name: Preflight — free Lightning T4 + Wan2.1
         env:
           LIGHTNING_USER_ID: ${{ secrets.LIGHTNING_USER_ID }}
           LIGHTNING_API_KEY: ${{ secrets.LIGHTNING_API_KEY }}
@@ -39,14 +38,14 @@ jobs:
           set -euo pipefail
           test -n "$LIGHTNING_USER_ID"
           test -n "$LIGHTNING_API_KEY"
-          test -n "$PEXELS_API_KEY"
           test -s app/zero_cost_pipeline_v5_5.py
-          test -s app/zero_cost_pipeline_stock.py
-          test -s app/pexels_stock_visuals.py
+          test -s app/zero_cost_pipeline_v5_4.py
+          test -s app/zero_cost_pipeline_wan.py
+          test -s app/lightning_wan2_worker.py
           test -s app/visual_qc.py
           test -s app/lightning_ace_step_worker_v2.py
-          python3 -m py_compile app/zero_cost_pipeline_v5_4.py app/zero_cost_pipeline_v5_5.py app/zero_cost_pipeline_stock.py app/pexels_stock_visuals.py app/visual_qc.py app/lightning_ace_step_worker_v2.py
-          echo 'PRECHECK_OK: Lightning music + Pexels stock visuals + semantic visual QC + no subtitles.'
+          python3 -m py_compile app/zero_cost_pipeline_v5_4.py app/zero_cost_pipeline_v5_5.py app/zero_cost_pipeline_wan.py app/lightning_wan2_worker.py app/visual_qc.py app/lightning_ace_step_worker_v2.py
+          echo 'PRECHECK_OK: Lightning T4 music + open-source Wan2.1 visuals + semantic visual QC + no subtitles.'
 
       - name: Install zero-cost media tools
         run: |
@@ -66,7 +65,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface
-          key: bhajan-aabha-clip-${{ runner.os }}-clip-vit-base-patch32-v1
+          key: bhajan-aabha-clip-${{ runner.os }}-clip-vit-base-patch32-v2
 
       - name: Install Python dependencies
         run: pip install -r requirements.txt lightning-sdk torch torchvision transformers
@@ -97,15 +96,16 @@ jobs:
           fi
           echo "LIGHTNING_TEAMSPACE resolved: $TS"
 
-      - name: Generate full-length bhajan video with Pexels stock visuals
+      - name: Generate full-length bhajan video with free Wan2.1 visuals
         env:
           LIGHTNING_USER_ID: ${{ secrets.LIGHTNING_USER_ID }}
           LIGHTNING_API_KEY: ${{ secrets.LIGHTNING_API_KEY }}
           LIGHTNING_STUDIO: bhajan-aabha-ace-step
+          WAN_SAMPLE_STEPS: '30'
           VIDEO_SECONDS: '180'
           OUTPUT_DIR: output
           PYTHONUNBUFFERED: '1'
-        run: python -u -m app.zero_cost_pipeline_stock
+        run: python -u -m app.zero_cost_pipeline_wan
 
       - name: Semantic visual quality gate — reject unrelated/religiously wrong scenes
         env:
@@ -122,7 +122,7 @@ jobs:
           set -euo pipefail
           test -s output/run_state.json
           test -s output/visual_qc.json
-          test -s output/pexels_credits.txt
+          test -s output/wan_manifest.json
           COUNT=$(find output/videos -maxdepth 1 -type f -name '*.mp4' | wc -l)
           test "$COUNT" -eq 1
           VIDEO=$(find output/videos -maxdepth 1 -type f -name '*.mp4' | head -1)
@@ -141,22 +141,11 @@ jobs:
           grep -q '"full_length_song": true' output/run_state.json
           grep -q '"scene_count": 12' output/run_state.json
           grep -q '"hindi_subtitles": false' output/run_state.json
+          grep -q '"visual_model": "Wan-AI/Wan2.1-T2V-1.3B"' output/run_state.json
+          grep -q '"visual_model_license": "Apache-2.0"' output/run_state.json
           echo "FINAL_VIDEO=$VIDEO" >> "$GITHUB_ENV"
           cat output/visual_qc.json
           cat output/run_state.json
-
-      - name: Persist Pexels no-reuse ledger
-        run: |
-          set -euo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add data/pexels_used.json
-          if git diff --cached --quiet; then
-            echo 'PEXELS_LEDGER_UNCHANGED'
-          else
-            git commit -m 'chore: record Pexels clips used by longform Bhajan Aabha'
-            git push
-          fi
 
       - name: Publish 3-5 minute production release
         env:
@@ -168,8 +157,8 @@ jobs:
           gh release delete "$TAG" --repo "$REPO" --cleanup-tag --yes 2>/dev/null || true
           gh release create "$TAG" --repo "$REPO" \
             --title "Bhajan Aabha — 3-5 Minute Production" \
-            --notes "Full-length devotional video with original ACE-Step music and unique Pexels stock visuals. Hindi subtitles are intentionally disabled. Semantic visual QC passed. Pexels source credits are included." \
-            --prerelease output/videos/*.mp4 output/audio/bhajan_source.mp3 output/audio/bhajan_aabha_dj_master.mp3 output/run_state.json output/manifest.json output/pexels_credits.txt output/visual_qc.json
+            --notes "Full-length devotional video with original ACE-Step music and open-source Wan2.1 T2V visuals. Hindi subtitles are intentionally disabled. Semantic visual QC passed." \
+            --prerelease output/videos/*.mp4 output/audio/bhajan_source.mp3 output/audio/bhajan_aabha_dj_master.mp3 output/run_state.json output/manifest.json output/wan_manifest.json output/visual_qc.json
 
       - name: Publish to YouTube with SEO
         if: ${{ github.event_name == 'schedule' || inputs.publish_youtube == true }}
@@ -187,7 +176,7 @@ jobs:
       - name: Publish status
         run: |
           if [ "${{ inputs.publish_youtube }}" = "true" ]; then
-            echo 'Manual run: unique Pexels stock visuals generated, semantic visual QC passed, Hindi subtitles disabled, and SEO-enabled YouTube publication requested.'
+            echo 'Manual run: free Wan2.1 visuals generated, semantic visual QC passed, Hindi subtitles disabled, and SEO-enabled YouTube publication requested.'
           else
-            echo 'Manual run: unique Pexels stock visuals generated, semantic visual QC passed, Hindi subtitles disabled; YouTube upload not requested.'
+            echo 'Manual run: free Wan2.1 visuals generated, semantic visual QC passed, Hindi subtitles disabled; YouTube upload not requested.'
           fi
