@@ -13,15 +13,16 @@ CONFIG = ROOT / "identity_config.json"
 MODEL_ID = os.getenv("VIRTUAL_SINGER_IMAGE_MODEL", "stabilityai/stable-diffusion-xl-base-1.0")
 
 MASTER_PROMPT = (
-    "Photorealistic cinematic portrait of a fictional Indian male devotional singer, age 30, "
-    "warm medium-brown skin, expressive deep brown eyes, distinctive oval face, straight nose, "
-    "natural eyebrows, dark wavy medium-length hair, clean-shaven, slim-to-average build, "
-    "calm sincere devotional expression, subtle smile, wearing a simple cream kurta and "
-    "traditional beige stole, rudraksha prayer beads, standing in a softly lit ancient Hindu "
-    "temple with warm diyas in the background, centered three-quarter portrait, chest-up, "
-    "natural skin texture, realistic facial proportions, cinematic Indian devotional cinema, "
-    "85mm portrait lens, shallow depth of field, soft volumetric temple light, highly detailed, "
-    "no text, no watermark, one person only."
+    "Photorealistic cinematic portrait of a fictional Indian male devotional singer, adult and mature-looking, "
+    "visually inspired by the supplied reference-derived character design. Preserve a distinctive oval-to-rectangular "
+    "face, warm medium-brown Indian skin tone, dark brown expressive eyes, straight nose, defined natural jawline, "
+    "short black hair neatly side-parted, clean-shaven face, and distinctive rectangular dark eyeglasses. "
+    "Average-to-fit adult physique with natural shoulders and proportions. Calm, sincere, devotional expression, "
+    "subtle confident smile, humble charismatic presence. Wearing a simple cream kurta and traditional beige stole, "
+    "rudraksha prayer beads, standing naturally in a softly lit ancient Hindu temple with warm diyas in the background. "
+    "Centered three-quarter chest-up portrait, natural skin texture, realistic facial proportions, cinematic Indian "
+    "devotional cinema, 85mm portrait lens, shallow depth of field, soft volumetric temple light, highly detailed, "
+    "one person only, no text, no watermark."
 )
 
 
@@ -38,6 +39,7 @@ def main() -> None:
 
     print(f"VIRTUAL_SINGER_MODEL={MODEL_ID}", flush=True)
     print(f"VIRTUAL_SINGER_SEED={args.seed}", flush=True)
+    print("VIRTUAL_SINGER_REFERENCE_PROFILE=adult_indian_male_glasses_short_side_parted_hair_average_fit", flush=True)
 
     pipe = DiffusionPipeline.from_pretrained(
         MODEL_ID,
