@@ -1,0 +1,95 @@
+name: Bhajan Aabha — Create Virtual Singer Master
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  virtual-singer-master:
+    name: Generate one permanent fictional Bhajan Aabha singer
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Lightning SDK
+        run: pip install -q lightning-sdk
+
+      - name: Resolve Lightning membership
+        env:
+          LIGHTNING_USER_ID: ${{ secrets.LIGHTNING_USER_ID }}
+          LIGHTNING_API_KEY: ${{ secrets.LIGHTNING_API_KEY }}
+        run: |
+          set -euo pipefail
+          M=$(lightning api /v1/memberships)
+          TS=$(echo "$M" | jq -r '.memberships[0].name')
+          OWNER_TYPE=$(echo "$M" | jq -r '.memberships[0].ownerType')
+          OWNER_ID=$(echo "$M" | jq -r '.memberships[0].ownerId')
+          echo "LIGHTNING_TEAMSPACE=$TS" >> "$GITHUB_ENV"
+          if [ "$OWNER_TYPE" = "user" ]; then
+            OWNER=$(lightning api "/v1/users/$OWNER_ID" | jq -r '.name')
+            echo "LIGHTNING_USERNAME=$OWNER" >> "$GITHUB_ENV"
+          else
+            OWNER=$(lightning api "/v1/orgs/$OWNER_ID" | jq -r '.name')
+            echo "LIGHTNING_ORG=$OWNER" >> "$GITHUB_ENV"
+          fi
+
+      - name: Generate virtual singer master on T4
+        env:
+          LIGHTNING_USER_ID: ${{ secrets.LIGHTNING_USER_ID }}
+          LIGHTNING_API_KEY: ${{ secrets.LIGHTNING_API_KEY }}
+          LIGHTNING_TEAMSPACE: ${{ env.LIGHTNING_TEAMSPACE }}
+          LIGHTNING_USERNAME: ${{ env.LIGHTNING_USERNAME }}
+          LIGHTNING_ORG: ${{ env.LIGHTNING_ORG }}
+        run: |
+          set -euo pipefail
+          mkdir -p output
+          python - <<'PY'
+          import os
+          from lightning_sdk import Machine, Studio
+
+          owner = os.environ.get('LIGHTNING_USERNAME') or os.environ.get('LIGHTNING_ORG')
+          kwargs = dict(
+              name='bhajan-aabha-virtual-singer',
+              teamspace=os.environ['LIGHTNING_TEAMSPACE'],
+              create_ok=True,
+          )
+          kwargs['user' if os.environ.get('LIGHTNING_USERNAME') else 'org'] = owner
+          s = Studio(**kwargs)
+          status = str(s.status).lower()
+          if 'running' not in status:
+              s.start(Machine.T4)
+          elif 't4' not in str(s.machine).lower():
+              s.switch_machine(Machine.T4)
+
+          remote = 'virtual_singer_master'
+          s.upload_file('app/virtual_singer/generate_master_identity.py', remote_path=f'{remote}/generate_master_identity.py')
+          s.upload_file('app/virtual_singer/identity_config.json', remote_path=f'{remote}/identity_config.json')
+
+          out, code = s.run_with_exit_code(
+              f'cd ~/{remote} && python -m pip install -q -U diffusers transformers accelerate safetensors invisible_watermark && '
+              f'python generate_master_identity.py --seed 44031 --steps 28 --output virtual_singer_master.png'
+          )
+          print(out[-30000:], flush=True)
+          if code != 0:
+              raise SystemExit(code)
+
+          s.download_file(f'{remote}/virtual_singer_master.png', 'output/virtual_singer_master.png')
+          s.stop()
+          PY
+
+      - name: Validate master image
+        run: |
+          set -euo pipefail
+          test -s output/virtual_singer_master.png
+          file output/virtual_singer_master.png
+
+      - name: Upload virtual singer master
+        uses: actions/upload-artifact@v4
+        with:
+          name: bhajan-aabha-virtual-singer-master
+          path: output/virtual_singer_master.png
+          if-no-files-found: error
