@@ -47,37 +47,7 @@ def scene_prompts(count: int) -> list[str]:
 
 
 def make_srt(path: Path, seconds: int):
-    # Compatibility stub only. The stock assembler never creates or burns SRT.
     path.unlink(missing_ok=True)
-
-
-def assemble_without_subtitles(scene_paths: list[Path], music_path: Path, final_path: Path):
-    """Assemble the stock-footage longform video with NO subtitle filter."""
-    concat = base.OUT / "scenes.txt"
-    concat.write_text("\n".join(f"file '{p.resolve()}'" for p in scene_paths) + "\n", encoding="utf-8")
-    visual = base.OUT / "visual.mp4"
-    base.ffmpeg("-f", "concat", "-safe", "0", "-i", str(concat), "-c", "copy", str(visual))
-    audio_filter = "loudnorm=I=-9:TP=-1.0:LRA=7"
-    base.ffmpeg(
-        "-i", str(visual), "-i", str(music_path),
-        "-filter_complex", f"[1:a]atrim=0:{base.VIDEO_SECONDS},asetpts=N/SR/TB,{audio_filter}[a]",
-        "-map", "0:v:0", "-map", "[a]",
-        "-t", str(base.VIDEO_SECONDS), "-r", str(base.FPS),
-        "-s", f"{base.WIDTH}x{base.HEIGHT}",
-        "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-b:a", "256k", "-ar", "48000", "-movflags", "+faststart",
-        str(final_path),
-    )
-    dj_mp3 = base.AUDIO / "bhajan_aabha_dj_master.mp3"
-    base.ffmpeg(
-        "-i", str(music_path), "-af", audio_filter, "-ar", "48000",
-        "-c:a", "libmp3lame", "-b:a", "320k", "-id3v2_version", "3",
-        "-metadata", "title=Bhajan Aabha — DJ Master",
-        "-metadata", "artist=Bhajan Aabha",
-        "-metadata", "genre=Devotional EDM",
-        str(dj_mp3),
-    )
-    print("SUBTITLES_OK: Hindi subtitles disabled; no subtitle filter applied", flush=True)
 
 
 def configure() -> int:
@@ -152,6 +122,7 @@ def main():
         "full_length_song": True,
         "music_duration_sec": seconds,
         "zero_cost": True,
+        "lightning": True,
         "kaggle": False,
         "paid_services": False,
         "paid_gpu": False,
