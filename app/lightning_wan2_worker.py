@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -20,18 +21,52 @@ def run(*args, cwd=None):
     return subprocess.run([str(x) for x in args], cwd=cwd, check=True, text=True)
 
 
+def patch_wan_attention_for_t4():
+    """Patch upstream Wan2.1's hard flash-attn assertion with PyTorch SDPA.
+
+    Wan2.1's WanModel calls flash_attention() directly, so the fallback in
+    attention() is not reached when flash-attn is absent. On the free T4 image
+    flash-attn is intentionally not installed because its native build is
+    unreliable under the provided Python 3.12 environment. Use native PyTorch
+    SDPA instead, with fp16 on T4 for tensor-core execution.
+    """
+    attention = WAN / "wan" / "modules" / "attention.py"
+    text = attention.read_text(encoding="utf-8")
+    marker = "WAN_T4_SDPA_FALLBACK_PATCH"
+    if marker in text:
+        print("WAN_ATTENTION_PATCH_OK cached", flush=True)
+        return
+
+    pattern = re.compile(
+        r"    else:\n"
+        r"        assert FLASH_ATTN_2_AVAILABLE\n"
+        r"        x = flash_attn\.flash_attn_varlen_func\(.*?\n"
+        r"        \)\.unflatten\(0, \(b, lq\)\)",
+        re.DOTALL,
+    )
+
+    replacement = '''    else:\n        if FLASH_ATTN_2_AVAILABLE:\n            x = flash_attn.flash_attn_varlen_func(\n                q=q,\n                k=k,\n                v=v,\n                cu_seqlens_q=torch.cat([q_lens.new_zeros([1]), q_lens]).cumsum(\n                    0, dtype=torch.int32).to(q.device, non_blocking=True),\n                cu_seqlens_k=torch.cat([k_lens.new_zeros([1]), k_lens]).cumsum(\n                    0, dtype=torch.int32).to(q.device, non_blocking=True),\n                max_seqlen_q=lq,\n                max_seqlen_k=lk,\n                dropout_p=dropout_p,\n                softmax_scale=softmax_scale,\n                causal=causal,\n                window_size=window_size,\n                deterministic=deterministic).unflatten(0, (b, lq))\n        else:\n            # WAN_T4_SDPA_FALLBACK_PATCH\n            # The upstream WanModel calls flash_attention() directly, which\n            # otherwise asserts when flash-attn is unavailable. Run each\n            # variable-length sequence through native PyTorch SDPA. Convert\n            # to fp16 because T4 tensor cores natively accelerate fp16.\n            if window_size != (-1, -1):\n                warnings.warn('T4 SDPA fallback ignores Wan local window_size.')\n            q0 = k0 = 0\n            chunks = []\n            q_lengths = [int(z) for z in q_lens.detach().cpu().tolist()]\n            k_lengths = [int(z) for z in k_lens.detach().cpu().tolist()]\n            for qlen, klen in zip(q_lengths, k_lengths):\n                qi = q[q0:q0 + qlen].transpose(0, 1).unsqueeze(0).to(torch.float16)\n                ki = k[k0:k0 + klen].transpose(0, 1).unsqueeze(0).to(torch.float16)\n                vi = v[k0:k0 + klen].transpose(0, 1).unsqueeze(0).to(torch.float16)\n                if qi.size(1) != ki.size(1):\n                    if qi.size(1) % ki.size(1) != 0:\n                        raise RuntimeError('WAN_T4_SDPA_FATAL: incompatible Q/K head counts')\n                    repeats = qi.size(1) // ki.size(1)\n                    ki = ki.repeat_interleave(repeats, dim=1)\n                    vi = vi.repeat_interleave(repeats, dim=1)\n                yi = torch.nn.functional.scaled_dot_product_attention(\n                    qi, ki, vi,\n                    attn_mask=None,\n                    dropout_p=dropout_p,\n                    is_causal=causal,\n                    scale=softmax_scale,\n                )\n                yi = yi.squeeze(0).transpose(0, 1)\n                if qlen < lq:\n                    pad = yi.new_zeros((lq - qlen, yi.size(1), yi.size(2)))\n                    yi = torch.cat([yi, pad], dim=0)\n                chunks.append(yi)\n                q0 += qlen\n                k0 += klen\n            x = torch.stack(chunks, dim=0).to(v.dtype)'''
+
+    patched, count = pattern.subn(replacement, text, count=1)
+    if count != 1:
+        raise RuntimeError("WAN_PATCH_FATAL: upstream flash-attention block not found")
+    attention.write_text(patched, encoding="utf-8")
+    print("WAN_ATTENTION_PATCH_OK applied T4 SDPA fallback", flush=True)
+
+
 def prepare():
     WORK.mkdir(parents=True, exist_ok=True)
     OUT.mkdir(parents=True, exist_ok=True)
     run("nvidia-smi")
     if not WAN.exists():
         run("git", "clone", "--no-tags", "--depth", "1", WAN_REPO, WAN)
+    patch_wan_attention_for_t4()
     if not (WORK / ".deps_ok").exists():
         run(sys.executable, "-m", "pip", "install", "-q", "-U", "huggingface_hub", "ftfy", "imageio", "imageio-ffmpeg")
         # The upstream requirements include flash_attn. On the free Lightning
         # T4 Python 3.12 image it may try to build native code and abort before
-        # Wan starts. Wan2.1 has a native PyTorch SDPA fallback when flash-attn
-        # is unavailable, so exclude only that optional accelerator package.
+        # Wan starts. Exclude only that package; the runtime patch above handles
+        # WanModel's direct flash_attention() call with native PyTorch SDPA.
         requirements = WAN / "requirements.txt"
         filtered = WORK / "requirements-no-flash-attn.txt"
         lines = requirements.read_text(encoding="utf-8").splitlines()
