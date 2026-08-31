@@ -61,7 +61,10 @@ jobs:
           elif 't4' not in str(s.machine).lower():
               s.switch_machine(Machine.T4)
 
+          # Lightning upload_file paths are relative to the Studio filesystem
+          # root (/teamspace/studios/this_studio), not the shell's ~/ directory.
           remote = 'virtual_singer_identity_pack'
+          remote_root = f'/teamspace/studios/this_studio/{remote}'
           s.upload_file('app/virtual_singer/generate_master_identity.py', remote_path=f'{remote}/generate_master_identity.py')
           s.upload_file('app/virtual_singer/generate_identity_pack.py', remote_path=f'{remote}/generate_identity_pack.py')
           s.upload_file('app/virtual_singer/identity_config.json', remote_path=f'{remote}/identity_config.json')
@@ -72,7 +75,7 @@ jobs:
               '"accelerate==1.0.1" safetensors invisible_watermark pillow'
           )
           command = (
-              f'cd ~/{remote} && {install} && '
+              f'cd {remote_root} && pwd && ls -la && {install} && '
               'python generate_master_identity.py --seed 44031 --steps 24 --output virtual_singer_master.png && '
               'python generate_identity_pack.py --input virtual_singer_master.png --output-dir identity_pack --steps 20 --strength 0.28 --seed 44031'
           )
