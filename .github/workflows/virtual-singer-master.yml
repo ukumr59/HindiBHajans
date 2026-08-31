@@ -18,6 +18,28 @@ jobs:
       - name: Install Lightning SDK
         run: pip install -q lightning-sdk
 
+      - name: Validate singer reference secret
+        env:
+          SINGER_REFERENCE_B64: ${{ secrets.SINGER_REFERENCE_B64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SINGER_REFERENCE_B64:-}" ]; then
+            echo "ERROR: SINGER_REFERENCE_B64 is not configured."
+            exit 1
+          fi
+          python - <<'PY'
+          import base64, os
+          from pathlib import Path
+          raw = os.environ["SINGER_REFERENCE_B64"]
+          data = base64.b64decode(raw, validate=True)
+          if not data.startswith(b"\x89PNG") and not data.startswith(b"\xff\xd8\xff"):
+              raise SystemExit("ERROR: SINGER_REFERENCE_B64 is not a PNG/JPEG image")
+          if len(data) > 48 * 1024:
+              raise SystemExit("ERROR: decoded reference is larger than the practical GitHub secret limit; use a compressed JPEG reference")
+          Path(os.environ["RUNNER_TEMP"] + "/singer_reference.jpg").write_bytes(data)
+          print(f"REFERENCE_OK bytes={len(data)}")
+          PY
+
       - name: Resolve Lightning membership
         env:
           LIGHTNING_USER_ID: ${{ secrets.LIGHTNING_USER_ID }}
@@ -44,6 +66,7 @@ jobs:
           LIGHTNING_TEAMSPACE: ${{ env.LIGHTNING_TEAMSPACE }}
           LIGHTNING_USERNAME: ${{ env.LIGHTNING_USERNAME }}
           LIGHTNING_ORG: ${{ env.LIGHTNING_ORG }}
+          SINGER_REFERENCE_B64: ${{ secrets.SINGER_REFERENCE_B64 }}
         run: |
           set -euo pipefail
           rm -rf output
@@ -62,19 +85,18 @@ jobs:
           elif 't4' not in str(s.machine).lower():
               s.switch_machine(Machine.T4)
 
-          # IMPORTANT: Lightning upload_file relative paths are rooted at the
-          # Studio filesystem (/teamspace/studios/this_studio), not ~/.
-          remote = 'virtual_singer_master_run_v4'
+          remote = 'virtual_singer_master_run_v5'
           studio_root = '/teamspace/studios/this_studio'
           remote_abs = f'{studio_root}/{remote}'
           s.run(f'rm -rf {remote_abs} && mkdir -p {remote_abs}')
           s.upload_file('app/virtual_singer/generate_master_identity.py', remote_path=f'{remote}/generate_master_identity.py')
           s.upload_file('app/virtual_singer/identity_config.json', remote_path=f'{remote}/identity_config.json')
+          s.upload_file(os.path.join(os.environ['RUNNER_TEMP'], 'singer_reference.jpg'), remote_path=f'{remote}/reference_input.jpg')
 
           install = (
               'python -m pip install -q --upgrade '
               '"numpy<2" "diffusers==0.31.0" "transformers==4.46.3" '
-              '"accelerate==1.0.1" safetensors invisible_watermark'
+              '"accelerate==1.0.1" safetensors invisible_watermark insightface opencv-python-headless'
           )
           command = f'''cd {remote_abs} && {install} && python - <<'PY2'
           import numpy
@@ -82,27 +104,28 @@ jobs:
           import transformers
           print("ENV_OK", numpy.__version__, diffusers.__version__, transformers.__version__, flush=True)
           PY2
-          python generate_master_identity.py --seed 71284 --steps 30 --output virtual_singer_master_v2.png
-          test -s virtual_singer_master_v2.png
-          sha256sum virtual_singer_master_v2.png'''
+          export SINGER_REFERENCE_PATH=reference_input.jpg
+          python generate_master_identity.py --seed 71284 --steps 30 --reference reference_input.jpg --output virtual_singer_master_v3.png
+          test -s virtual_singer_master_v3.png
+          sha256sum virtual_singer_master_v3.png'''
           out, code = s.run_with_exit_code(command)
           print(out[-30000:], flush=True)
           if code != 0:
               raise SystemExit(code)
 
-          s.download_file(f'{remote}/virtual_singer_master_v2.png', 'output/virtual_singer_master_v2.png')
+          s.download_file(f'{remote}/virtual_singer_master_v3.png', 'output/virtual_singer_master_v3.png')
           s.stop()
           PY
 
       - name: Validate master image
         run: |
           set -euo pipefail
-          test -s output/virtual_singer_master_v2.png
-          file output/virtual_singer_master_v2.png
+          test -s output/virtual_singer_master_v3.png
+          file output/virtual_singer_master_v3.png
 
       - name: Upload virtual singer master
         uses: actions/upload-artifact@v4
         with:
-          name: bhajan-aabha-virtual-singer-master-v2
-          path: output/virtual_singer_master_v2.png
+          name: bhajan-aabha-virtual-singer-master-v3
+          path: output/virtual_singer_master_v3.png
           if-no-files-found: error
