@@ -61,7 +61,6 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           import os
-          from pathlib import Path
           from lightning_sdk import Machine, Studio
 
           owner = os.environ.get('LIGHTNING_USERNAME') or os.environ.get('LIGHTNING_ORG')
@@ -78,38 +77,24 @@ jobs:
           elif 't4' not in str(s.machine).lower():
               s.switch_machine(Machine.T4)
 
-          # Keep both files together so the worker can resolve wan_request.json
-          # relative to its own location, regardless of the Studio working dir.
+          # upload_file paths are relative to the Studio home. Keep the worker
+          # and request together and execute from that directory so the worker's
+          # own relative-path logic is deterministic; no remote filesystem scan
+          # is needed.
           remote_dir = 'wan2_smoke_input'
           s.upload_file('app/lightning_wan2_worker.py', remote_path=f'{remote_dir}/lightning_wan2_worker.py')
           s.upload_file('smoke/wan_request.json', remote_path=f'{remote_dir}/wan_request.json')
 
-          locate, locate_code = s.run_with_exit_code(
-              "find /teamspace/studios -maxdepth 4 -type f "
-              "\\( -name lightning_wan2_worker.py -o -name wan_request.json \\) -print"
+          print(f'WAN_REMOTE_DIR={remote_dir}', flush=True)
+          out, code = s.run_with_exit_code(
+              f'cd ~/{remote_dir} && pwd && ls -la && python lightning_wan2_worker.py'
           )
-          print('WAN_REMOTE_FILES:')
-          print(locate)
-          if locate_code != 0:
-              raise SystemExit(locate_code)
-
-          worker_candidates = [
-              line.strip() for line in locate.splitlines()
-              if line.strip().endswith('/lightning_wan2_worker.py')
-          ]
-          if not worker_candidates:
-              raise RuntimeError('WAN_UPLOAD_FATAL: lightning_wan2_worker.py not found after upload')
-          worker = worker_candidates[-1]
-          print(f'WAN_WORKER_PATH={worker}')
-
-          out, code = s.run_with_exit_code(f'python {worker}')
-          print(out[-30000:])
+          print(out[-30000:], flush=True)
           if code != 0:
               raise SystemExit(code)
 
-          worker_root = str(Path(worker).parent)
-          s.download_file(f'{worker_root}/wan2_worker/scenes/scene_1.mp4', 'smoke/wan2_scene.mp4')
-          s.download_file(f'{worker_root}/wan2_worker/wan_manifest.json', 'smoke/wan_manifest.json')
+          s.download_file(f'{remote_dir}/wan2_worker/scenes/scene_1.mp4', 'smoke/wan2_scene.mp4')
+          s.download_file(f'{remote_dir}/wan2_worker/wan_manifest.json', 'smoke/wan_manifest.json')
           s.stop()
           PY
 
