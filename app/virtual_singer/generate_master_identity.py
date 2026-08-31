@@ -74,8 +74,18 @@ def main() -> None:
         image_encoder_folder="models/image_encoder",
     )
 
+    # Keep the IP-Adapter vision encoder on CUDA in float32. The main SDXL
+    # components remain CPU-offloaded for T4 memory efficiency. Removing the
+    # offload hook from this small encoder prevents accelerate from moving
+    # its weights back to CPU while the image tensor is on CUDA.
     if getattr(pipe, "image_encoder", None) is not None:
-        pipe.image_encoder = pipe.image_encoder.float()
+        try:
+            from accelerate.hooks import remove_hook_from_module
+            remove_hook_from_module(pipe.image_encoder, recurse=True)
+        except Exception:
+            pass
+        pipe.image_encoder = pipe.image_encoder.to(device="cuda", dtype=torch.float32)
+        print("IP_ADAPTER_IMAGE_ENCODER_DEVICE=cuda", flush=True)
         print("IP_ADAPTER_IMAGE_ENCODER_DTYPE=float32", flush=True)
 
     pipe.set_ip_adapter_scale(0.92)
