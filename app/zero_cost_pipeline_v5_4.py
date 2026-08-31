@@ -13,21 +13,6 @@ MAX_SECONDS = 300
 SCENE_SECONDS = 15
 DJ_PROMPT = music.DJ_MUSIC_PROMPT
 
-MOTION = [
-    "slow cinematic push-in toward the deity, subtle garment motion, flickering diyas and drifting incense",
-    "gentle lateral dolly around the deity, jewelry catching warm light, flower petals floating through foreground",
-    "low-angle rise from rows of diyas toward the deity, sunrise rays expanding behind the crown",
-    "slow orbit around the deity with temple pillars parallaxing naturally, bells moving slightly, incense haze drifting",
-    "forward crane through marigold flowers toward the deity, shallow depth of field, warm practical lamp flicker",
-    "wide establishing sweep of the temple courtyard resolving on the deity, flags and fabric moving gently",
-    "hero close-up with restrained rack focus from the bow to the deity's compassionate face, natural detail",
-    "overhead-to-eye-level devotional camera descent, petals and dust motes moving in sunbeams",
-    "side tracking shot past glowing oil lamps revealing the same deity, rich golden highlights and realistic depth",
-    "slow pull-back revealing the full shrine while keeping the deity dominant, subtle bells and incense motion",
-    "cinematic push through a foreground arch toward the deity during a musical build, brighter sunrise",
-    "majestic final reveal with a gentle circular camera move, petals rising and radiant temple lights",
-]
-
 
 def target_seconds() -> int:
     value = int(os.getenv("VIDEO_SECONDS", "180"))
@@ -58,34 +43,17 @@ def long_lyrics(seconds: int) -> str:
 
 
 def scene_prompts(count: int) -> list[str]:
-    return [
-        f"{MOTION[i % len(MOTION)]}. Lord Rama is the exact same canonical Hindu deity from the supplied reference image, serene compassionate divine face, blue-tinted skin, golden crown, yellow silk dhoti, ornate jewelry, bow, traditional sacred iconography. Magnificent Ayodhya-inspired temple courtyard, warm cinematic golden light, marigold flowers, diyas and incense haze. Premium modern devotional YouTube music-video cinematography, realistic natural motion, stable identity, no morphing, no duplicate deity, no text, no watermark, no modern clothing."
-        for i in range(count)
-    ]
+    # Text prompts are retained only for metadata compatibility. The stock
+    # visual pipeline overrides the image/video generators and does not send
+    # these prompts to Agnes.
+    return [f"Unique devotional stock-footage scene {i + 1}" for i in range(count)]
 
 
 def make_srt(path: Path, seconds: int):
-    lyrics = [
-        "मन में बसो रघुनंदन, चरणों में मेरा ध्यान",
-        "राम नाम की ज्योति जले, रोशन हो हर प्राण",
-        "तेरे नाम की धुन बजे, हर धड़कन में आज",
-        "श्री राम जय राम, जय जय राम",
-        "मेरे मन के दीप में, बसते श्री राम",
-        "दुख की घड़ी में साथ दो, हे दीनदयाल भगवान",
-        "तेरा नाम ही आसरा, तेरा नाम ही सम्मान",
-        "अयोध्या के राजकुमार, करुणा के भंडार",
-        "जय श्री राम की गूंज उठे, नभ से धरती तक",
-        "ढोल बजे और शंख बजे, प्रेम बहे हर पल",
-        "श्री राम जय राम, जय जय राम",
-        "जय जय राम... जय जय राम...",
-    ]
-    rows = []
-    for n, start in enumerate(range(0, seconds, 6), 1):
-        end = min(seconds, start + 6)
-        h1, r1 = divmod(start, 3600); m1, s1 = divmod(r1, 60)
-        h2, r2 = divmod(end, 3600); m2, s2 = divmod(r2, 60)
-        rows += [str(n), f"{h1:02}:{m1:02}:{s1:02},000 --> {h2:02}:{m2:02}:{s2:02},000", lyrics[(n - 1) % len(lyrics)], ""]
-    path.write_text("\n".join(rows), encoding="utf-8")
+    # Deliberately disabled: generated lyric timing was not reliably aligned
+    # to the sung vocal track. The production video must contain NO burned-in
+    # Hindi subtitles and no subtitle sidecar is published.
+    path.unlink(missing_ok=True)
 
 
 def configure() -> int:
@@ -97,7 +65,8 @@ def configure() -> int:
     base.PACK["scene_prompts"] = scene_prompts(seconds // SCENE_SECONDS)
     base.make_srt = lambda path: make_srt(path, seconds)
     print(f"ARCHITECTURE=v5.4 CLEAN_FULL_LENGTH ZERO_COST=true VIDEO_SECONDS={seconds} SCENES={seconds // SCENE_SECONDS}")
-    print("VISUAL_BACKEND=Agnes Image 2.1 Flash + Agnes Video v2.0")
+    print("VISUAL_BACKEND=Pexels stock video API")
+    print("SUBTITLES=disabled")
     print("MUSIC_BACKEND=ACE-Step v1.5 official public ZeroGPU Space via live Gradio API")
     print("MUSIC_DURATION=single full-length song; no looping")
     print("MUSIC_STYLE=LOUD_MODERN_DEVOTIONAL_EDM_DJ_READY bpm=128")
@@ -124,12 +93,6 @@ def main():
     base.ACESTEP_ROOT = "gradio://ACE-Step/Ace-Step-v1.5"
     base.main()
 
-    # base.main() already assembles the scenes into the final named MP4 and
-    # prints VIDEO_OK. The previous implementation incorrectly treated every
-    # MP4 in output/videos as a final output; that directory also contains the
-    # 12 intermediate scene clips, so a successful run was falsely rejected
-    # with "expected exactly one final MP4, found 13". Identify the final by
-    # its v5 filename instead, then remove intermediates only after success.
     final_candidates = sorted(base.VIDEOS.glob("*_bhajan-aabha_{}_v5.mp4".format(base.PACK["slug"])))
     if len(final_candidates) != 1:
         raise RuntimeError(f"OUTPUT_FATAL: expected exactly one final named MP4, found {len(final_candidates)}")
@@ -142,6 +105,11 @@ def main():
         "architecture": "v5.4-clean-full-length",
         "target_duration_range_sec": "180-300",
         "target_duration_sec": seconds,
+        "visual_backend": "Pexels stock video API",
+        "visual_strategy": "unique_stock_clip_per_scene_with_persistent_no_reuse_ledger",
+        "pexels_no_reuse": True,
+        "subtitles": False,
+        "hindi_subtitles": False,
         "music_backend": "ACE-Step v1.5 official Hugging Face ZeroGPU Space via Gradio Client",
         "music_api_mode": "live_gradio_49_input_contract",
         "music_input_contract": "4 wrapper + 45 generation = 49 total",
@@ -165,8 +133,6 @@ def main():
     state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
     (base.OUT / "manifest.json").write_text(json.dumps({"videos": [state]}, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    # Do not delete the final output. Intermediate scene clips are not final
-    # deliverables; remove them only after the final MP4 and DJ master exist.
     for scene in base.VIDEOS.glob("scene_*.mp4"):
         scene.unlink()
     print(f"LONGFORM_OK duration={seconds}s scenes={seconds // SCENE_SECONDS}")
