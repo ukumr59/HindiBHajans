@@ -85,11 +85,9 @@ jobs:
           elif 't4' not in str(s.machine).lower():
               s.switch_machine(Machine.T4)
 
-          remote = 'virtual_singer_master_run_v8'
+          remote = 'virtual_singer_master_run_v9'
           s.run(f'rm -rf {remote} && mkdir -p {remote}')
 
-          # Lightning SDK upload_file remote_path is relative to the Studio home.
-          # Do not pass /teamspace/studios/this_studio/... here.
           s.upload_file('app/virtual_singer/generate_master_identity.py', remote_path=f'{remote}/generate_master_identity.py')
           s.upload_file('app/virtual_singer/identity_config.json', remote_path=f'{remote}/identity_config.json')
           s.upload_file(os.path.join(os.environ['RUNNER_TEMP'], 'singer_reference.jpg'), remote_path=f'{remote}/reference_input.jpg')
@@ -99,7 +97,25 @@ jobs:
               '"numpy<2" "diffusers==0.31.0" "transformers==4.46.3" '
               '"accelerate==1.0.1" safetensors invisible_watermark insightface opencv-python-headless'
           )
-          command = f'''cd {remote} && test -s generate_master_identity.py && test -s reference_input.jpg && ls -lh generate_master_identity.py identity_config.json reference_input.jpg && {install} && python - <<'PY2'
+          command = f'''set -euo pipefail
+          echo "=== LOCATING UPLOADED FILES ==="
+          GEN=$(find /teamspace/studios/this_studio -type f -name generate_master_identity.py -print -quit 2>/dev/null || true)
+          REF=$(find /teamspace/studios/this_studio -type f -name reference_input.jpg -print -quit 2>/dev/null || true)
+          CFG=$(find /teamspace/studios/this_studio -type f -name identity_config.json -print -quit 2>/dev/null || true)
+          test -n "$GEN" || {{ echo "ERROR: generate_master_identity.py was not found after upload"; exit 1; }}
+          test -n "$REF" || {{ echo "ERROR: reference_input.jpg was not found after upload"; exit 1; }}
+          test -n "$CFG" || {{ echo "ERROR: identity_config.json was not found after upload"; exit 1; }}
+          echo "LOCATED_GENERATOR=$GEN"
+          echo "LOCATED_REFERENCE=$REF"
+          echo "LOCATED_CONFIG=$CFG"
+          RUN_DIR=$(dirname "$GEN")
+          cd "$RUN_DIR"
+          test -s generate_master_identity.py
+          test -s reference_input.jpg
+          test -s identity_config.json
+          ls -lh generate_master_identity.py identity_config.json reference_input.jpg
+          {install}
+          python - <<'PY2'
           import numpy
           import diffusers
           import transformers
