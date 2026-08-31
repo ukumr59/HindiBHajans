@@ -85,24 +85,25 @@ jobs:
           elif 't4' not in str(s.machine).lower():
               s.switch_machine(Machine.T4)
 
-          remote = 'virtual_singer_master_run_v7'
-          studio_root = '/teamspace/studios/this_studio'
-          remote_abs = f'{studio_root}/{remote}'
-          s.run(f'rm -rf {remote_abs} && mkdir -p {remote_abs}')
-          s.upload_file('app/virtual_singer/generate_master_identity.py', remote_path=f'{remote_abs}/generate_master_identity.py')
-          s.upload_file('app/virtual_singer/identity_config.json', remote_path=f'{remote_abs}/identity_config.json')
-          s.upload_file(os.path.join(os.environ['RUNNER_TEMP'], 'singer_reference.jpg'), remote_path=f'{remote_abs}/reference_input.jpg')
+          remote = 'virtual_singer_master_run_v8'
+          s.run(f'rm -rf {remote} && mkdir -p {remote}')
+
+          # Lightning SDK upload_file remote_path is relative to the Studio home.
+          # Do not pass /teamspace/studios/this_studio/... here.
+          s.upload_file('app/virtual_singer/generate_master_identity.py', remote_path=f'{remote}/generate_master_identity.py')
+          s.upload_file('app/virtual_singer/identity_config.json', remote_path=f'{remote}/identity_config.json')
+          s.upload_file(os.path.join(os.environ['RUNNER_TEMP'], 'singer_reference.jpg'), remote_path=f'{remote}/reference_input.jpg')
 
           install = (
               'python -m pip install -q --upgrade '
               '"numpy<2" "diffusers==0.31.0" "transformers==4.46.3" '
               '"accelerate==1.0.1" safetensors invisible_watermark insightface opencv-python-headless'
           )
-          command = f'''cd {remote_abs} && {install} && python - <<'PY2'
-          import os
-          from pathlib import Path
-          p = Path("reference_input.jpg")
-          print(f"REMOTE_REFERENCE_OK bytes={{p.stat().st_size}}", flush=True)
+          command = f'''cd {remote} && test -s generate_master_identity.py && test -s reference_input.jpg && ls -lh generate_master_identity.py identity_config.json reference_input.jpg && {install} && python - <<'PY2'
+          import numpy
+          import diffusers
+          import transformers
+          print("ENV_OK", numpy.__version__, diffusers.__version__, transformers.__version__, flush=True)
           PY2
           export SINGER_REFERENCE_PATH=reference_input.jpg
           python generate_master_identity.py --seed 71284 --steps 30 --reference reference_input.jpg --output virtual_singer_master_v3.png
@@ -113,7 +114,7 @@ jobs:
           if code != 0:
               raise SystemExit(code)
 
-          s.download_file(f'{remote_abs}/virtual_singer_master_v3.png', 'output/virtual_singer_master_v3.png')
+          s.download_file(f'{remote}/virtual_singer_master_v3.png', 'output/virtual_singer_master_v3.png')
           s.stop()
           PY
 
