@@ -53,11 +53,7 @@ jobs:
           from lightning_sdk import Machine, Studio
 
           owner = os.environ.get('LIGHTNING_USERNAME') or os.environ.get('LIGHTNING_ORG')
-          kwargs = dict(
-              name='bhajan-aabha-virtual-singer',
-              teamspace=os.environ['LIGHTNING_TEAMSPACE'],
-              create_ok=True,
-          )
+          kwargs = dict(name='bhajan-aabha-virtual-singer', teamspace=os.environ['LIGHTNING_TEAMSPACE'], create_ok=True)
           kwargs['user' if os.environ.get('LIGHTNING_USERNAME') else 'org'] = owner
           s = Studio(**kwargs)
           status = str(s.status).lower()
@@ -66,21 +62,21 @@ jobs:
           elif 't4' not in str(s.machine).lower():
               s.switch_machine(Machine.T4)
 
-          # Use a fresh remote run directory so an old PNG can never be reused.
-          remote = 'virtual_singer_master_run_v2'
-          s.run(f'rm -rf ~/{remote} && mkdir -p ~/{remote}')
+          # IMPORTANT: Lightning upload_file relative paths are rooted at the
+          # Studio filesystem (/teamspace/studios/this_studio), not ~/.
+          remote = 'virtual_singer_master_run_v4'
+          studio_root = '/teamspace/studios/this_studio'
+          remote_abs = f'{studio_root}/{remote}'
+          s.run(f'rm -rf {remote_abs} && mkdir -p {remote_abs}')
           s.upload_file('app/virtual_singer/generate_master_identity.py', remote_path=f'{remote}/generate_master_identity.py')
           s.upload_file('app/virtual_singer/identity_config.json', remote_path=f'{remote}/identity_config.json')
 
           install = (
               'python -m pip install -q --upgrade '
-              '"numpy<2" '
-              '"diffusers==0.31.0" '
-              '"transformers==4.46.3" '
-              '"accelerate==1.0.1" '
-              'safetensors invisible_watermark'
+              '"numpy<2" "diffusers==0.31.0" "transformers==4.46.3" '
+              '"accelerate==1.0.1" safetensors invisible_watermark'
           )
-          command = f'''cd ~/{remote} && {install} && python - <<'PY2'
+          command = f'''cd {remote_abs} && {install} && python - <<'PY2'
           import numpy
           import diffusers
           import transformers
