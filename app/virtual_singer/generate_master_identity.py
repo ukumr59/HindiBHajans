@@ -64,6 +64,15 @@ def main() -> None:
         weight_name="ip-adapter_sdxl.bin",
         image_encoder_folder="models/image_encoder",
     )
+
+    # T4/CPU-offload runs can leave the CLIP vision encoder in float16 while
+    # its convolution receives a CPU float16 tensor. CPU float16 convolution
+    # is not reliably supported. Keep only the vision encoder in float32;
+    # the SDXL denoiser/VAEs remain float16 for T4 memory efficiency.
+    if getattr(pipe, "image_encoder", None) is not None:
+        pipe.image_encoder = pipe.image_encoder.float()
+        print("IP_ADAPTER_IMAGE_ENCODER_DTYPE=float32", flush=True)
+
     pipe.set_ip_adapter_scale(0.92)
     if hasattr(pipe, "vae"):
         pipe.vae.enable_slicing()
