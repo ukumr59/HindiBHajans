@@ -21,136 +21,21 @@ API_KEY = os.getenv("PEXELS_API_KEY", "").strip()
 WIDTH, HEIGHT = 720, 1280
 FPS = 24
 
-# The devotional pipeline is intentionally strict. Generic scenery is NOT a
-# valid fallback for a Hindu devotional song. Every scene has a religiously
-# coherent visual brief and the search is never allowed to silently degrade
-# into mountains, waterfalls, generic "India", etc.
 SCENE_PLANS = {
-    1: {
-        "name": "Shri Ram invocation",
-        "queries": [
-            "Lord Rama idol Hindu temple devotional",
-            "Shri Ram murti temple diya",
-            "Lord Rama statue Indian temple worship",
-        ],
-        "required": ["rama", "ram", "shri ram"],
-        "preferred": ["rama", "ram", "shri ram", "ayodhya", "temple", "diya", "idol", "murti"],
-    },
-    2: {
-        "name": "Raghunandan in the heart",
-        "queries": [
-            "Lord Rama close up idol Hindu devotional",
-            "Shri Ram murti close up temple",
-            "Lord Rama deity worship diya",
-        ],
-        "required": ["rama", "ram", "shri ram"],
-        "preferred": ["rama", "ram", "shri ram", "deity", "idol", "murti", "temple", "diya"],
-    },
-    3: {
-        "name": "Ram naam jyoti",
-        "queries": [
-            "Lord Rama idol diya aarti Hindu temple",
-            "Shri Ram deity oil lamp devotional",
-            "Rama temple aarti diya worship",
-        ],
-        "required": ["rama", "ram", "shri ram"],
-        "preferred": ["rama", "ram", "shri ram", "diya", "aarti", "lamp", "temple", "idol"],
-    },
-    4: {
-        "name": "Jai Shri Ram",
-        "queries": [
-            "Lord Rama deity Hindu devotional temple",
-            "Shri Ram murti Indian temple bells",
-            "Lord Rama statue devotional worship India",
-        ],
-        "required": ["rama", "ram", "shri ram"],
-        "preferred": ["rama", "ram", "shri ram", "deity", "murti", "idol", "temple", "bells"],
-    },
-    5: {
-        "name": "Ram as protector",
-        "queries": [
-            "Lord Rama protecting devotee Hindu devotional",
-            "Shri Ram devotee prayer temple",
-            "Lord Rama deity devotee worship",
-        ],
-        "required": ["rama", "ram", "shri ram"],
-        "preferred": ["rama", "ram", "shri ram", "devotee", "prayer", "temple", "idol"],
-    },
-    6: {
-        "name": "Ram naam as refuge",
-        "queries": [
-            "Lord Rama idol folded hands devotee Hindu temple",
-            "Shri Ram deity prayer devotional India",
-            "Rama murti devotee namaskar temple",
-        ],
-        "required": ["rama", "ram", "shri ram"],
-        "preferred": ["rama", "ram", "shri ram", "prayer", "namaskar", "devotee", "temple", "murti"],
-    },
-    7: {
-        "name": "Power of Ram naam",
-        "queries": [
-            "Lord Rama and Hanuman Hindu devotional temple",
-            "Shri Ram Hanuman murti worship",
-            "Rama Hanuman devotional statue India",
-        ],
-        "required": ["rama", "ram", "hanuman"],
-        "preferred": ["rama", "ram", "hanuman", "temple", "idol", "murti", "devotional"],
-    },
-    8: {
-        "name": "Prince of Ayodhya",
-        "queries": [
-            "Lord Rama Ayodhya Ram Mandir devotional",
-            "Shri Ram Ram Mandir Ayodhya temple",
-            "Ayodhya Ram temple Lord Rama deity",
-        ],
-        "required": ["rama", "ram", "ayodhya"],
-        "preferred": ["rama", "ram", "ayodhya", "mandir", "temple", "deity", "idol"],
-    },
-    9: {
-        "name": "Jai Shri Ram chorus",
-        "queries": [
-            "Lord Rama devotees Hindu temple worship",
-            "Shri Ram temple devotees saffron devotional",
-            "Ram bhakti devotees temple aarti",
-        ],
-        "required": ["rama", "ram"],
-        "preferred": ["rama", "ram", "devotees", "temple", "aarti", "saffron", "bhakti"],
-    },
-    10: {
-        "name": "Ram Hanuman aarti",
-        "queries": [
-            "Lord Rama Hanuman aarti Hindu temple",
-            "Shri Ram Hanuman devotional worship diya",
-            "Rama Hanuman temple aarti devotees",
-        ],
-        "required": ["rama", "ram", "hanuman"],
-        "preferred": ["rama", "ram", "hanuman", "aarti", "diya", "temple", "worship"],
-    },
-    11: {
-        "name": "Final Ram hero shot",
-        "queries": [
-            "Lord Rama deity hero shot Hindu temple",
-            "Shri Ram murti beautiful devotional temple",
-            "Lord Rama statue close up Indian temple",
-        ],
-        "required": ["rama", "ram", "shri ram"],
-        "preferred": ["rama", "ram", "shri ram", "deity", "idol", "murti", "temple", "close up"],
-    },
-    12: {
-        "name": "Jai Jai Ram closing",
-        "queries": [
-            "Lord Rama idol diya temple closing devotional",
-            "Shri Ram deity aarti Hindu temple final",
-            "Lord Rama murti glowing diya devotional",
-        ],
-        "required": ["rama", "ram", "shri ram"],
-        "preferred": ["rama", "ram", "shri ram", "diya", "aarti", "temple", "idol", "murti"],
-    },
+    1: {"name": "Shri Ram invocation", "queries": ["Lord Rama idol Hindu temple devotional", "Shri Ram murti temple diya", "Lord Rama statue Indian temple worship"], "required": ["rama", "ram", "shri ram"], "preferred": ["rama", "ram", "shri ram", "ayodhya", "temple", "diya", "idol", "murti"]},
+    2: {"name": "Raghunandan in the heart", "queries": ["Lord Rama close up idol Hindu devotional", "Shri Ram murti close up temple", "Lord Rama deity worship diya"], "required": ["rama", "ram", "shri ram"], "preferred": ["rama", "ram", "shri ram", "deity", "idol", "murti", "temple", "diya"]},
+    3: {"name": "Ram naam jyoti", "queries": ["Lord Rama idol diya aarti Hindu temple", "Shri Ram deity oil lamp devotional", "Rama temple aarti diya worship"], "required": ["rama", "ram", "shri ram"], "preferred": ["rama", "ram", "shri ram", "diya", "aarti", "lamp", "temple", "idol"]},
+    4: {"name": "Jai Shri Ram", "queries": ["Lord Rama deity Hindu devotional temple", "Shri Ram murti Indian temple bells", "Lord Rama statue devotional worship India"], "required": ["rama", "ram", "shri ram"], "preferred": ["rama", "ram", "shri ram", "deity", "murti", "idol", "temple", "bells"]},
+    5: {"name": "Ram as protector", "queries": ["Lord Rama protecting devotee Hindu devotional", "Shri Ram devotee prayer temple", "Lord Rama deity devotee worship"], "required": ["rama", "ram", "shri ram"], "preferred": ["rama", "ram", "shri ram", "devotee", "prayer", "temple", "idol"]},
+    6: {"name": "Ram naam as refuge", "queries": ["Lord Rama idol folded hands devotee Hindu temple", "Shri Ram deity prayer devotional India", "Rama murti devotee namaskar temple"], "required": ["rama", "ram", "shri ram"], "preferred": ["rama", "ram", "shri ram", "prayer", "namaskar", "devotee", "temple", "murti"]},
+    7: {"name": "Power of Ram naam", "queries": ["Lord Rama and Hanuman Hindu devotional temple", "Shri Ram Hanuman murti worship", "Rama Hanuman devotional statue India"], "required": ["rama", "ram", "hanuman"], "preferred": ["rama", "ram", "hanuman", "temple", "idol", "murti", "devotional"]},
+    8: {"name": "Prince of Ayodhya", "queries": ["Lord Rama Ayodhya Ram Mandir devotional", "Shri Ram Ram Mandir Ayodhya temple", "Ayodhya Ram temple Lord Rama deity"], "required": ["rama", "ram", "ayodhya"], "preferred": ["rama", "ram", "ayodhya", "mandir", "temple", "deity", "idol"]},
+    9: {"name": "Jai Shri Ram chorus", "queries": ["Lord Rama devotees Hindu temple worship", "Shri Ram temple devotees saffron devotional", "Ram bhakti devotees temple aarti"], "required": ["rama", "ram"], "preferred": ["rama", "ram", "devotees", "temple", "aarti", "saffron", "bhakti"]},
+    10: {"name": "Ram Hanuman aarti", "queries": ["Lord Rama Hanuman aarti Hindu temple", "Shri Ram Hanuman devotional worship diya", "Rama Hanuman temple aarti devotees"], "required": ["rama", "ram", "hanuman"], "preferred": ["rama", "ram", "hanuman", "aarti", "diya", "temple", "worship"]},
+    11: {"name": "Final Ram hero shot", "queries": ["Lord Rama deity hero shot Hindu temple", "Shri Ram murti beautiful devotional temple", "Lord Rama statue close up Indian temple"], "required": ["rama", "ram", "shri ram"], "preferred": ["rama", "ram", "shri ram", "deity", "idol", "murti", "temple", "close up"]},
+    12: {"name": "Jai Jai Ram closing", "queries": ["Lord Rama idol diya temple closing devotional", "Shri Ram deity aarti Hindu temple final", "Lord Rama murti glowing diya devotional"], "required": ["rama", "ram", "shri ram"], "preferred": ["rama", "ram", "shri ram", "diya", "aarti", "temple", "idol", "murti"]},
 }
 
-# Hard rejection vocabulary. This is deliberately broader than just
-# "mosque": a devotional Hindu reel must not contain another religion's
-# unmistakable sacred architecture/symbols.
 FORBIDDEN_TERMS = {
     "mosque", "masjid", "minaret", "minar", "islamic", "quran", "muslim",
     "church", "chapel", "cathedral", "cross", "christian", "bible",
@@ -186,12 +71,7 @@ def _save_ledger(data: dict) -> None:
 def _api(session: requests.Session, query: str, per_page: int = 80) -> dict:
     if not API_KEY:
         raise RuntimeError("SETUP_REQUIRED: PEXELS_API_KEY repository secret is missing")
-    r = session.get(
-        PEXELS_ROOT,
-        params={"query": query, "size": "medium", "per_page": per_page},
-        headers={"Authorization": API_KEY},
-        timeout=45,
-    )
+    r = session.get(PEXELS_ROOT, params={"query": query, "size": "medium", "per_page": per_page}, headers={"Authorization": API_KEY}, timeout=45)
     if r.status_code == 429:
         raise RuntimeError("PEXELS_RATE_LIMIT: Pexels API rate limit reached; stop rather than hammering the API")
     r.raise_for_status()
@@ -210,41 +90,28 @@ def _candidate_file(video: dict) -> dict | None:
 
 def _text_blob(video: dict) -> str:
     user = video.get("user") or {}
-    fields = [
-        video.get("url", ""),
-        video.get("image", ""),
-        user.get("name", ""),
-        user.get("url", ""),
-    ]
+    fields = [video.get("url", ""), video.get("image", ""), user.get("name", ""), user.get("url", "")]
     return " ".join(str(x).lower() for x in fields if x)
 
 
 def _forbidden(video: dict) -> str | None:
     blob = _text_blob(video)
     for term in FORBIDDEN_TERMS:
-        if re.search(rf"\\b{re.escape(term)}\\b", blob):
+        if re.search(rf"\b{re.escape(term)}\b", blob):
             return term
     return None
 
 
 def _matches_scene(video: dict, plan: dict) -> tuple[bool, int, str]:
-    # Pexels' API does not provide a reliable semantic vision label, so use
-    # title/URL metadata as a hard gate. Crucially, no generic scenery is
-    # accepted when the required deity/topic cannot be established.
     blob = _text_blob(video)
     forbidden = _forbidden(video)
     if forbidden:
         return False, -1000, f"forbidden={forbidden}"
-
-    # Pexels often puts the search subject in the result URL. Require at least
-    # one scene-specific term to appear in returned metadata. This is much
-    # safer than accepting the first random result for a broad query.
-    required_hits = [term for term in plan["required"] if re.search(rf"\\b{re.escape(term)}\\b", blob)]
+    required_hits = [term for term in plan["required"] if re.search(rf"\b{re.escape(term)}\b", blob)]
     if not required_hits:
         return False, -900, "required devotional subject absent from metadata"
-
     score = 100 * len(required_hits)
-    preferred_hits = [term for term in plan["preferred"] if re.search(rf"\\b{re.escape(term)}\\b", blob)]
+    preferred_hits = [term for term in plan["preferred"] if re.search(rf"\b{re.escape(term)}\b", blob)]
     score += 10 * len(preferred_hits)
     return True, score, f"required={required_hits}; preferred={preferred_hits}"
 
@@ -286,10 +153,7 @@ def _download(session: requests.Session, url: str, path: Path) -> None:
 
 
 def _render_clip(source: Path, target: Path, index: int, seed: int) -> None:
-    probe = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(source)],
-        capture_output=True, text=True, check=True,
-    )
+    probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(source)], capture_output=True, text=True, check=True)
     duration = max(1.0, float(probe.stdout.strip() or "1"))
     max_start = max(0.0, duration - 15.0)
     start = (seed % 1000) / 1000.0 * max_start if max_start else 0.0
@@ -297,26 +161,14 @@ def _render_clip(source: Path, target: Path, index: int, seed: int) -> None:
     zoom = 1.0 + (((seed >> 8) % 7) / 100.0)
     zoom_filter = f"scale=iw*{zoom:.3f}:ih*{zoom:.3f},crop=720:1280:(iw-720)/2:(ih-1280)/2"
     filter_chain = vf + "," + zoom_filter
-    subprocess.run([
-        "ffmpeg", "-y", "-stream_loop", "-1", "-ss", f"{start:.3f}", "-i", str(source),
-        "-t", "15", "-vf", filter_chain, "-r", str(FPS),
-        "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
-        "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(target)
-    ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    subprocess.run(["ffmpeg", "-y", "-stream_loop", "-1", "-ss", f"{start:.3f}", "-i", str(source), "-t", "15", "-vf", filter_chain, "-r", str(FPS), "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(target)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
     if not target.exists() or target.stat().st_size < 50_000:
         raise RuntimeError(f"PEXELS_RENDER_FATAL: {target} missing or too small")
 
 
 def generate_stock_clip(session: requests.Session, image_url: str, prompt: str, index: int) -> Path:
-    """Generate one strict, song-mapped devotional scene from Pexels.
-
-    The base pipeline may pass an image URL/prompt from the old generator;
-    unlike the previous implementation, the prompt is retained in the audit
-    trail and the scene index is now the authoritative visual brief.
-    """
     del image_url
     VIDEOS.mkdir(parents=True, exist_ok=True)
-
     if index not in SCENE_PLANS:
         raise RuntimeError(f"PEXELS_FATAL: no devotional scene plan exists for scene {index}")
     plan = SCENE_PLANS[index]
@@ -325,9 +177,6 @@ def generate_stock_clip(session: requests.Session, image_url: str, prompt: str, 
     run_used: set[str] = set()
     run_seed = int(hashlib.sha256(f"{datetime.now(timezone.utc).date()}-{index}-{time.time_ns()}".encode()).hexdigest()[:12], 16)
     rng = random.Random(run_seed)
-
-    # Prompt is useful for audit/debugging, but NEVER allowed to override the
-    # strict Ram/Hanuman devotional plan.
     prompt_note = " ".join(str(prompt or "").split())[:500]
     last_error = None
     for query in plan["queries"]:
@@ -342,36 +191,15 @@ def generate_stock_clip(session: requests.Session, image_url: str, prompt: str, 
             run_used.add(vid)
             used.add(vid)
             user = video.get("user") or {}
-            credit = {
-                "video_id": vid,
-                "scene": index,
-                "scene_name": plan["name"],
-                "query": query,
-                "match_reason": match_reason,
-                "base_prompt": prompt_note,
-                "page_url": video.get("url", ""),
-                "creator": user.get("name", "Pexels creator"),
-                "creator_url": user.get("url", ""),
-            }
+            credit = {"video_id": vid, "scene": index, "scene_name": plan["name"], "query": query, "match_reason": match_reason, "base_prompt": prompt_note, "page_url": video.get("url", ""), "creator": user.get("name", "Pexels creator"), "creator_url": user.get("url", "")}
             ledger["used_video_ids"] = sorted(used)
             ledger.setdefault("history", []).append({**credit, "used_at": datetime.now(timezone.utc).isoformat()})
             _save_ledger(ledger)
             with CREDITS.open("a", encoding="utf-8") as f:
-                f.write(
-                    f"Scene {index} [{plan['name']}]: {query} — {credit['creator']} — "
-                    f"match={match_reason} — {credit['page_url']}\n"
-                )
-            print(
-                f"PEXELS_OK: scene={index} subject={plan['name']} video_id={vid} "
-                f"query={query} match={match_reason} creator={credit['creator']}",
-                flush=True,
-            )
+                f.write(f"Scene {index} [{plan['name']}]: {query} — {credit['creator']} — match={match_reason} — {credit['page_url']}\n")
+            print(f"PEXELS_OK: scene={index} subject={plan['name']} video_id={vid} query={query} match={match_reason} creator={credit['creator']}", flush=True)
             return target
         except Exception as exc:
             last_error = exc
             print(f"PEXELS_WARNING: scene={index} query={query} failed: {exc}", flush=True)
-
-    raise RuntimeError(
-        f"PEXELS_FATAL: scene {index} ({plan['name']}) could not obtain a scene-safe "
-        f"Rama/Hanuman devotional clip. No generic scenery fallback is permitted. Last error: {last_error}"
-    )
+    raise RuntimeError(f"PEXELS_FATAL: scene {index} ({plan['name']}) could not obtain scene-safe Rama/Hanuman devotional footage. No generic scenery fallback is permitted. Last error: {last_error}")
