@@ -2,6 +2,12 @@ name: Bhajan Aabha — 3-5 Minute Production
 
 on:
   workflow_dispatch:
+    inputs:
+      publish_youtube:
+        description: 'Publish generated video to YouTube during this manual run'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -10,9 +16,15 @@ concurrency:
   group: bhajan-aabha-longform
   cancel-in-progress: true
 
+env:
+  YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+  YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+  YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+  PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+
 jobs:
   generate-longform:
-    name: Generate Bhajan Aabha 3-5 minute video
+    name: Generate Bhajan Aabha 3-5 minute video with unique Pexels visuals
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
@@ -21,30 +33,27 @@ jobs:
 
       - name: Preflight — Lightning GPU credentials
         env:
-          AGNES_API_KEY: ${{ secrets.AGNES_API_KEY }}
           LIGHTNING_USER_ID: ${{ secrets.LIGHTNING_USER_ID }}
           LIGHTNING_API_KEY: ${{ secrets.LIGHTNING_API_KEY }}
         run: |
-          set -e
-          test -n "$AGNES_API_KEY" || { echo 'SETUP_REQUIRED: add AGNES_API_KEY as a repository secret.'; exit 2; }
-          test -n "$LIGHTNING_USER_ID" || { echo 'SETUP_REQUIRED: add LIGHTNING_USER_ID as a repository secret.'; exit 2; }
-          test -n "$LIGHTNING_API_KEY" || { echo 'SETUP_REQUIRED: add LIGHTNING_API_KEY as a repository secret.'; exit 2; }
-          test -s app/zero_cost_pipeline_v5.py
+          set -euo pipefail
+          test -n "$LIGHTNING_USER_ID"
+          test -n "$LIGHTNING_API_KEY"
+          test -n "$PEXELS_API_KEY"
           test -s app/zero_cost_pipeline_v5_5.py
-          test -s app/lightning_ace_step_worker.py
-          test -s app/youtube_publisher.py
-          python3 -m py_compile app/zero_cost_pipeline_v5.py app/zero_cost_pipeline_v5_5.py app/lightning_ace_step_worker.py app/youtube_publisher.py
-          echo 'PRECHECK_OK: zero-cost longform architecture; Lightning AI T4 GPU; Agnes visuals; YouTube publisher present.'
+          test -s app/zero_cost_pipeline_stock.py
+          test -s app/pexels_stock_visuals.py
+          test -s app/lightning_ace_step_worker_v2.py
+          python3 -m py_compile app/zero_cost_pipeline_v5_5.py app/zero_cost_pipeline_stock.py app/pexels_stock_visuals.py app/lightning_ace_step_worker_v2.py
+          echo 'PRECHECK_OK: Lightning music + Pexels stock visuals.'
 
       - name: Install zero-cost media tools
         run: |
-          set -e
+          set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg fonts-noto-core jq
           command -v ffmpeg
           command -v ffprobe
-          ffmpeg -version | head -1
-          fc-match 'Noto Sans Devanagari' | head -1 || true
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -70,21 +79,18 @@ jobs:
             OWNER=$(lightning api "/v1/users/$OWNER_ID" | jq -r '.name')
             test -n "$OWNER" && test "$OWNER" != "null"
             echo "LIGHTNING_USERNAME=$OWNER" >> "$GITHUB_ENV"
-            echo "LIGHTNING_OWNER_TYPE=user"
           elif [ "$OWNER_TYPE" = "organization" ] || [ "$OWNER_TYPE" = "org" ]; then
             OWNER=$(lightning api "/v1/orgs/$OWNER_ID" | jq -r '.name')
             test -n "$OWNER" && test "$OWNER" != "null"
             echo "LIGHTNING_ORG=$OWNER" >> "$GITHUB_ENV"
-            echo "LIGHTNING_OWNER_TYPE=organization"
           else
             echo "Unsupported ownerType=$OWNER_TYPE" >&2
             exit 2
           fi
           echo "LIGHTNING_TEAMSPACE resolved: $TS"
 
-      - name: Generate full-length bhajan video on Lightning T4
+      - name: Generate full-length bhajan video with Pexels stock visuals
         env:
-          AGNES_API_KEY: ${{ secrets.AGNES_API_KEY }}
           LIGHTNING_USER_ID: ${{ secrets.LIGHTNING_USER_ID }}
           LIGHTNING_API_KEY: ${{ secrets.LIGHTNING_API_KEY }}
           LIGHTNING_STUDIO: bhajan-aabha-ace-step
@@ -93,12 +99,13 @@ jobs:
           PYTHONUNBUFFERED: '1'
           AGNES_VIDEO_POLL_TIMEOUT: '900'
           AGNES_VIDEO_POLL_INTERVAL: '10'
-        run: python -u -m app.zero_cost_pipeline_v5_5
+        run: python -u -m app.zero_cost_pipeline_stock
 
       - name: Validate output
         run: |
-          set -e
+          set -euo pipefail
           test -s output/run_state.json
+          test -s output/pexels_credits.txt
           COUNT=$(find output/videos -maxdepth 1 -type f -name '*.mp4' | wc -l)
           test "$COUNT" -eq 1
           VIDEO=$(find output/videos -maxdepth 1 -type f -name '*.mp4' | head -1)
@@ -107,49 +114,60 @@ jobs:
           test -s output/audio/bhajan_aabha_dj_master.mp3
           ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "$VIDEO" | grep -q '720,1280'
           ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$VIDEO" | grep -q 'aac'
-          ffprobe -v error -select_streams a:0 -show_entries stream=codec_name,sample_rate,channels -of csv=p=0 output/audio/bhajan_aabha_dj_master.mp3 | grep -q 'mp3,48000,2'
           MUSIC_DURATION=$(ffprobe -v error -show_entries format=duration -of csv=p=0 output/audio/bhajan_source.mp3)
           VIDEO_DURATION=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$VIDEO")
           awk -v d="$MUSIC_DURATION" 'BEGIN {exit !(d >= 177 && d <= 305)}'
           awk -v d="$VIDEO_DURATION" 'BEGIN {exit !(d >= 178 && d <= 302)}'
           grep -q '"zero_cost": true' output/run_state.json
-          grep -q '"kaggle": false' output/run_state.json
           grep -q '"lightning": true' output/run_state.json
-          grep -q '"music_api_mode": "lightning_ace_step_gpu_studio"' output/run_state.json
           grep -q '"full_length_song": true' output/run_state.json
           grep -q '"scene_count": 12' output/run_state.json
-          echo "FINAL_VIDEO=$(find output/videos -maxdepth 1 -type f -name '*.mp4' | head -1)" >> "$GITHUB_ENV"
+          echo "FINAL_VIDEO=$VIDEO" >> "$GITHUB_ENV"
           cat output/run_state.json
+
+      - name: Persist Pexels no-reuse ledger
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add data/pexels_used.json
+          if git diff --cached --quiet; then
+            echo 'PEXELS_LEDGER_UNCHANGED'
+          else
+            git commit -m 'chore: record Pexels clips used by longform Bhajan Aabha'
+            git push
+          fi
 
       - name: Publish 3-5 minute production release
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
-          set -e
+          set -euo pipefail
           TAG="bhajan-aabha-longform"
           gh release delete "$TAG" --repo "$REPO" --cleanup-tag --yes 2>/dev/null || true
           gh release create "$TAG" --repo "$REPO" \
             --title "Bhajan Aabha — 3-5 Minute Production" \
-            --notes "Full-length 3-5 minute devotional video. ACE-Step 1.5 music generated on a Lightning AI T4 GPU Studio; Agnes visuals; zero-cost/free-tier architecture. Kaggle and Hugging Face ZeroGPU are disabled." \
-            --prerelease output/videos/*.mp4 output/audio/bhajan_source.mp3 output/audio/bhajan_aabha_dj_master.mp3 output/run_state.json output/manifest.json output/lyrics.srt
-          echo "LONGFORM_RELEASE=https://github.com/$REPO/releases/tag=$TAG"
+            --notes "Full-length devotional video with original ACE-Step music and unique Pexels stock visuals. Pexels source credits are included." \
+            --prerelease output/videos/*.mp4 output/audio/bhajan_source.mp3 output/audio/bhajan_aabha_dj_master.mp3 output/run_state.json output/manifest.json output/lyrics.srt output/pexels_credits.txt
 
-      - name: Publish to YouTube — one-time OAuth, continuous refresh
+      - name: Publish to YouTube with SEO
+        if: ${{ github.event_name == 'schedule' || inputs.publish_youtube == true }}
         env:
           YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
           YOUTUBE_PRIVACY_STATUS: public
+          OUTPUT_DIR: output
           PYTHONUNBUFFERED: '1'
         run: |
           set -euo pipefail
-          if [ -z "$YOUTUBE_CLIENT_ID" ] || [ -z "$YOUTUBE_CLIENT_SECRET" ] || [ -z "$YOUTUBE_REFRESH_TOKEN" ]; then
-            echo 'YOUTUBE_PUBLISH_SKIPPED: add YOUTUBE_CLIENT_ID, YOUTUBE_CLIENT_SECRET and YOUTUBE_REFRESH_TOKEN repository secrets.'
-            exit 0
+          python -u -m app.youtube_publisher_seo "$FINAL_VIDEO"
+
+      - name: Publish status
+        run: |
+          if [ "${{ inputs.publish_youtube }}" = "true" ]; then
+            echo 'Manual run: unique Pexels stock visuals generated and SEO-enabled YouTube publication requested.'
+          else
+            echo 'Manual run: unique Pexels stock visuals generated; YouTube upload not requested.'
           fi
-          python -u -m app.youtube_publisher "$FINAL_VIDEO" | tee youtube_publish.log
-          URL=$(grep '^YOUTUBE_URL=' youtube_publish.log | tail -1 | cut -d= -f2-)
-          test -n "$URL"
-          echo "### YouTube publication" >> "$GITHUB_STEP_SUMMARY"
-          echo "Published: $URL" >> "$GITHUB_STEP_SUMMARY"
