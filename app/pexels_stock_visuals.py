@@ -135,7 +135,16 @@ def _render_clip(source: Path, target: Path, index: int, seed: int) -> None:
         raise RuntimeError(f"PEXELS_RENDER_FATAL: {target} missing or too small")
 
 
-def generate_stock_clip(session: requests.Session, prompt: str, index: int) -> Path:
+def generate_stock_clip(session: requests.Session, image_url: str, prompt: str, index: int) -> Path:
+    """Generate one scene from Pexels stock footage.
+
+    The long-form base pipeline calls its video generator with the legacy
+    signature (session, image_url, prompt, index). image_url and prompt are
+    intentionally ignored because Pexels replaces the generated-image/video
+    path entirely; keeping the four-argument signature makes the adapter a
+    drop-in replacement for the base pipeline.
+    """
+    del image_url, prompt
     VIDEOS.mkdir(parents=True, exist_ok=True)
     ledger = _load_ledger()
     used = set(map(str, ledger.get("used_video_ids", [])))
