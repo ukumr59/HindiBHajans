@@ -28,7 +28,18 @@ def prepare():
         run("git", "clone", "--no-tags", "--depth", "1", WAN_REPO, WAN)
     if not (WORK / ".deps_ok").exists():
         run(sys.executable, "-m", "pip", "install", "-q", "-U", "huggingface_hub", "ftfy", "imageio", "imageio-ffmpeg")
-        run(sys.executable, "-m", "pip", "install", "-q", "-r", "requirements.txt", cwd=WAN)
+        # The upstream requirements include flash_attn. On the free Lightning
+        # T4 Python 3.12 image it may try to build native code and abort before
+        # Wan starts. Wan2.1 has a native PyTorch SDPA fallback when flash-attn
+        # is unavailable, so exclude only that optional accelerator package.
+        requirements = WAN / "requirements.txt"
+        filtered = WORK / "requirements-no-flash-attn.txt"
+        lines = requirements.read_text(encoding="utf-8").splitlines()
+        filtered.write_text(
+            "\n".join(line for line in lines if line.strip().lower() != "flash_attn") + "\n",
+            encoding="utf-8",
+        )
+        run(sys.executable, "-m", "pip", "install", "-q", "-r", str(filtered))
         (WORK / ".deps_ok").write_text("ok", encoding="utf-8")
 
     marker = MODEL / ".download_complete"
