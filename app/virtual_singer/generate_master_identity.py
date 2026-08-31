@@ -40,15 +40,20 @@ NEGATIVE = (
 )
 
 
-def load_reference() -> Image.Image:
+def load_reference(reference_path: str | None) -> Image.Image:
+    if reference_path:
+        path = Path(reference_path)
+        if not path.is_file():
+            raise RuntimeError(f"Reference image not found: {path}")
+        return Image.open(path).convert("RGB")
+
     raw = os.environ.get("SINGER_REFERENCE_B64")
     if not raw:
         raise RuntimeError(
-            "SINGER_REFERENCE_B64 is missing. Add the user's reference photo as a base64 "
-            "GitHub Actions repository secret before running this workflow."
+            "No singer reference supplied. Provide --reference or SINGER_REFERENCE_B64."
         )
     try:
-        return Image.open(io.BytesIO(base64.b64decode(raw))).convert("RGB")
+        return Image.open(io.BytesIO(base64.b64decode(raw, validate=True))).convert("RGB")
     except Exception as exc:
         raise RuntimeError("SINGER_REFERENCE_B64 is not valid base64 image data") from exc
 
@@ -58,9 +63,10 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=81273)
     parser.add_argument("--steps", type=int, default=25)
     parser.add_argument("--output", default="virtual_singer_master_v3.png")
+    parser.add_argument("--reference", default=None)
     args = parser.parse_args()
 
-    reference = load_reference()
+    reference = load_reference(args.reference)
     reference_path = ROOT / "reference_input.jpg"
     reference.save(reference_path, quality=95)
 
