@@ -73,7 +73,17 @@ jobs:
           mkdir -p output
           python - <<'PY'
           import os
+          import tarfile
+          from pathlib import Path
           from lightning_sdk import Machine, Studio
+
+          runner_temp = Path(os.environ['RUNNER_TEMP'])
+          bundle = runner_temp / 'virtual_singer_bundle.tar.gz'
+          with tarfile.open(bundle, 'w:gz') as tar:
+              tar.add('app/virtual_singer/generate_master_identity.py', arcname='generate_master_identity.py')
+              tar.add('app/virtual_singer/identity_config.json', arcname='identity_config.json')
+              tar.add(runner_temp / 'singer_reference.jpg', arcname='reference_input.jpg')
+          print(f'BUNDLE_OK bytes={bundle.stat().st_size}', flush=True)
 
           owner = os.environ.get('LIGHTNING_USERNAME') or os.environ.get('LIGHTNING_ORG')
           kwargs = dict(name='bhajan-aabha-virtual-singer', teamspace=os.environ['LIGHTNING_TEAMSPACE'], create_ok=True)
@@ -85,35 +95,34 @@ jobs:
           elif 't4' not in str(s.machine).lower():
               s.switch_machine(Machine.T4)
 
-          remote = 'virtual_singer_master_run_v9'
+          remote = 'virtual_singer_master_run_v10'
           s.run(f'rm -rf {remote} && mkdir -p {remote}')
 
-          s.upload_file('app/virtual_singer/generate_master_identity.py', remote_path=f'{remote}/generate_master_identity.py')
-          s.upload_file('app/virtual_singer/identity_config.json', remote_path=f'{remote}/identity_config.json')
-          s.upload_file(os.path.join(os.environ['RUNNER_TEMP'], 'singer_reference.jpg'), remote_path=f'{remote}/reference_input.jpg')
+          # IMPORTANT: Lightning's upload_file creates its own upload location.
+          # Upload ONE archive so generator, config and reference can never split
+          # across different upload directories.
+          s.upload_file(str(bundle), remote_path='virtual_singer_bundle.tar.gz')
 
           install = (
               'python -m pip install -q --upgrade '
               '"numpy<2" "diffusers==0.31.0" "transformers==4.46.3" '
               '"accelerate==1.0.1" safetensors invisible_watermark insightface opencv-python-headless'
           )
+
           command = f'''set -euo pipefail
-          echo "=== LOCATING UPLOADED FILES ==="
-          GEN=$(find /teamspace/studios/this_studio -type f -name generate_master_identity.py -print -quit 2>/dev/null || true)
-          REF=$(find /teamspace/studios/this_studio -type f -name reference_input.jpg -print -quit 2>/dev/null || true)
-          CFG=$(find /teamspace/studios/this_studio -type f -name identity_config.json -print -quit 2>/dev/null || true)
-          test -n "$GEN" || {{ echo "ERROR: generate_master_identity.py was not found after upload"; exit 1; }}
-          test -n "$REF" || {{ echo "ERROR: reference_input.jpg was not found after upload"; exit 1; }}
-          test -n "$CFG" || {{ echo "ERROR: identity_config.json was not found after upload"; exit 1; }}
-          echo "LOCATED_GENERATOR=$GEN"
-          echo "LOCATED_REFERENCE=$REF"
-          echo "LOCATED_CONFIG=$CFG"
-          RUN_DIR=$(dirname "$GEN")
-          cd "$RUN_DIR"
-          test -s generate_master_identity.py
-          test -s reference_input.jpg
-          test -s identity_config.json
+          echo "=== LOCATING SINGLE UPLOADED BUNDLE ==="
+          BUNDLE=$(find /teamspace/studios/this_studio -type f -name virtual_singer_bundle.tar.gz -print -quit 2>/dev/null || true)
+          test -n "$BUNDLE" || {{ echo "ERROR: virtual_singer_bundle.tar.gz was not found after upload"; exit 1; }}
+          echo "LOCATED_BUNDLE=$BUNDLE"
+          rm -rf {remote}/payload
+          mkdir -p {remote}/payload
+          tar -xzf "$BUNDLE" -C {remote}/payload
+          cd {remote}/payload
+          echo "=== BUNDLE CONTENTS ==="
           ls -lh generate_master_identity.py identity_config.json reference_input.jpg
+          test -s generate_master_identity.py
+          test -s identity_config.json
+          test -s reference_input.jpg
           {install}
           python - <<'PY2'
           import numpy
@@ -121,16 +130,34 @@ jobs:
           import transformers
           print("ENV_OK", numpy.__version__, diffusers.__version__, transformers.__version__, flush=True)
           PY2
-          export SINGER_REFERENCE_PATH=reference_input.jpg
+          echo "=== RUNNING CURRENT GENERATOR FROM SAME DIRECTORY AS REFERENCE ==="
           python generate_master_identity.py --seed 71284 --steps 30 --reference reference_input.jpg --output virtual_singer_master_v3.png
           test -s virtual_singer_master_v3.png
+          file virtual_singer_master_v3.png
           sha256sum virtual_singer_master_v3.png'''
+
           out, code = s.run_with_exit_code(command)
           print(out[-30000:], flush=True)
           if code != 0:
+              try:
+                  s.stop()
+              except Exception:
+                  pass
               raise SystemExit(code)
 
-          s.download_file(f'{remote}/virtual_singer_master_v3.png', 'output/virtual_singer_master_v3.png')
+          # Find the actual generated file instead of assuming the SDK upload path.
+          locate_out, locate_code = s.run_with_exit_code(
+              f"find /teamspace/studios/this_studio -type f -name virtual_singer_master_v3.png -print"
+          )
+          print(locate_out, flush=True)
+          if locate_code != 0:
+              raise SystemExit(locate_code)
+          candidates = [x.strip() for x in locate_out.splitlines() if x.strip().endswith('/virtual_singer_master_v3.png')]
+          if not candidates:
+              raise SystemExit('ERROR: generated master image could not be located')
+          generated = candidates[-1]
+          print(f'GENERATED_MASTER_PATH={generated}', flush=True)
+          s.download_file(generated, 'output/virtual_singer_master_v3.png')
           s.stop()
           PY
 
