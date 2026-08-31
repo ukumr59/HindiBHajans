@@ -1,13 +1,20 @@
 {
-  "schema_version": 1,
-  "artist_id": "bhajan_aabha_singer_v1",
+  "schema_version": 2,
+  "artist_id": "bhajan_aabha_singer_v2",
   "identity": {
     "type": "fictional",
     "gender_presentation": "male",
-    "age_range": "28-32",
-    "appearance": "Indian, warm medium-brown skin, expressive brown eyes, dark wavy medium-length hair, distinctive oval face, straight nose, natural eyebrows, clean-shaven, slim-to-average build",
+    "age_range": "adult, mature appearance",
+    "appearance": "fictional Indian male devotional singer inspired by the user's supplied reference photo: warm medium-brown skin, dark brown eyes, distinctive oval-to-rectangular face, straight nose, defined jawline, short black hair neatly side-parted, clean-shaven, rectangular dark eyeglasses, average-to-fit adult physique",
     "presence": "calm, devotional, warm, sincere, charismatic but humble",
-    "visual_style": "photorealistic cinematic Indian devotional cinema, natural skin texture, realistic proportions, soft film lighting"
+    "visual_style": "photorealistic cinematic Indian devotional cinema, natural skin texture, realistic proportions, soft film lighting",
+    "reference_constraints": [
+      "preserve the distinctive face shape and proportions from the approved reference-derived master",
+      "preserve short side-parted black hairstyle",
+      "preserve rectangular dark eyeglasses as a signature feature",
+      "preserve clean-shaven appearance",
+      "preserve average-to-fit adult body proportions"
+    ]
   },
   "identity_lock": {
     "must_remain": [
@@ -17,7 +24,8 @@
       "jawline",
       "hairline and hairstyle",
       "skin tone",
-      "overall apparent age",
+      "signature rectangular eyeglasses",
+      "overall adult appearance",
       "body proportions"
     ],
     "may_change": [
@@ -27,7 +35,8 @@
       "camera angle",
       "camera distance",
       "hand pose",
-      "background"
+      "background",
+      "natural singing expression"
     ]
   },
   "wardrobe": [
@@ -48,5 +57,5 @@
     "flower-filled temple garden",
     "old temple corridor illuminated by lamps"
   ],
-  "negative_prompt": "different person, changed identity, different face, different age, beard, moustache, facial hair, deformed face, asymmetrical eyes, extra fingers, malformed hands, duplicate person, multiple people, text, subtitles, watermark, logo, cartoon, anime, plastic skin, oversmoothed skin, low resolution, blurry face"
+  "negative_prompt": "different person, changed identity, different face, altered facial proportions, different age, different eyeglasses, missing glasses, oversized glasses, beard, moustache, facial hair, changed hairstyle, long hair, deformed face, asymmetrical eyes, extra fingers, malformed hands, duplicate person, multiple people, text, subtitles, watermark, logo, cartoon, anime, plastic skin, oversmoothed skin, low resolution, blurry face"
 }
