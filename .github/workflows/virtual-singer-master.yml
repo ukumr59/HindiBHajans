@@ -69,11 +69,8 @@ jobs:
           s.upload_file('app/virtual_singer/generate_master_identity.py', remote_path=f'{remote}/generate_master_identity.py')
           s.upload_file('app/virtual_singer/identity_config.json', remote_path=f'{remote}/identity_config.json')
 
-          # Keep the T4 image-generation environment reproducible.  Recent
-          # NumPy 2.x releases removed np.Inf, while older/current Diffusers
-          # import paths used by SDXL still reference it. Pin NumPy <2 before
-          # importing Diffusers, rather than letting pip select an incompatible
-          # newest NumPy build.
+          # Reproducible SDXL environment. Pin NumPy before installing/importing
+          # the Diffusers stack so pip cannot resolve an incompatible NumPy 2.x.
           install = (
               'python -m pip install -q --upgrade '
               '"numpy<2" '
@@ -82,12 +79,13 @@ jobs:
               '"accelerate==1.0.1" '
               'safetensors invisible_watermark'
           )
-          command = (
-              f'cd ~/{remote} && {install} && '
-              'python -c "import numpy, diffusers, transformers; '
-              'print(f\"ENV_OK numpy={numpy.__version__} diffusers={diffusers.__version__} transformers={transformers.__version__}\")" && '
-              'python generate_master_identity.py --seed 44031 --steps 28 --output virtual_singer_master.png'
-          )
+          command = f'''cd ~/{remote} && {install} && python - <<'PY2'
+          import numpy
+          import diffusers
+          import transformers
+          print("ENV_OK", numpy.__version__, diffusers.__version__, transformers.__version__, flush=True)
+          PY2
+          python generate_master_identity.py --seed 44031 --steps 28 --output virtual_singer_master.png'''
           out, code = s.run_with_exit_code(command)
           print(out[-30000:], flush=True)
           if code != 0:
