@@ -44,8 +44,8 @@ jobs:
           test -s app/zero_cost_pipeline_stock.py
           test -s app/pexels_stock_visuals.py
           test -s app/lightning_ace_step_worker_v2.py
-          python3 -m py_compile app/zero_cost_pipeline_v5_5.py app/zero_cost_pipeline_stock.py app/pexels_stock_visuals.py app/lightning_ace_step_worker_v2.py
-          echo 'PRECHECK_OK: Lightning music + Pexels stock visuals.'
+          python3 -m py_compile app/zero_cost_pipeline_v5_4.py app/zero_cost_pipeline_v5_5.py app/zero_cost_pipeline_stock.py app/pexels_stock_visuals.py app/lightning_ace_step_worker_v2.py
+          echo 'PRECHECK_OK: Lightning music + Pexels stock visuals + no subtitles.'
 
       - name: Install zero-cost media tools
         run: |
@@ -97,8 +97,6 @@ jobs:
           VIDEO_SECONDS: '180'
           OUTPUT_DIR: output
           PYTHONUNBUFFERED: '1'
-          AGNES_VIDEO_POLL_TIMEOUT: '900'
-          AGNES_VIDEO_POLL_INTERVAL: '10'
         run: python -u -m app.zero_cost_pipeline_stock
 
       - name: Validate output
@@ -112,6 +110,7 @@ jobs:
           test -s "$VIDEO"
           test -s output/audio/bhajan_source.mp3
           test -s output/audio/bhajan_aabha_dj_master.mp3
+          test ! -e output/lyrics.srt
           ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "$VIDEO" | grep -q '720,1280'
           ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$VIDEO" | grep -q 'aac'
           MUSIC_DURATION=$(ffprobe -v error -show_entries format=duration -of csv=p=0 output/audio/bhajan_source.mp3)
@@ -122,6 +121,7 @@ jobs:
           grep -q '"lightning": true' output/run_state.json
           grep -q '"full_length_song": true' output/run_state.json
           grep -q '"scene_count": 12' output/run_state.json
+          grep -q '"hindi_subtitles": false' output/run_state.json
           echo "FINAL_VIDEO=$VIDEO" >> "$GITHUB_ENV"
           cat output/run_state.json
 
@@ -148,8 +148,8 @@ jobs:
           gh release delete "$TAG" --repo "$REPO" --cleanup-tag --yes 2>/dev/null || true
           gh release create "$TAG" --repo "$REPO" \
             --title "Bhajan Aabha — 3-5 Minute Production" \
-            --notes "Full-length devotional video with original ACE-Step music and unique Pexels stock visuals. Pexels source credits are included." \
-            --prerelease output/videos/*.mp4 output/audio/bhajan_source.mp3 output/audio/bhajan_aabha_dj_master.mp3 output/run_state.json output/manifest.json output/lyrics.srt output/pexels_credits.txt
+            --notes "Full-length devotional video with original ACE-Step music and unique Pexels stock visuals. Hindi subtitles are intentionally disabled. Pexels source credits are included." \
+            --prerelease output/videos/*.mp4 output/audio/bhajan_source.mp3 output/audio/bhajan_aabha_dj_master.mp3 output/run_state.json output/manifest.json output/pexels_credits.txt
 
       - name: Publish to YouTube with SEO
         if: ${{ github.event_name == 'schedule' || inputs.publish_youtube == true }}
@@ -167,7 +167,7 @@ jobs:
       - name: Publish status
         run: |
           if [ "${{ inputs.publish_youtube }}" = "true" ]; then
-            echo 'Manual run: unique Pexels stock visuals generated and SEO-enabled YouTube publication requested.'
+            echo 'Manual run: unique Pexels stock visuals generated, Hindi subtitles disabled, and SEO-enabled YouTube publication requested.'
           else
-            echo 'Manual run: unique Pexels stock visuals generated; YouTube upload not requested.'
+            echo 'Manual run: unique Pexels stock visuals generated; Hindi subtitles disabled; YouTube upload not requested.'
           fi
