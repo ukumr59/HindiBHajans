@@ -43,15 +43,41 @@ def long_lyrics(seconds: int) -> str:
 
 
 def scene_prompts(count: int) -> list[str]:
-    # Metadata-only scene labels. The stock visual wrapper replaces the base
-    # Agnes video generator before base.main() is called.
     return [f"Unique devotional stock-footage scene {i + 1}" for i in range(count)]
 
 
 def make_srt(path: Path, seconds: int):
-    # Burned-in Hindi subtitles are deliberately disabled because the generated
-    # vocal timing is not reliable enough to claim word-level synchronization.
+    # Compatibility stub only. The stock assembler never creates or burns SRT.
     path.unlink(missing_ok=True)
+
+
+def assemble_without_subtitles(scene_paths: list[Path], music_path: Path, final_path: Path):
+    """Assemble the stock-footage longform video with NO subtitle filter."""
+    concat = base.OUT / "scenes.txt"
+    concat.write_text("\n".join(f"file '{p.resolve()}'" for p in scene_paths) + "\n", encoding="utf-8")
+    visual = base.OUT / "visual.mp4"
+    base.ffmpeg("-f", "concat", "-safe", "0", "-i", str(concat), "-c", "copy", str(visual))
+    audio_filter = "loudnorm=I=-9:TP=-1.0:LRA=7"
+    base.ffmpeg(
+        "-i", str(visual), "-i", str(music_path),
+        "-filter_complex", f"[1:a]atrim=0:{base.VIDEO_SECONDS},asetpts=N/SR/TB,{audio_filter}[a]",
+        "-map", "0:v:0", "-map", "[a]",
+        "-t", str(base.VIDEO_SECONDS), "-r", str(base.FPS),
+        "-s", f"{base.WIDTH}x{base.HEIGHT}",
+        "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "256k", "-ar", "48000", "-movflags", "+faststart",
+        str(final_path),
+    )
+    dj_mp3 = base.AUDIO / "bhajan_aabha_dj_master.mp3"
+    base.ffmpeg(
+        "-i", str(music_path), "-af", audio_filter, "-ar", "48000",
+        "-c:a", "libmp3lame", "-b:a", "320k", "-id3v2_version", "3",
+        "-metadata", "title=Bhajan Aabha — DJ Master",
+        "-metadata", "artist=Bhajan Aabha",
+        "-metadata", "genre=Devotional EDM",
+        str(dj_mp3),
+    )
+    print("SUBTITLES_OK: Hindi subtitles disabled; no subtitle filter applied", flush=True)
 
 
 def configure() -> int:
@@ -62,17 +88,15 @@ def configure() -> int:
     base.PACK["music_prompt"] = DJ_PROMPT
     base.PACK["scene_prompts"] = scene_prompts(seconds // SCENE_SECONDS)
     base.make_srt = lambda path: make_srt(path, seconds)
-    # The stock-video architecture must not require an Agnes API key. The base
-    # module is shared with the legacy Agnes implementation, so replace its
-    # environment gate for this production path.
     base.require_env = lambda: None
+    base.assemble = assemble_without_subtitles
     print(f"ARCHITECTURE=v5.4 CLEAN_FULL_LENGTH ZERO_COST=true VIDEO_SECONDS={seconds} SCENES={seconds // SCENE_SECONDS}")
     print("VISUAL_BACKEND=Pexels stock video API")
     print("SUBTITLES=disabled")
     print("AGNES_API_KEY=not_required_for_stock_visual_pipeline")
     print("MUSIC_BACKEND=ACE-Step v1.5 on Lightning T4")
     print("MUSIC_DURATION=single full-length song; no looping")
-    print("MUSIC_STYLE=LOUD_MODERN_DEVOTIONAL_EDM_DJ_READY bpm=128")
+    print("MUSIC_STYLE=LOUD_MODERN_DEVOTIONAL_EDM_READY bpm=128")
     return seconds
 
 
@@ -113,12 +137,14 @@ def main():
         "pexels_no_reuse": True,
         "subtitles": False,
         "hindi_subtitles": False,
+        "subtitle_burn_in": False,
+        "subtitle_sidecar": False,
         "agnes_api_key_required": False,
         "agnes_video_generation": False,
         "agnes_image_generation": False,
         "music_backend": "ACE-Step v1.5 on Lightning T4",
         "music_api_mode": "lightning_ace_step_gpu_studio",
-        "music_style": "LOUD_MODERN_DEVOTIONAL_EDM_DJ_READY",
+        "music_style": "LOUD_MODERN_DEVOTIONAL_EDM_READY",
         "bpm": 128,
         "time_signature": "4/4",
         "scene_seconds": SCENE_SECONDS,
