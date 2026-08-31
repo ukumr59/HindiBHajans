@@ -8,7 +8,6 @@ import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import quote_plus
 
 import requests
 
@@ -16,13 +15,11 @@ OUT = Path(os.getenv("OUTPUT_DIR", "output"))
 VIDEOS = OUT / "videos"
 LEDGER = Path("data/pexels_used.json")
 CREDITS = OUT / "pexels_credits.txt"
-PEXELS_ROOT = "https://api.pexels.com/videos/search"
+PEXELS_ROOT = "https://api.pexels.com/v1/videos/search"
 API_KEY = os.getenv("PEXELS_API_KEY", "").strip()
 WIDTH, HEIGHT = 720, 1280
 FPS = 24
 
-# Broad visual vocabulary deliberately avoids repeatedly rendering the deity.
-# Each run draws a fresh, non-repeating source clip for every scene.
 QUERY_POOLS = [
     ["Indian temple", "temple diya", "Hindu temple bells", "temple flowers"],
     ["oil lamp diya", "incense smoke", "marigold flowers", "puja thali"],
@@ -65,12 +62,12 @@ def _save_ledger(data: dict) -> None:
     LEDGER.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _api(session: requests.Session, query: str, per_page: int = 40) -> dict:
+def _api(session: requests.Session, query: str, per_page: int = 80) -> dict:
     if not API_KEY:
         raise RuntimeError("SETUP_REQUIRED: PEXELS_API_KEY repository secret is missing")
     r = session.get(
         PEXELS_ROOT,
-        params={"query": query, "orientation": "portrait", "size": "medium", "per_page": per_page},
+        params={"query": query, "size": "medium", "per_page": per_page},
         headers={"Authorization": API_KEY},
         timeout=45,
     )
@@ -84,7 +81,6 @@ def _candidate_file(video: dict) -> dict | None:
     files = [f for f in video.get("video_files", []) if str(f.get("file_type", "")).lower() == "video/mp4" and f.get("link")]
     if not files:
         return None
-    # Prefer portrait, then the smallest file that is still useful for 720x1280.
     portrait = [f for f in files if (f.get("height") or 0) >= (f.get("width") or 0) and (f.get("height") or 0) >= 900]
     pool = portrait or files
     suitable = [f for f in pool if (f.get("width") or 0) >= 540 and (f.get("height") or 0) >= 540]
@@ -92,15 +88,6 @@ def _candidate_file(video: dict) -> dict | None:
 
 
 def _pick(session: requests.Session, query: str, used: set[str], rng: random.Random) -> tuple[dict, dict]:
-    data = _api(session, query)
-    videos = list(data.get("videos", []))
-    rng.shuffle(videos)
-    for video in videos:
-        vid = str(video.get("id", ""))
-        vf = _candidate_file(video)
-        if vid and vid not in used and vf:
-            return video, vf
-    # Search a second page only when necessary; this keeps API usage low.
     data = _api(session, query, per_page=80)
     videos = list(data.get("videos", []))
     rng.shuffle(videos)
@@ -127,8 +114,6 @@ def _download(session: requests.Session, url: str, path: Path) -> None:
 
 
 def _render_clip(source: Path, target: Path, index: int, seed: int) -> None:
-    # Vary the selected source window and visual treatment. This is creative
-    # editing, not detection evasion: the source itself is different every time.
     probe = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(source)],
         capture_output=True, text=True, check=True,
@@ -137,13 +122,11 @@ def _render_clip(source: Path, target: Path, index: int, seed: int) -> None:
     max_start = max(0.0, duration - 15.0)
     start = (seed % 1000) / 1000.0 * max_start if max_start else 0.0
     vf = FILTERS[(index - 1) % len(FILTERS)]
-    # A restrained zoom/pan is applied after cropping to give each clip a
-    # different visual rhythm without turning stock footage into a gimmick.
     zoom = 1.0 + (((seed >> 8) % 7) / 100.0)
     zoom_filter = f"scale=iw*{zoom:.3f}:ih*{zoom:.3f},crop=720:1280:(iw-720)/2:(ih-1280)/2"
     filter_chain = vf + "," + zoom_filter
     subprocess.run([
-        "ffmpeg", "-y", "-ss", f"{start:.3f}", "-i", str(source),
+        "ffmpeg", "-y", "-stream_loop", "-1", "-ss", f"{start:.3f}", "-i", str(source),
         "-t", "15", "-vf", filter_chain, "-r", str(FPS),
         "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
         "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(target)
