@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   identity-pack:
-    name: Generate same singer in 4 controlled views on T4
+    name: Generate same singer in true controlled views on T4
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -61,12 +61,10 @@ jobs:
           elif 't4' not in str(s.machine).lower():
               s.switch_machine(Machine.T4)
 
-          # Lightning upload_file paths are relative to the Studio filesystem
-          # root (/teamspace/studios/this_studio), not the shell's ~/ directory.
           remote = 'virtual_singer_identity_pack'
           remote_root = f'/teamspace/studios/this_studio/{remote}'
           s.upload_file('app/virtual_singer/generate_master_identity.py', remote_path=f'{remote}/generate_master_identity.py')
-          s.upload_file('app/virtual_singer/generate_identity_pack.py', remote_path=f'{remote}/generate_identity_pack.py')
+          s.upload_file('app/virtual_singer/generate_identity_pack_v2.py', remote_path=f'{remote}/generate_identity_pack_v2.py')
           s.upload_file('app/virtual_singer/identity_config.json', remote_path=f'{remote}/identity_config.json')
 
           install = (
@@ -77,15 +75,15 @@ jobs:
           command = (
               f'cd {remote_root} && pwd && ls -la && {install} && '
               'python generate_master_identity.py --seed 44031 --steps 24 --output virtual_singer_master.png && '
-              'python generate_identity_pack.py --input virtual_singer_master.png --output-dir identity_pack --steps 20 --strength 0.28 --seed 44031'
+              'python generate_identity_pack_v2.py --input virtual_singer_master.png --output-dir identity_pack --steps 24 --scale 0.85 --seed 44031'
           )
           out, code = s.run_with_exit_code(command)
-          print(out[-40000:], flush=True)
+          print(out[-50000:], flush=True)
           if code != 0:
               raise SystemExit(code)
 
           s.download_file(f'{remote}/virtual_singer_master.png', 'output/virtual_singer_master.png')
-          for name in ['front', 'three_quarter_left', 'profile', 'waist_up']:
+          for name in ['front', 'three_quarter', 'profile', 'waist_up', 'full_body']:
               s.download_file(f'{remote}/identity_pack/{name}.png', f'output/{name}.png')
           s.stop()
           PY
@@ -93,7 +91,7 @@ jobs:
       - name: Validate identity pack
         run: |
           set -euo pipefail
-          for f in output/virtual_singer_master.png output/front.png output/three_quarter_left.png output/profile.png output/waist_up.png; do
+          for f in output/virtual_singer_master.png output/front.png output/three_quarter.png output/profile.png output/waist_up.png output/full_body.png; do
             test -s "$f"
             file "$f"
           done
@@ -101,6 +99,6 @@ jobs:
       - name: Upload identity pack
         uses: actions/upload-artifact@v4
         with:
-          name: bhajan-aabha-virtual-singer-identity-pack
+          name: bhajan-aabha-virtual-singer-identity-pack-v2
           path: output/
           if-no-files-found: error
