@@ -22,6 +22,24 @@ _STARTED_HERE = False
 _GENERATED = False
 _LOCK = threading.Lock()
 
+# Song-aware visual briefs. These are deliberately explicit about Shri Ram,
+# Hindu temple settings and forbidden visual concepts so Wan has strong semantic
+# guidance instead of generic "Indian" scenery.
+RAM_SCENE_PROMPTS = [
+    "Cinematic devotional scene of Lord Rama standing majestically inside an ancient Hindu temple at sunrise, blue skin, saffron-gold royal garments, bow and arrow, golden crown, glowing diyas, sacred Hindu temple architecture, warm divine light, reverent atmosphere, slow gentle camera movement, photorealistic Indian devotional cinema, no text, no subtitles, no mosque, no church, no Islamic architecture.",
+    "Close cinematic view of a beautiful Lord Rama murti in a Hindu temple, blue complexion, golden crown, yellow silk garments, bow beside him, hundreds of warm diyas illuminating the idol, flower garlands and marigolds, soft incense smoke, devotees praying in the background, reverent photorealistic devotional film, no text, no subtitles, no mosque, no church.",
+    "Lord Rama seated peacefully with his bow inside a magnificent Ayodhya-style Hindu temple, glowing oil lamps creating a golden halo, marigold flowers, sacred bells, carved Hindu pillars, gentle devotional atmosphere matching a prayer about the light of Rama's name, cinematic realism, slow graceful motion, no text, no subtitles, no non-Hindu religious architecture.",
+    "Powerful devotional hero shot of Lord Rama during evening aarti in a grand Hindu temple, blue skin, royal saffron clothing, crown, bow and arrow, priests holding lamps, devotees with folded hands, many glowing diyas, golden firelight, sacred Hindu atmosphere, cinematic realistic photography, no text, no subtitles, no mosque, no church.",
+    "Emotional Hindu devotional scene: a humble devotee kneels with folded hands before Lord Rama's radiant murti during a difficult moment, Lord Rama visible clearly in the center, warm temple lamps, flower offerings, peaceful compassionate expression, sacred Hindu temple interior, cinematic realism, gentle camera push-in, no text, no subtitles, no mosque or church.",
+    "Lord Rama blessing a praying devotee inside a beautiful Hindu temple, Rama clearly visible with blue skin, golden crown, saffron garments and bow, devotee's folded hands in foreground, glowing diyas and marigold garlands, compassionate divine mood, photorealistic Indian devotional cinema, no text, no subtitles, no non-Hindu religious architecture.",
+    "Lord Rama and devoted Hanuman together in a sacred Hindu temple, Hanuman kneeling respectfully before Rama, Rama standing with bow and arrow, warm aarti flames, temple bells, marigold garlands, golden divine light, reverent Hindu devotional atmosphere, cinematic realistic motion, no text, no subtitles, no mosque, no church.",
+    "Epic devotional vision of Lord Rama as the prince of Ayodhya, standing before a grand Ayodhya-inspired Hindu temple courtyard at dawn, bow and arrow, golden crown, saffron royal garments, temple flags, devotees and diyas, majestic but peaceful cinematic Indian devotional scene, no text, no subtitles, no Islamic or Christian architecture.",
+    "Joyful Hindu devotional celebration of Jai Shri Ram: Lord Rama clearly visible at the center of a grand temple aarti, devotees raising hands in devotion, saffron flags, temple bells, flower petals, glowing lamps, dynamic but respectful cinematic movement, realistic Indian devotional film, no text, no subtitles, no mosque, no church.",
+    "Grand cinematic build toward a Ram bhajan climax: Lord Rama and Hanuman together beneath a glowing temple canopy, dozens of diyas, saffron flags and marigold garlands, devotees gathered in reverence, warm golden light, powerful sacred Hindu atmosphere, realistic devotional cinema, no text, no subtitles, no non-Hindu religious buildings.",
+    "Hero devotional portrait of Lord Rama standing in a magnificent Hindu temple surrounded by hundreds of diyas and flowers, blue skin, golden crown, saffron garments, bow and arrow, serene compassionate face, rich golden cinematic lighting, slow majestic camera movement, photorealistic Indian devotional film, no text, no subtitles, no mosque, no church.",
+    "Peaceful closing vision of Lord Rama inside a glowing Hindu temple at night, serene blue face, golden crown, bow and arrow, rows of diyas and marigold flowers, soft incense haze, devotees praying quietly, warm divine light fading gently, cinematic devotional realism, no text, no subtitles, no mosque, no church, no Islamic architecture.",
+]
+
 
 def _require_lightning():
     if not LIGHTNING_USER_ID or not LIGHTNING_API_KEY:
@@ -79,16 +97,17 @@ def _generate_all():
             return
         _start()
         worker = Path(__file__).with_name("lightning_wan2_worker.py")
+        prompts = base.PACK.get("scene_prompts") or RAM_SCENE_PROMPTS
         request = {
             "scenes": [
                 {"index": i, "prompt": prompt, "seed": 20260831 + i * 7919}
-                for i, prompt in enumerate(base.PACK["scene_prompts"], 1)
+                for i, prompt in enumerate(prompts, 1)
             ]
         }
         request_path = Path(tempfile.mkdtemp(prefix="wan_bhajan_")) / "wan_request.json"
         request_path.write_text(json.dumps(request, ensure_ascii=False, indent=2), encoding="utf-8")
         _STUDIO.upload_file(str(worker), remote_path="lightning_wan2_worker.py")
-        _STUDIO.upload_file(str(request_path), remote_path="wan2_worker/wan_request.json")
+        _STUDIO.upload_file(str(request_path), remote_path="wan_request.json")
         print(f"WAN_LIGHTNING_RUN: generating {len(request['scenes'])} unique Wan2.1 scenes", flush=True)
         output, code = _STUDIO.run_with_exit_code("python lightning_wan2_worker.py")
         print(output[-20000:], flush=True)
@@ -124,6 +143,7 @@ def main():
         base.generate_video_clip = generate_wan_clip
         base.require_env = lambda: None
         longform.configure()
+        base.PACK["scene_prompts"] = RAM_SCENE_PROMPTS[: base.VIDEO_SECONDS // longform.SCENE_SECONDS]
         pipeline.music.generate_music_gradio = pipeline.generate_music_lightning
         pipeline.longform.base.generate_video_clip = generate_wan_clip
         pipeline.longform.base.generate_image = _skip_image
