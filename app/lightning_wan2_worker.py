@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -11,10 +10,9 @@ ROOT = Path(__file__).resolve().parent
 WORK = ROOT / "wan2_worker"
 WAN = WORK / "Wan2.1"
 MODEL = WORK / "Wan2.1-T2V-1.3B"
-REQUEST = WORK / "wan_request.json"
+REQUEST = ROOT / "wan_request.json"
 OUT = WORK / "scenes"
 WAN_REPO = "https://github.com/Wan-Video/Wan2.1.git"
-WAN_COMMIT = "a2d4d0a3f0d7e9f1b8c7c1e2b3d4f5a6c7d8e9f0"
 
 
 def run(*args, cwd=None):
@@ -37,11 +35,7 @@ def prepare():
     if not marker.exists():
         from huggingface_hub import snapshot_download
         print("WAN_MODEL_DOWNLOAD: downloading Wan-AI/Wan2.1-T2V-1.3B", flush=True)
-        snapshot_download(
-            repo_id="Wan-AI/Wan2.1-T2V-1.3B",
-            local_dir=str(MODEL),
-            local_dir_use_symlinks=False,
-        )
+        snapshot_download(repo_id="Wan-AI/Wan2.1-T2V-1.3B", local_dir=str(MODEL))
         marker.write_text("ok", encoding="utf-8")
         print("WAN_MODEL_DOWNLOAD_OK", flush=True)
     else:
@@ -54,14 +48,9 @@ def generate_scene(index: int, prompt: str, seed: int):
     if final.exists() and final.stat().st_size > 50_000:
         print(f"WAN_SCENE_CACHED scene={index}", flush=True)
         return
+    raw.unlink(missing_ok=True)
+    final.unlink(missing_ok=True)
 
-    if raw.exists():
-        raw.unlink()
-    if final.exists():
-        final.unlink()
-
-    # Wan2.1 1.3B is officially targeted at 480P; 480x832 keeps the portrait
-    # composition needed by Bhajan Aabha while staying within T4 memory.
     cmd = [
         sys.executable, "generate.py",
         "--task", "t2v-1.3B",
@@ -82,9 +71,6 @@ def generate_scene(index: int, prompt: str, seed: int):
     if not raw.exists() or raw.stat().st_size < 50_000:
         raise RuntimeError(f"WAN_FATAL: scene {index} raw MP4 missing/small")
 
-    # Native Wan output is 5s/81 frames. Slow the unique motion to 15s rather
-    # than repeating frames or clips. This keeps every 15s scene visually
-    # distinct while staying within the T4-friendly 1.3B/480P operating point.
     run(
         "ffmpeg", "-y", "-i", raw,
         "-vf", "setpts=3.0*PTS,fps=16,scale=480:832:flags=lanczos",
@@ -101,10 +87,16 @@ def generate_scene(index: int, prompt: str, seed: int):
 def main():
     prepare()
     req = json.loads(REQUEST.read_text(encoding="utf-8"))
-    scenes = req["scenes"]
-    for item in scenes:
+    for item in req["scenes"]:
         generate_scene(int(item["index"]), item["prompt"], int(item["seed"]))
-    manifest = {"backend": "Wan2.1-T2V-1.3B", "license": "Apache-2.0", "resolution": "480x832", "source_seconds": 5, "output_seconds": 15, "scenes": scenes}
+    manifest = {
+        "backend": "Wan2.1-T2V-1.3B",
+        "license": "Apache-2.0",
+        "resolution": "480x832",
+        "source_seconds": 5,
+        "output_seconds": 15,
+        "scenes": req["scenes"],
+    }
     (WORK / "wan_manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     print("WAN_ALL_SCENES_OK", flush=True)
 
