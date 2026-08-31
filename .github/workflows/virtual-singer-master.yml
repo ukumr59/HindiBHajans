@@ -46,6 +46,7 @@ jobs:
           LIGHTNING_ORG: ${{ env.LIGHTNING_ORG }}
         run: |
           set -euo pipefail
+          rm -rf output
           mkdir -p output
           python - <<'PY'
           import os
@@ -65,12 +66,12 @@ jobs:
           elif 't4' not in str(s.machine).lower():
               s.switch_machine(Machine.T4)
 
-          remote = 'virtual_singer_master'
+          # Use a fresh remote run directory so an old PNG can never be reused.
+          remote = 'virtual_singer_master_run_v2'
+          s.run(f'rm -rf ~/{remote} && mkdir -p ~/{remote}')
           s.upload_file('app/virtual_singer/generate_master_identity.py', remote_path=f'{remote}/generate_master_identity.py')
           s.upload_file('app/virtual_singer/identity_config.json', remote_path=f'{remote}/identity_config.json')
 
-          # Reproducible SDXL environment. Pin NumPy before installing/importing
-          # the Diffusers stack so pip cannot resolve an incompatible NumPy 2.x.
           install = (
               'python -m pip install -q --upgrade '
               '"numpy<2" '
@@ -85,25 +86,27 @@ jobs:
           import transformers
           print("ENV_OK", numpy.__version__, diffusers.__version__, transformers.__version__, flush=True)
           PY2
-          python generate_master_identity.py --seed 44031 --steps 28 --output virtual_singer_master.png'''
+          python generate_master_identity.py --seed 71284 --steps 30 --output virtual_singer_master_v2.png
+          test -s virtual_singer_master_v2.png
+          sha256sum virtual_singer_master_v2.png'''
           out, code = s.run_with_exit_code(command)
           print(out[-30000:], flush=True)
           if code != 0:
               raise SystemExit(code)
 
-          s.download_file(f'{remote}/virtual_singer_master.png', 'output/virtual_singer_master.png')
+          s.download_file(f'{remote}/virtual_singer_master_v2.png', 'output/virtual_singer_master_v2.png')
           s.stop()
           PY
 
       - name: Validate master image
         run: |
           set -euo pipefail
-          test -s output/virtual_singer_master.png
-          file output/virtual_singer_master.png
+          test -s output/virtual_singer_master_v2.png
+          file output/virtual_singer_master_v2.png
 
       - name: Upload virtual singer master
         uses: actions/upload-artifact@v4
         with:
-          name: bhajan-aabha-virtual-singer-master
-          path: output/virtual_singer_master.png
+          name: bhajan-aabha-virtual-singer-master-v2
+          path: output/virtual_singer_master_v2.png
           if-no-files-found: error
