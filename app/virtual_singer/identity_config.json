@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "artist_id": "bhajan_aabha_singer_v1",
+  "identity": {
+    "type": "fictional",
+    "gender_presentation": "male",
+    "age_range": "28-32",
+    "appearance": "Indian, warm medium-brown skin, expressive brown eyes, dark wavy medium-length hair, distinctive oval face, straight nose, natural eyebrows, clean-shaven, slim-to-average build",
+    "presence": "calm, devotional, warm, sincere, charismatic but humble",
+    "visual_style": "photorealistic cinematic Indian devotional cinema, natural skin texture, realistic proportions, soft film lighting"
+  },
+  "identity_lock": {
+    "must_remain": [
+      "facial proportions",
+      "eye shape and eye color",
+      "nose shape",
+      "jawline",
+      "hairline and hairstyle",
+      "skin tone",
+      "overall apparent age",
+      "body proportions"
+    ],
+    "may_change": [
+      "clothing",
+      "temple/location",
+      "lighting",
+      "camera angle",
+      "camera distance",
+      "hand pose",
+      "background"
+    ]
+  },
+  "wardrobe": [
+    "saffron kurta with cream stole",
+    "white kurta with beige stole",
+    "yellow kurta with blue stole",
+    "deep red kurta with cream stole",
+    "royal blue kurta with cream stole",
+    "cream kurta with maroon stole"
+  ],
+  "locations": [
+    "ancient Hindu temple at sunrise",
+    "peaceful sacred river ghat at dawn",
+    "Krishna temple with warm diyas",
+    "Hanuman temple during evening aarti",
+    "mountain temple surrounded by mist",
+    "grand temple courtyard at golden hour",
+    "flower-filled temple garden",
+    "old temple corridor illuminated by lamps"
+  ],
+  "negative_prompt": "different person, changed identity, different face, different age, beard, moustache, facial hair, deformed face, asymmetrical eyes, extra fingers, malformed hands, duplicate person, multiple people, text, subtitles, watermark, logo, cartoon, anime, plastic skin, oversmoothed skin, low resolution, blurry face"
+}
