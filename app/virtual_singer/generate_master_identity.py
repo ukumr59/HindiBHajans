@@ -12,34 +12,38 @@ ROOT = Path(__file__).resolve().parent
 CONFIG = ROOT / "identity_config.json"
 MODEL_ID = os.getenv("VIRTUAL_SINGER_IMAGE_MODEL", "stabilityai/stable-diffusion-xl-base-1.0")
 
+# The singer is fictional, while the visual design is derived from the user's
+# supplied self-photo: glasses, hairstyle, facial structure and general build.
 MASTER_PROMPT = (
-    "Photorealistic cinematic portrait of a fictional Indian male devotional singer, adult and mature-looking, "
-    "visually inspired by the supplied reference-derived character design. Preserve a distinctive oval-to-rectangular "
-    "face, warm medium-brown Indian skin tone, dark brown expressive eyes, straight nose, defined natural jawline, "
-    "short black hair neatly side-parted, clean-shaven face, and distinctive rectangular dark eyeglasses. "
-    "Average-to-fit adult physique with natural shoulders and proportions. Calm, sincere, devotional expression, "
-    "subtle confident smile, humble charismatic presence. Wearing a simple cream kurta and traditional beige stole, "
-    "rudraksha prayer beads, standing naturally in a softly lit ancient Hindu temple with warm diyas in the background. "
-    "Centered three-quarter chest-up portrait, natural skin texture, realistic facial proportions, cinematic Indian "
-    "devotional cinema, 85mm portrait lens, shallow depth of field, soft volumetric temple light, highly detailed, "
-    "one person only, no text, no watermark."
+    "Photorealistic cinematic portrait of a fictional Indian male devotional singer, age around 30, "
+    "with facial features closely matching the approved self-reference design: warm medium-brown skin, "
+    "short neatly combed black hair with a clean side part, broad forehead, distinctive oval-to-rectangular "
+    "face, dark brown eyes, straight medium-width nose, natural medium lips, clean-shaven face, "
+    "defined but natural jawline, average-to-fit adult physique, and rectangular black eyeglasses with "
+    "thin dark frames. Keep the eyeglasses as a permanent identity feature. Calm sincere devotional "
+    "expression, approachable and humble presence. The character is fictional and must remain one consistent "
+    "person. Wearing a simple cream kurta and beige stole, standing in a softly lit ancient Hindu temple "
+    "with warm diyas in the background. Centered three-quarter chest-up portrait, natural skin texture, "
+    "realistic facial proportions, cinematic Indian devotional cinema, 85mm portrait lens, shallow depth "
+    "of field, soft volumetric temple light, highly detailed, one person only, no text, no watermark, "
+    "no tilak, no earrings, no facial hair, no ornate jewelry."
 )
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--seed", type=int, default=44031)
-    parser.add_argument("--steps", type=int, default=28)
+    parser.add_argument("--seed", type=int, default=71284)
+    parser.add_argument("--steps", type=int, default=30)
     parser.add_argument("--output", default="virtual_singer_master.png")
     args = parser.parse_args()
 
     config = json.loads(CONFIG.read_text(encoding="utf-8"))
-    negative = config["negative_prompt"]
+    negative = config["negative_prompt"] + ", sunglasses, rimless glasses, different eyeglasses, missing glasses"
     generator = torch.Generator(device="cuda").manual_seed(args.seed)
 
     print(f"VIRTUAL_SINGER_MODEL={MODEL_ID}", flush=True)
     print(f"VIRTUAL_SINGER_SEED={args.seed}", flush=True)
-    print("VIRTUAL_SINGER_REFERENCE_PROFILE=adult_indian_male_glasses_short_side_parted_hair_average_fit", flush=True)
+    print("VIRTUAL_SINGER_IDENTITY_SOURCE=approved_self_reference_traits", flush=True)
 
     pipe = DiffusionPipeline.from_pretrained(
         MODEL_ID,
