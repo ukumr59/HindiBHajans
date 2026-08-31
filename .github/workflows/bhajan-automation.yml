@@ -23,10 +23,11 @@ env:
   YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
   YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
   YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+  PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
 
 jobs:
   generate-bhajans:
-    name: Generate 1 Bhajan Aabha video
+    name: Generate 1 unique Bhajan Aabha video
     runs-on: ubuntu-latest
     timeout-minutes: 55
     steps:
@@ -47,12 +48,18 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Verify YouTube OAuth connection
+      - name: Verify required credentials
         run: |
           set -euo pipefail
           test -n "$YOUTUBE_CLIENT_ID"
           test -n "$YOUTUBE_CLIENT_SECRET"
           test -n "$YOUTUBE_REFRESH_TOKEN"
+          test -n "$PEXELS_API_KEY"
+          echo 'CREDENTIALS_OK youtube_oauth=true pexels=true'
+
+      - name: Verify YouTube OAuth connection
+        run: |
+          set -euo pipefail
           python - <<'PY'
           import os
           from google.auth.transport.requests import Request
@@ -68,17 +75,19 @@ jobs:
           print('YOUTUBE_CHANNEL_TITLE=' + items[0]['snippet']['title'])
           PY
 
-      - name: Generate exactly one video with resilient v5.5 pipeline
+      - name: Generate exactly one video with unique Pexels stock visuals
         env:
           MAX_VIDEOS: '1'
           VIDEO_SECONDS: '45'
           OUTPUT_DIR: output
-        run: python -m app.zero_cost_pipeline_v5_5
+        run: python -m app.zero_cost_pipeline_stock
 
       - name: Validate generated output
         run: |
           set -euo pipefail
           test -s output/run_state.json
+          test -s output/youtube_seo.json
+          test -s output/pexels_credits.txt
           COUNT=$(find output/videos -maxdepth 1 -type f -name '*.mp4' | wc -l)
           echo "Generated videos: $COUNT"
           test "$COUNT" -eq 1
@@ -86,6 +95,19 @@ jobs:
           test -s "$VIDEO"
           ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "$VIDEO" | grep -q '720,1280'
           ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$VIDEO" | grep -q 'aac'
+
+      - name: Persist Pexels no-reuse ledger
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add data/pexels_used.json
+          if git diff --cached --quiet; then
+            echo 'PEXELS_LEDGER_UNCHANGED'
+          else
+            git commit -m 'chore: record Pexels clips used by Bhajan Aabha'
+            git push
+          fi
 
       - name: Publish latest video to GitHub release
         env:
@@ -95,24 +117,25 @@ jobs:
           set -euo pipefail
           TAG="bhajan-aabha-latest"
           gh release delete "$TAG" --repo "$REPO" --cleanup-tag --yes 2>/dev/null || true
-          gh release create "$TAG" --repo "$REPO" --title "Bhajan Aabha — Latest Output" --notes "Zero-cost Bhajan Aabha output." --prerelease output/videos/*.mp4 output/*.json
+          gh release create "$TAG" --repo "$REPO" --title "Bhajan Aabha — Latest Output" --notes "Original Bhajan Aabha music with unique Pexels stock visuals." --prerelease output/videos/*.mp4 output/*.json output/pexels_credits.txt
 
-      - name: Publish to YouTube
+      - name: Publish to YouTube with SEO
         if: ${{ github.event_name == 'schedule' || inputs.publish_youtube == true }}
         env:
           YOUTUBE_PRIVACY_STATUS: public
           PYTHONUNBUFFERED: '1'
+          OUTPUT_DIR: output
         run: |
           set -euo pipefail
           VIDEO=$(find output/videos -maxdepth 1 -type f -name '*.mp4' | head -1)
-          python -u -m app.youtube_publisher "$VIDEO"
+          python -u -m app.youtube_publisher_seo "$VIDEO"
 
       - name: Publish status
         run: |
           if [ "${{ github.event_name }}" = "schedule" ]; then
-            echo 'Scheduled run: one video generated and YouTube publication enabled.'
+            echo 'Scheduled run: one unique stock-video composition generated, SEO applied, and YouTube publication enabled.'
           elif [ "${{ inputs.publish_youtube }}" = "true" ]; then
-            echo 'Manual run: one video generated and YouTube publication enabled.'
+            echo 'Manual run: one unique stock-video composition generated, SEO applied, and YouTube publication enabled.'
           else
-            echo 'Manual run: one video generated; YouTube upload skipped.'
+            echo 'Manual run: one unique stock-video composition generated; YouTube upload skipped.'
           fi
