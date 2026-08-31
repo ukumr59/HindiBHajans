@@ -63,8 +63,13 @@ jobs:
           import os
           from pathlib import Path
           from lightning_sdk import Machine, Studio
+
           owner = os.environ.get('LIGHTNING_USERNAME') or os.environ.get('LIGHTNING_ORG')
-          kwargs = dict(name='bhajan-aabha-ace-step', teamspace=os.environ['LIGHTNING_TEAMSPACE'], create_ok=True)
+          kwargs = dict(
+              name='bhajan-aabha-ace-step',
+              teamspace=os.environ['LIGHTNING_TEAMSPACE'],
+              create_ok=True,
+          )
           kwargs['user' if os.environ.get('LIGHTNING_USERNAME') else 'org'] = owner
           s = Studio(**kwargs)
           status = str(s.status).lower()
@@ -72,14 +77,39 @@ jobs:
               s.start(Machine.T4)
           elif 't4' not in str(s.machine).lower():
               s.switch_machine(Machine.T4)
-          s.upload_file('app/lightning_wan2_worker.py', remote_path='lightning_wan2_worker.py')
-          s.upload_file('smoke/wan_request.json', remote_path='wan_request.json')
-          out, code = s.run_with_exit_code('python lightning_wan2_worker.py')
-          print(out[-20000:])
+
+          # Keep both files together so the worker can resolve wan_request.json
+          # relative to its own location, regardless of the Studio working dir.
+          remote_dir = 'wan2_smoke_input'
+          s.upload_file('app/lightning_wan2_worker.py', remote_path=f'{remote_dir}/lightning_wan2_worker.py')
+          s.upload_file('smoke/wan_request.json', remote_path=f'{remote_dir}/wan_request.json')
+
+          locate, locate_code = s.run_with_exit_code(
+              "find /teamspace/studios -maxdepth 4 -type f "
+              "\\( -name lightning_wan2_worker.py -o -name wan_request.json \\) -print"
+          )
+          print('WAN_REMOTE_FILES:')
+          print(locate)
+          if locate_code != 0:
+              raise SystemExit(locate_code)
+
+          worker_candidates = [
+              line.strip() for line in locate.splitlines()
+              if line.strip().endswith('/lightning_wan2_worker.py')
+          ]
+          if not worker_candidates:
+              raise RuntimeError('WAN_UPLOAD_FATAL: lightning_wan2_worker.py not found after upload')
+          worker = worker_candidates[-1]
+          print(f'WAN_WORKER_PATH={worker}')
+
+          out, code = s.run_with_exit_code(f'python {worker}')
+          print(out[-30000:])
           if code != 0:
               raise SystemExit(code)
-          s.download_file('wan2_worker/scenes/scene_1.mp4', 'smoke/wan2_scene.mp4')
-          s.download_file('wan2_worker/wan_manifest.json', 'smoke/wan_manifest.json')
+
+          worker_root = str(Path(worker).parent)
+          s.download_file(f'{worker_root}/wan2_worker/scenes/scene_1.mp4', 'smoke/wan2_scene.mp4')
+          s.download_file(f'{worker_root}/wan2_worker/wan_manifest.json', 'smoke/wan_manifest.json')
           s.stop()
           PY
 
