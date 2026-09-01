@@ -75,7 +75,7 @@ def main() -> None:
         "h94/IP-Adapter",
         subfolder="sdxl_models",
         weight_name="ip-adapter_sdxl.bin",
-        image_encoder_folder="models/image_encoder",
+        image_encoder_folder="sdxl_models/image_encoder",
     )
     print("IP_ADAPTER_LOADED", flush=True)
 
