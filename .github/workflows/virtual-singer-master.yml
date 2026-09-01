@@ -1,4 +1,4 @@
-name: Bhajan Aabha — Create Virtual Singer Master
+name: Bhajan Aabha — Lock Permanent Virtual Singer Identity
 
 on:
   workflow_dispatch:
@@ -7,18 +7,23 @@ permissions:
   contents: read
 
 jobs:
-  virtual-singer-master:
-    name: Generate one permanent fictional Bhajan Aabha singer
+  lock-singer-identity:
+    name: Create approved locked singer source (no face regeneration)
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Lightning SDK
-        run: pip install -q lightning-sdk
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
 
-      - name: Validate and materialize singer reference
+      - name: Install Pillow
+        run: pip install -q Pillow
+
+      - name: Materialize approved singer reference and create locked source
         env:
           SINGER_REFERENCE_B64: ${{ secrets.SINGER_REFERENCE_B64 }}
         run: |
@@ -28,165 +33,40 @@ jobs:
             exit 1
           fi
           python - <<'PY'
-          import base64, os
-          from pathlib import Path
-          raw = os.environ["SINGER_REFERENCE_B64"]
-          data = base64.b64decode(raw, validate=True)
-          if not data.startswith(b"\x89PNG") and not data.startswith(b"\xff\xd8\xff"):
-              raise SystemExit("ERROR: SINGER_REFERENCE_B64 is not a PNG/JPEG image")
-          if len(data) > 48 * 1024:
-              raise SystemExit("ERROR: decoded reference is too large; use the compressed JPEG reference")
-          path = Path(os.environ["RUNNER_TEMP"]) / "singer_reference.jpg"
-          path.write_bytes(data)
-          print(f"REFERENCE_OK bytes={len(data)}")
-          PY
-
-      - name: Resolve Lightning membership
-        env:
-          LIGHTNING_USER_ID: ${{ secrets.LIGHTNING_USER_ID }}
-          LIGHTNING_API_KEY: ${{ secrets.LIGHTNING_API_KEY }}
-        run: |
-          set -euo pipefail
-          M=$(lightning api /v1/memberships)
-          TS=$(echo "$M" | jq -r '.memberships[0].name')
-          OWNER_TYPE=$(echo "$M" | jq -r '.memberships[0].ownerType')
-          OWNER_ID=$(echo "$M" | jq -r '.memberships[0].ownerId')
-          echo "LIGHTNING_TEAMSPACE=$TS" >> "$GITHUB_ENV"
-          if [ "$OWNER_TYPE" = "user" ]; then
-            OWNER=$(lightning api "/v1/users/$OWNER_ID" | jq -r '.name')
-            echo "LIGHTNING_USERNAME=$OWNER" >> "$GITHUB_ENV"
-          else
-            OWNER=$(lightning api "/v1/orgs/$OWNER_ID" | jq -r '.name')
-            echo "LIGHTNING_ORG=$OWNER" >> "$GITHUB_ENV"
-          fi
-
-      - name: Generate virtual singer master on T4
-        env:
-          LIGHTNING_USER_ID: ${{ secrets.LIGHTNING_USER_ID }}
-          LIGHTNING_API_KEY: ${{ secrets.LIGHTNING_API_KEY }}
-          LIGHTNING_TEAMSPACE: ${{ env.LIGHTNING_TEAMSPACE }}
-          LIGHTNING_USERNAME: ${{ env.LIGHTNING_USERNAME }}
-          LIGHTNING_ORG: ${{ env.LIGHTNING_ORG }}
-          GITHUB_RUN_ID: ${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          rm -rf output
-          mkdir -p output
-          python - <<'PY'
-          import base64
           import os
-          import tarfile
-          import time
           from pathlib import Path
-          from lightning_sdk import Machine, Studio
+          from PIL import Image
+          import base64
+          import io
 
-          runner_temp = Path(os.environ['RUNNER_TEMP'])
-          run_id = os.environ['GITHUB_RUN_ID']
-          bundle_name = f'virtual_singer_bundle_{run_id}.tar.gz'
-          bundle = runner_temp / bundle_name
-          with tarfile.open(bundle, 'w:gz') as tar:
-              tar.add('app/virtual_singer/generate_master_identity.py', arcname='generate_master_identity.py')
-              tar.add('app/virtual_singer/identity_config.json', arcname='identity_config.json')
-              tar.add(runner_temp / 'singer_reference.jpg', arcname='reference_input.jpg')
-          print(f'BUNDLE_OK name={bundle_name} bytes={bundle.stat().st_size}', flush=True)
-
-          owner = os.environ.get('LIGHTNING_USERNAME') or os.environ.get('LIGHTNING_ORG')
-          kwargs = dict(name='bhajan-aabha-virtual-singer', teamspace=os.environ['LIGHTNING_TEAMSPACE'], create_ok=True)
-          kwargs['user' if os.environ.get('LIGHTNING_USERNAME') else 'org'] = owner
-          s = Studio(**kwargs)
-
-          status = str(s.status).lower()
-          print(f'STUDIO_INITIAL_STATUS={status}', flush=True)
-          deadline = time.time() + 300
-          while 'stopping' in status:
-              if time.time() >= deadline:
-                  raise RuntimeError('Studio remained Stopping for 5 minutes; refusing to start concurrently.')
-              print('STUDIO_WAITING_FOR_STOP', flush=True)
-              time.sleep(10)
-              status = str(s.status).lower()
-              print(f'STUDIO_STATUS={status}', flush=True)
-
-          if 'running' not in status:
-              if 'failed' in status:
-                  raise RuntimeError(f'Studio is in Failed state: {s.status}')
-              print('STUDIO_STARTING_T4', flush=True)
-              s.start(Machine.T4)
-          elif 't4' not in str(s.machine).lower():
-              print(f'STUDIO_SWITCHING_TO_T4 current={s.machine}', flush=True)
-              s.switch_machine(Machine.T4)
-
-          print(f'STUDIO_READY status={s.status} machine={s.machine}', flush=True)
-
-          remote = f'virtual_singer_master_run_{run_id}'
-          payload_b64 = base64.b64encode(bundle.read_bytes()).decode('ascii')
-
-          install = (
-              'python -m pip install -q --upgrade '
-              '"numpy<2" "diffusers==0.31.0" "transformers==4.46.3" '
-              '"accelerate==1.0.1" safetensors invisible_watermark insightface opencv-python-headless'
-          )
-
-          # Do not use Studio.upload_file here. The Lightning SDK upload endpoint
-          # accepted the bytes but did not place them at the documented Studio-home
-          # path. The bundle is only ~10 KB, so write it deterministically through
-          # the Studio shell using base64 instead.
-          command = f'''set -euo pipefail
-          REMOTE="$HOME/{remote}"
-          BUNDLE="$REMOTE/{bundle_name}"
-          rm -rf "$REMOTE"
-          mkdir -p "$REMOTE/payload"
-          printf '%s' '{payload_b64}' | base64 -d > "$BUNDLE"
-          test -s "$BUNDLE"
-          echo "BUNDLE_TRANSFER_OK bytes=$(stat -c %s "$BUNDLE") path=$BUNDLE"
-          tar -xzf "$BUNDLE" -C "$REMOTE/payload"
-          cd "$REMOTE/payload"
-          echo "=== BUNDLE CONTENTS ==="
-          ls -lh generate_master_identity.py identity_config.json reference_input.jpg
-          test -s generate_master_identity.py
-          test -s identity_config.json
-          test -s reference_input.jpg
-          {install}
-          python - <<'PY2'
-          import numpy
-          import diffusers
-          import transformers
-          print("ENV_OK", numpy.__version__, diffusers.__version__, transformers.__version__, flush=True)
-          PY2
-          echo "=== RUNNING GENERATOR FROM SAME DIRECTORY AS REFERENCE ==="
-          python generate_master_identity.py --seed 71284 --steps 30 --reference reference_input.jpg --output virtual_singer_master_v3.png
-          test -s virtual_singer_master_v3.png
-          file virtual_singer_master_v3.png
-          sha256sum virtual_singer_master_v3.png'''
-
-          out, code = s.run_with_exit_code(command)
-          print(out[-30000:], flush=True)
-          if code != 0:
-              try:
-                  s.stop()
-              except Exception:
-                  pass
-              raise SystemExit(code)
-
-          generated = f'$HOME/{remote}/payload/virtual_singer_master_v3.png'
-          locate_out, locate_code = s.run_with_exit_code(
-              f'test -s "{generated}" && echo "GENERATED_MASTER_PATH={generated}"'
-          )
-          print(locate_out, flush=True)
-          if locate_code != 0:
-              raise SystemExit('ERROR: generated master image could not be located')
-          s.download_file(generated, 'output/virtual_singer_master_v3.png')
-          s.stop()
+          raw = base64.b64decode(os.environ['SINGER_REFERENCE_B64'], validate=True)
+          image = Image.open(io.BytesIO(raw)).convert('RGB')
+          print(f"REFERENCE_SIZE={image.size}")
+          if image.size != (1024, 1536):
+              raise SystemExit(f"ERROR: expected approved 1024x1536 identity sheet, got {image.size}")
+          Path('output').mkdir(exist_ok=True)
+          Path('/tmp/reference.bin').write_bytes(raw)
           PY
 
-      - name: Validate master image
+          python app/virtual_singer/prepare_locked_identity.py \
+            --input-b64 "$SINGER_REFERENCE_B64" \
+            --output output/bhajan_aabha_locked_identity_source.png
+
+      - name: Validate locked singer identity
         run: |
           set -euo pipefail
-          test -s output/virtual_singer_master_v3.png
-          file output/virtual_singer_master_v3.png
+          test -s output/bhajan_aabha_locked_identity_source.png
+          python - <<'PY'
+          from PIL import Image
+          p = 'output/bhajan_aabha_locked_identity_source.png'
+          im = Image.open(p)
+          print(f"LOCKED_IDENTITY_VALID size={im.size} format={im.format}")
+          assert im.size == (210, 420)
+          PY
 
-      - name: Upload virtual singer master
+      - name: Upload locked singer source
         uses: actions/upload-artifact@v4
         with:
-          name: bhajan-aabha-virtual-singer-master-v3
-          path: output/virtual_singer_master_v3.png
+          name: bhajan-aabha-locked-singer-identity
+          path: output/bhajan_aabha_locked_identity_source.png
           if-no-files-found: error
