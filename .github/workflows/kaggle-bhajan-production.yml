@@ -1,0 +1,163 @@
+name: Bhajan Aabha — Kaggle Free GPU Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_seconds:
+        description: 'Final video duration (180-300 seconds, divisible by 15)'
+        required: false
+        default: '180'
+        type: string
+      publish_youtube:
+        description: 'Publish the final MP4 to YouTube'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bhajan-aabha-kaggle-production
+  cancel-in-progress: false
+
+env:
+  KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+  YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+  YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+  YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+  KAGGLE_KERNEL: uk umr59/bhajan-aabha-t4x2-worker
+  VIDEO_SECONDS: ${{ inputs.video_seconds || '180' }}
+
+jobs:
+  production:
+    name: Run Bhajan Aabha on Kaggle free GPU
+    runs-on: ubuntu-latest
+    timeout-minutes: 110
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate configuration BEFORE any remote GPU run
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${KAGGLE_API_TOKEN:-}" || { echo 'Missing KAGGLE_API_TOKEN repository secret'; exit 1; }
+          test -s 'assets/uks model image.png' || { echo 'Missing approved singer asset'; exit 1; }
+          python - <<'PY'
+          from pathlib import Path
+          from PIL import Image
+          p = Path('assets/uks model image.png')
+          im = Image.open(p)
+          print('REFERENCE=', p)
+          print('REFERENCE_SIZE=', im.size)
+          assert im.size == (1536, 1024), im.size
+          import os
+          seconds = int(os.environ.get('VIDEO_SECONDS', '180'))
+          assert 180 <= seconds <= 300 and seconds % 15 == 0, seconds
+          print('CONFIG_OK')
+          print('GPU_BACKEND=KAGGLE')
+          print('LIGHTNING_AI=DISABLED')
+          print('HF_ZEROGPU=DISABLED')
+          PY
+
+      - name: Install Kaggle CLI
+        run: |
+          python -m pip install --upgrade 'kaggle>=1.8.4'
+          kaggle --version
+
+      - name: Prepare Kaggle worker metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path('kaggle_kernel/kernel-metadata.json')
+          data = json.loads(p.read_text(encoding='utf-8'))
+          data['id'] = 'ukumr59/bhajan-aabha-t4x2-worker'
+          data['enable_gpu'] = 'true'
+          data['enable_internet'] = 'true'
+          p.write_text(json.dumps(data, indent=2), encoding='utf-8')
+          print(p.read_text(encoding='utf-8'))
+          PY
+          cp kaggle_kernel/worker.py kaggle_kernel/worker_run.py
+
+      - name: Submit/update Kaggle T4 worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          kaggle kernels push -p kaggle_kernel --accelerator NvidiaTeslaT4 -t 6600
+
+      - name: Wait for Kaggle worker without wasteful retries
+        shell: bash
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 6000))
+          while true; do
+            status=$(kaggle kernels status uk umr59/bhajan-aabha-t4x2-worker 2>&1 || true)
+            echo "$status"
+            echo "$status" | grep -qiE 'complete|error|cancel|failed' && break
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo 'KAGGLE_TIMEOUT: worker did not finish within 100 minutes'
+              exit 1
+            fi
+            sleep 60
+          done
+          if echo "$status" | grep -qiE 'error|cancel|failed'; then
+            echo 'KAGGLE_WORKER_FAILED'
+            exit 1
+          fi
+
+      - name: Download Kaggle production outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf kaggle_output
+          mkdir -p kaggle_output
+          kaggle kernels output uk umr59/bhajan-aabha-t4x2-worker -p kaggle_output -o
+          echo 'Downloaded Kaggle output:'
+          find kaggle_output -type f -maxdepth 5 -printf '%p %s bytes\n' | sort
+          VIDEO=$(find kaggle_output -type f -name 'bhajan_aabha_exact_identity.mp4' -size +500k | head -1)
+          AUDIO=$(find kaggle_output -type f -name 'bhajan_source.mp3' -size +100k | head -1)
+          MANIFEST=$(find kaggle_output -type f -name 'manifest.json' | head -1)
+          test -n "$VIDEO"
+          test -n "$AUDIO"
+          test -n "$MANIFEST"
+          mkdir -p output/videos
+          cp "$VIDEO" output/videos/bhajan_aabha_exact_identity.mp4
+          cp "$AUDIO" output/bhajan_source.mp3
+          cp "$MANIFEST" output/manifest.json
+          ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 output/videos/bhajan_aabha_exact_identity.mp4
+          echo 'OUTPUT_DOWNLOAD_OK'
+
+      - name: Publish latest output as GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          TAG='bhajan-aabha-latest'
+          gh release delete "$TAG" --repo "$REPO" --cleanup-tag --yes 2>/dev/null || true
+          gh release create "$TAG" --repo "$REPO" --title 'Bhajan Aabha — Latest Output' --notes 'Generated on Kaggle free GPU using the approved locked singer source.' --prerelease output/videos/*.mp4 output/bhajan_source.mp3 output/manifest.json
+
+      - name: Publish to YouTube
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_youtube == true }}
+        env:
+          YOUTUBE_PRIVACY_STATUS: public
+          OUTPUT_DIR: output
+          PYTHONUNBUFFERED: '1'
+        run: |
+          set -euo pipefail
+          VIDEO='output/videos/bhajan_aabha_exact_identity.mp4'
+          python -u -m app.youtube_publisher_seo "$VIDEO"
+
+      - name: Production summary
+        run: |
+          echo 'BHAJAN_AABHA_PRODUCTION_OK'
+          echo 'BACKEND=KAGGLE_FREE_GPU'
+          echo 'LIGHTNING_AI=DISABLED'
+          echo 'HF_ZEROGPU=DISABLED'
+          echo 'IDENTITY_SOURCE=assets/uks model image.png'
+          echo 'FINAL=output/videos/bhajan_aabha_exact_identity.mp4'
