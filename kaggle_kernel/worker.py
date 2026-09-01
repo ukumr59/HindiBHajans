@@ -14,22 +14,16 @@ AUDIO = WORK / 'bhajan_source.mp3'
 MANIFEST = WORK / 'manifest.json'
 
 REPO_URL = 'https://github.com/ukumr59/HindiBHajans.git'
-REQUEST = {
-    'caption': (
-        'Modern high-energy Hindi devotional bhajan, 128 BPM, 4/4, polished commercial production, '
-        'powerful expressive Hindi male lead vocal clearly singing every lyric, catchy devotional melody, '
-        'energetic electronic arrangement, punchy kick, controlled bass, synth pads, dhol, dholak, tabla, '
-        'temple bells, bansuri and harmonium accents, strong chorus, professional loud master. '
-        'NOT meditation music, NOT sleepy, NOT ambient, NOT spoken narration, NOT humming, NOT a cappella, '
-        'NOT instrumental-only.'
-    ),
-    'lyrics': '''[Intro]\nश्री राम... श्री राम... जय जय राम...\n\n[Verse 1]\nमन में बसो रघुनंदन, चरणों में मेरा ध्यान\nराम नाम की ज्योति जले, रोशन हो हर प्राण\n\n[Pre-Chorus]\nतेरे नाम की धुन बजे, हर धड़कन में आज\nतेरी कृपा से खिल उठे, जीवन का हर राज\n\n[Chorus]\nश्री राम जय राम, जय जय राम\nमेरे मन के दीप में, बसते श्री राम\n\n[Verse 2]\nदुख की घड़ी में साथ दो, हे दीनदयाल भगवान\nतेरा नाम ही आसरा, तेरा नाम ही सम्मान\n\n[Chorus]\nश्री राम जय राम, जय जय राम\nमेरे मन के दीप में, बसते श्री राम\n\n[Verse 3]\nअयोध्या के राजकुमार, करुणा के भंडार\nतेरे चरणों में मिल जाए, जीवन का सच्चा सार\n\n[Build]\nजय श्री राम की गूंज उठे, नभ से धरती तक\nढोल बजे और शंख बजे, प्रेम बहे हर पल\n\n[Final Chorus]\nश्री राम जय राम, जय जय राम\nमेरे मन के दीप में, बसते श्री राम\nश्री राम जय राम, जय जय राम\nजय जय राम... जय जय राम...\n\n[Outro]\nश्री राम... जय राम... जय जय राम...''',
-    'bpm': 128,
-    'keyscale': 'C Major',
-    'timesignature': '4/4',
-    'vocal_language': 'hi',
-    'duration': 180,
-}
+LYRICS = '''[Intro]\nश्री राम... श्री राम... जय जय राम...\n\n[Verse 1]\nमन में बसो रघुनंदन, चरणों में मेरा ध्यान\nराम नाम की ज्योति जले, रोशन हो हर प्राण\n\n[Pre-Chorus]\nतेरे नाम की धुन बजे, हर धड़कन में आज\nतेरी कृपा से खिल उठे, जीवन का हर राज\n\n[Chorus]\nश्री राम जय राम, जय जय राम\nमेरे मन के दीप में, बसते श्री राम\n\n[Verse 2]\nदुख की घड़ी में साथ दो, हे दीनदयाल भगवान\nतेरा नाम ही आसरा, तेरा नाम ही सम्मान\n\n[Chorus]\nश्री राम जय राम, जय जय राम\nमेरे मन के दीप में, बसते श्री राम\n\n[Verse 3]\nअयोध्या के राजकुमार, करुणा के भंडार\nतेरे चरणों में मिल जाए, जीवन का सच्चा सार\n\n[Build]\nजय श्री राम की गूंज उठे, नभ से धरती तक\nढोल बजे और शंख बजे, प्रेम बहे हर पल\n\n[Final Chorus]\nश्री राम जय राम, जय जय राम\nमेरे मन के दीप में, बसते श्री राम\nश्री राम जय राम, जय जय राम\nजय जय राम... जय जय राम...\n\n[Outro]\nश्री राम... जय राम... जय जय राम...'''
+
+CAPTION = (
+    'Modern high-energy Hindi devotional bhajan, 128 BPM, 4/4, polished commercial production, '
+    'powerful expressive Hindi male lead vocal clearly singing every lyric, catchy devotional melody, '
+    'energetic electronic arrangement, punchy kick, controlled bass, synth pads, dhol, dholak, tabla, '
+    'temple bells, bansuri and harmonium accents, strong chorus, professional loud master. '
+    'NOT meditation music, NOT sleepy, NOT ambient, NOT spoken narration, NOT humming, NOT a cappella, '
+    'NOT instrumental-only.'
+)
 
 
 def run(*args: str, cwd: Path | None = None) -> None:
@@ -45,10 +39,23 @@ def ensure_repo() -> None:
 
 
 def prepare_request() -> None:
+    requested = int(os.environ.get('VIDEO_SECONDS', '180'))
+    if requested < 180 or requested > 300 or requested % 15:
+        raise RuntimeError(f'VIDEO_SECONDS_FATAL: {requested}; expected 180-300 divisible by 15')
+    req = {
+        'caption': CAPTION,
+        'lyrics': LYRICS,
+        'bpm': 128,
+        'keyscale': 'C Major',
+        'timesignature': '4/4',
+        'vocal_language': 'hi',
+        'duration': requested,
+    }
     (WORK / 'bhajan_request.json').write_text(
-        json.dumps(REQUEST, ensure_ascii=False, indent=2),
+        json.dumps(req, ensure_ascii=False, indent=2),
         encoding='utf-8',
     )
+    print(f'VIDEO_SECONDS={requested}', flush=True)
 
 
 def require_gpu() -> None:
@@ -98,7 +105,7 @@ def write_manifest() -> None:
     ], text=True).strip())
     manifest = {
         'status': 'OK',
-        'backend': 'Kaggle GPU + local ACE-Step 1.5 + deterministic exact-identity assembly',
+        'backend': 'Kaggle free GPU + local ACE-Step 1.5 + deterministic exact-identity assembly',
         'lightning_ai': False,
         'huggingface_zerogpu': False,
         'identity_source': 'assets/uks model image.png',
