@@ -4,11 +4,18 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
+
+# When this file is launched as `python app/exact_identity_production.py`,
+# Python places /app on sys.path rather than the repository root. Add the
+# repository root explicitly so sibling app modules can be imported reliably.
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from PIL import Image, ImageEnhance
 
-ROOT = Path.cwd()
 OUT = ROOT / "output"
 WORK = OUT / "exact_identity_work"
 AUDIO = OUT / "bhajan_source.mp3"
@@ -19,7 +26,51 @@ VIDEO_SECONDS = int(os.getenv("VIDEO_SECONDS", "180"))
 SCENE_SECONDS = 15
 SCENE_COUNT = VIDEO_SECONDS // SCENE_SECONDS
 
-LYRICS = """[Intro]\nश्री राम... श्री राम... जय जय राम...\n\n[Verse 1]\nमन में बसो रघुनंदन, चरणों में मेरा ध्यान\nराम नाम की ज्योति जले, रोशन हो हर प्राण\n\n[Pre-Chorus]\nतेरे नाम की धुन बजे, हर धड़कन में आज\nतेरी कृपा से खिल उठे, जीवन का हर राज\n\n[Chorus]\nश्री राम जय राम, जय जय राम\nमेरे मन के दीप में, बसते श्री राम\n\n[Instrumental Break]\n\n[Verse 2]\nदुख की घड़ी में साथ दो, हे दीनदयाल भगवान\nतेरा नाम ही आसरा, तेरा नाम ही सम्मान\n\n[Pre-Chorus]\nतेरी राह में चल पड़ूँ, मन में लेकर विश्वास\nराम नाम की शक्ति से, मिट जाए हर त्रास\n\n[Chorus]\nश्री राम जय राम, जय जय राम\nमेरे मन के दीप में, बसते श्री राम\n\n[Verse 3]\nअयोध्या के राजकुमार, करुणा के भंडार\nतेरे चरणों में मिल जाए, जीवन का सच्चा सार\n\n[Build]\nजय श्री राम की गूंज उठे, नभ से धरती तक\nढोल बजे और शंख बजे, प्रेम बहे हर पल\n\n[Final Chorus]\nश्री राम जय राम, जय जय राम\nमेरे मन के दीप में, बसते श्री राम\nश्री राम जय राम, जय जय राम\nजय जय राम... जय जय राम...\n\n[Outro]\nश्री राम... जय राम... जय जय राम..."""
+LYRICS = """[Intro]
+श्री राम... श्री राम... जय जय राम...
+
+[Verse 1]
+मन में बसो रघुनंदन, चरणों में मेरा ध्यान
+राम नाम की ज्योति जले, रोशन हो हर प्राण
+
+[Pre-Chorus]
+तेरे नाम की धुन बजे, हर धड़कन में आज
+तेरी कृपा से खिल उठे, जीवन का हर राज
+
+[Chorus]
+श्री राम जय राम, जय जय राम
+मेरे मन के दीप में, बसते श्री राम
+
+[Instrumental Break]
+
+[Verse 2]
+दुख की घड़ी में साथ दो, हे दीनदयाल भगवान
+तेरा नाम ही आसरा, तेरा नाम ही सम्मान
+
+[Pre-Chorus]
+तेरी राह में चल पड़ूँ, मन में लेकर विश्वास
+राम नाम की शक्ति से, मिट जाए हर त्रास
+
+[Chorus]
+श्री राम जय राम, जय जय राम
+मेरे मन के दीप में, बसते श्री राम
+
+[Verse 3]
+अयोध्या के राजकुमार, करुणा के भंडार
+तेरे चरणों में मिल जाए, जीवन का सच्चा सार
+
+[Build]
+जय श्री राम की गूंज उठे, नभ से धरती तक
+ढोल बजे और शंख बजे, प्रेम बहे हर पल
+
+[Final Chorus]
+श्री राम जय राम, जय जय राम
+मेरे मन के दीप में, बसते श्री राम
+श्री राम जय राम, जय जय राम
+जय जय राम... जय जय राम...
+
+[Outro]
+श्री राम... जय राम... जय जय राम..."""
 
 MUSIC_CAPTION = """Modern high-energy Hindi devotional bhajan made like a current YouTube DJ devotional song, 128 BPM, 4/4, polished commercial stereo production, powerful expressive Hindi male lead vocal clearly singing every lyric with natural emotion and clean pronunciation, catchy devotional melody, memorable chorus, energetic EDM arrangement, punchy four-on-the-floor kick, deep controlled sub bass, synth bass, bright synth leads, wide pads, electronic percussion, claps, dhol and dholak layered with tabla, cinematic risers, tasteful temple bells, bansuri accents, harmonium texture, short instrumental intro, strong verse build, massive chorus, rhythmic instrumental break, final chorus with layered backing vocals. NOT meditation music, NOT sleepy, NOT ambient, NOT acoustic-only, NOT spoken narration, NOT humming, NOT a cappella, NOT instrumental-only."""
 
@@ -42,7 +93,7 @@ def prepare_singer() -> Path:
     if image.size != (1536, 1024):
         raise RuntimeError(f"Expected original 1536x1024 identity sheet, got {image.size}")
 
-    # This is the approved master portrait area from the original identity sheet.
+    # Approved master portrait area from the original identity sheet.
     crop = image.crop((35, 85, 245, 505))
     crop = ImageEnhance.Brightness(crop).enhance(1.04)
 
