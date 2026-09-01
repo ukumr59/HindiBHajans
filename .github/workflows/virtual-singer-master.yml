@@ -101,8 +101,8 @@ jobs:
           remote = f'virtual_singer_master_run_{run_id}'
           s.run(f'rm -rf {remote} && mkdir -p {remote}')
 
-          # Upload a uniquely named archive. Lightning workspaces can retain
-          # files from earlier runs, so never search for a generic filename.
+          # Lightning documents remote_path as relative to the Studio home.
+          # Upload the uniquely named bundle there, then resolve it from $HOME.
           s.upload_file(str(bundle), remote_path=bundle_name)
 
           install = (
@@ -113,13 +113,14 @@ jobs:
 
           command = f'''set -euo pipefail
           echo "=== LOCATING THIS RUN'S UPLOADED BUNDLE ==="
-          BUNDLE=$(find /teamspace/studios/this_studio -type f -name {bundle_name} -print -quit 2>/dev/null || true)
-          test -n "$BUNDLE" || {{ echo "ERROR: {bundle_name} was not found after upload"; exit 1; }}
+          echo "HOME=$HOME"
+          BUNDLE=$(find "$HOME" -type f -name {bundle_name} -print -quit 2>/dev/null || true)
+          test -n "$BUNDLE" || {{ echo "ERROR: {bundle_name} was not found under Studio HOME after upload"; exit 1; }}
           echo "LOCATED_BUNDLE=$BUNDLE"
-          rm -rf {remote}/payload
-          mkdir -p {remote}/payload
-          tar -xzf "$BUNDLE" -C {remote}/payload
-          cd {remote}/payload
+          rm -rf "$HOME/{remote}/payload"
+          mkdir -p "$HOME/{remote}/payload"
+          tar -xzf "$BUNDLE" -C "$HOME/{remote}/payload"
+          cd "$HOME/{remote}/payload"
           echo "=== BUNDLE CONTENTS ==="
           ls -lh generate_master_identity.py identity_config.json reference_input.jpg
           test -s generate_master_identity.py
@@ -147,17 +148,13 @@ jobs:
                   pass
               raise SystemExit(code)
 
+          generated = f'$HOME/{remote}/payload/virtual_singer_master_v3.png'
           locate_out, locate_code = s.run_with_exit_code(
-              f"find /teamspace/studios/this_studio/{remote} -type f -name virtual_singer_master_v3.png -print"
+              f'test -s "{generated}" && echo "GENERATED_MASTER_PATH={generated}"'
           )
           print(locate_out, flush=True)
           if locate_code != 0:
-              raise SystemExit(locate_code)
-          candidates = [x.strip() for x in locate_out.splitlines() if x.strip().endswith('/virtual_singer_master_v3.png')]
-          if not candidates:
               raise SystemExit('ERROR: generated master image could not be located')
-          generated = candidates[-1]
-          print(f'GENERATED_MASTER_PATH={generated}', flush=True)
           s.download_file(generated, 'output/virtual_singer_master_v3.png')
           s.stop()
           PY
