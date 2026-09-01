@@ -73,6 +73,7 @@ jobs:
           rm -rf output
           mkdir -p output
           python - <<'PY'
+          import base64
           import os
           import tarfile
           import time
@@ -117,13 +118,7 @@ jobs:
           print(f'STUDIO_READY status={s.status} machine={s.machine}', flush=True)
 
           remote = f'virtual_singer_master_run_{run_id}'
-          s.run(f'rm -rf {remote} && mkdir -p {remote}')
-
-          # Lightning SDK remote_path is relative to Studio home. Upload first to
-          # the Studio home using a bare filename, then move it with a Studio shell
-          # command. This avoids the SDK/API path mismatch that caused the previous
-          # run to report that the uploaded nested file was missing.
-          s.upload_file(str(bundle), remote_path=bundle_name)
+          payload_b64 = base64.b64encode(bundle.read_bytes()).decode('ascii')
 
           install = (
               'python -m pip install -q --upgrade '
@@ -131,19 +126,20 @@ jobs:
               '"accelerate==1.0.1" safetensors invisible_watermark insightface opencv-python-headless'
           )
 
+          # Do not use Studio.upload_file here. The Lightning SDK upload endpoint
+          # accepted the bytes but did not place them at the documented Studio-home
+          # path. The bundle is only ~10 KB, so write it deterministically through
+          # the Studio shell using base64 instead.
           command = f'''set -euo pipefail
-          SOURCE_BUNDLE="$HOME/{bundle_name}"
-          BUNDLE="$HOME/{remote}/{bundle_name}"
-          echo "=== VERIFYING STUDIO-HOME UPLOAD ==="
-          echo "SOURCE_BUNDLE=$SOURCE_BUNDLE"
-          test -s "$SOURCE_BUNDLE" || {{ echo "ERROR: SDK upload did not place bundle in Studio home"; exit 1; }}
-          echo "HOME_UPLOAD_OK bytes=$(stat -c %s "$SOURCE_BUNDLE")"
-          rm -rf "$HOME/{remote}"
-          mkdir -p "$HOME/{remote}/payload"
-          mv "$SOURCE_BUNDLE" "$BUNDLE"
-          echo "BUNDLE_MOVED_OK path=$BUNDLE bytes=$(stat -c %s "$BUNDLE")"
-          tar -xzf "$BUNDLE" -C "$HOME/{remote}/payload"
-          cd "$HOME/{remote}/payload"
+          REMOTE="$HOME/{remote}"
+          BUNDLE="$REMOTE/{bundle_name}"
+          rm -rf "$REMOTE"
+          mkdir -p "$REMOTE/payload"
+          printf '%s' '{payload_b64}' | base64 -d > "$BUNDLE"
+          test -s "$BUNDLE"
+          echo "BUNDLE_TRANSFER_OK bytes=$(stat -c %s "$BUNDLE") path=$BUNDLE"
+          tar -xzf "$BUNDLE" -C "$REMOTE/payload"
+          cd "$REMOTE/payload"
           echo "=== BUNDLE CONTENTS ==="
           ls -lh generate_master_identity.py identity_config.json reference_input.jpg
           test -s generate_master_identity.py
