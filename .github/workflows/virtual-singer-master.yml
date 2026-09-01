@@ -94,9 +94,6 @@ jobs:
           kwargs['user' if os.environ.get('LIGHTNING_USERNAME') else 'org'] = owner
           s = Studio(**kwargs)
 
-          # A previous failed run can leave the Studio in the asynchronous
-          # Stopping state. Lightning refuses start() until it reaches Stopped.
-          # Wait for that transition instead of blindly calling start().
           status = str(s.status).lower()
           print(f'STUDIO_INITIAL_STATUS={status}', flush=True)
           deadline = time.time() + 300
@@ -122,10 +119,11 @@ jobs:
           remote = f'virtual_singer_master_run_{run_id}'
           s.run(f'rm -rf {remote} && mkdir -p {remote}')
 
-          # Upload into the exact Studio-relative run directory.
-          # Do not search for the uploaded file.
-          remote_bundle = f'{remote}/{bundle_name}'
-          s.upload_file(str(bundle), remote_path=remote_bundle)
+          # Lightning SDK remote_path is relative to Studio home. Upload first to
+          # the Studio home using a bare filename, then move it with a Studio shell
+          # command. This avoids the SDK/API path mismatch that caused the previous
+          # run to report that the uploaded nested file was missing.
+          s.upload_file(str(bundle), remote_path=bundle_name)
 
           install = (
               'python -m pip install -q --upgrade '
@@ -134,13 +132,16 @@ jobs:
           )
 
           command = f'''set -euo pipefail
+          SOURCE_BUNDLE="$HOME/{bundle_name}"
           BUNDLE="$HOME/{remote}/{bundle_name}"
-          echo "=== VERIFYING THIS RUN'S UPLOADED BUNDLE ==="
-          echo "EXPECTED_BUNDLE=$BUNDLE"
-          test -s "$BUNDLE" || {{ echo "ERROR: uploaded bundle is not present at expected Studio path"; exit 1; }}
-          echo "UPLOADED_BUNDLE_OK bytes=$(stat -c %s "$BUNDLE")"
-          rm -rf "$HOME/{remote}/payload"
+          echo "=== VERIFYING STUDIO-HOME UPLOAD ==="
+          echo "SOURCE_BUNDLE=$SOURCE_BUNDLE"
+          test -s "$SOURCE_BUNDLE" || {{ echo "ERROR: SDK upload did not place bundle in Studio home"; exit 1; }}
+          echo "HOME_UPLOAD_OK bytes=$(stat -c %s "$SOURCE_BUNDLE")"
+          rm -rf "$HOME/{remote}"
           mkdir -p "$HOME/{remote}/payload"
+          mv "$SOURCE_BUNDLE" "$BUNDLE"
+          echo "BUNDLE_MOVED_OK path=$BUNDLE bytes=$(stat -c %s "$BUNDLE")"
           tar -xzf "$BUNDLE" -C "$HOME/{remote}/payload"
           cd "$HOME/{remote}/payload"
           echo "=== BUNDLE CONTENTS ==="
