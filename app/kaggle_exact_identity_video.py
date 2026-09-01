@@ -17,16 +17,8 @@ def run(*args: str) -> None:
 
 
 def resolve_image(requested: Path) -> Path:
-    """Resolve the exact approved singer image without making the user guess paths.
-
-    Priority:
-      1) explicitly requested existing file
-      2) known locked-source filenames under /kaggle/working
-      3) the original 1024x1536 identity-sheet PNG/JPG under /kaggle/input
-    """
     if requested.exists():
         return requested
-
     working_names = [
         'bhajan_aabha_locked_identity_source.png',
         'bhajan_aabha_locked_singer_highres.png',
@@ -44,7 +36,6 @@ def resolve_image(requested: Path) -> Path:
                         return p
             except Exception:
                 pass
-
     candidates: list[tuple[int, Path]] = []
     input_root = Path('/kaggle/input')
     if input_root.exists():
@@ -66,37 +57,38 @@ def resolve_image(requested: Path) -> Path:
                         candidates.append((score, p))
             except Exception:
                 continue
-
     if candidates:
         candidates.sort(key=lambda x: x[0], reverse=True)
         chosen = candidates[0][1]
         print(f'IMAGE_AUTO_RESOLVED={chosen}', flush=True)
         return chosen
-
-    raise FileNotFoundError(
-        'No approved singer image could be resolved. Expected the locked source '
-        'or the original 1024x1536 identity-sheet image under /kaggle/input.'
-    )
+    raise FileNotFoundError('No approved singer image could be resolved under /kaggle/working or /kaggle/input.')
 
 
 def find_audio(preferred: Path | None = None) -> Path:
     if preferred and preferred.exists():
         return preferred
-    preferred_names = [
-        'bhajan_source.mp3',
-        'bhajan_aabha_dj_master.mp3',
-        'bhajan_source.wav',
-    ]
-    for name in preferred_names:
-        p = ROOT / name
-        if p.exists() and p.stat().st_size > 100_000:
-            return p
+    preferred_names = ['bhajan_source.mp3', 'bhajan_aabha_dj_master.mp3', 'bhajan_source.wav']
+    # Search both working files and attached Kaggle inputs.
+    for base in (ROOT, Path('/kaggle/input')):
+        if not base.exists():
+            continue
+        for name in preferred_names:
+            for p in base.rglob(name):
+                if p.is_file() and p.stat().st_size > 100_000:
+                    return p
     candidates: list[Path] = []
-    for ext in ('*.mp3', '*.wav', '*.m4a', '*.flac'):
-        candidates.extend(ROOT.rglob(ext))
-    candidates = [p for p in candidates if p.stat().st_size > 100_000 and 'test' not in p.name.lower()]
+    for base in (ROOT, Path('/kaggle/input')):
+        if not base.exists():
+            continue
+        for ext in ('*.mp3', '*.wav', '*.m4a', '*.flac'):
+            candidates.extend(base.rglob(ext))
+    candidates = [p for p in candidates if p.is_file() and p.stat().st_size > 100_000 and 'test' not in p.name.lower()]
     if not candidates:
-        raise FileNotFoundError('No bhajan audio was found under /kaggle/working')
+        raise FileNotFoundError(
+            'No bhajan audio was found under /kaggle/working or /kaggle/input. '
+            'Attach the bhajan audio to this Kaggle notebook if it is not already attached.'
+        )
     return max(candidates, key=lambda p: p.stat().st_size)
 
 
