@@ -67,6 +67,7 @@ jobs:
           LIGHTNING_TEAMSPACE: ${{ env.LIGHTNING_TEAMSPACE }}
           LIGHTNING_USERNAME: ${{ env.LIGHTNING_USERNAME }}
           LIGHTNING_ORG: ${{ env.LIGHTNING_ORG }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
           rm -rf output
@@ -78,12 +79,14 @@ jobs:
           from lightning_sdk import Machine, Studio
 
           runner_temp = Path(os.environ['RUNNER_TEMP'])
-          bundle = runner_temp / 'virtual_singer_bundle.tar.gz'
+          run_id = os.environ['GITHUB_RUN_ID']
+          bundle_name = f'virtual_singer_bundle_{run_id}.tar.gz'
+          bundle = runner_temp / bundle_name
           with tarfile.open(bundle, 'w:gz') as tar:
               tar.add('app/virtual_singer/generate_master_identity.py', arcname='generate_master_identity.py')
               tar.add('app/virtual_singer/identity_config.json', arcname='identity_config.json')
               tar.add(runner_temp / 'singer_reference.jpg', arcname='reference_input.jpg')
-          print(f'BUNDLE_OK bytes={bundle.stat().st_size}', flush=True)
+          print(f'BUNDLE_OK name={bundle_name} bytes={bundle.stat().st_size}', flush=True)
 
           owner = os.environ.get('LIGHTNING_USERNAME') or os.environ.get('LIGHTNING_ORG')
           kwargs = dict(name='bhajan-aabha-virtual-singer', teamspace=os.environ['LIGHTNING_TEAMSPACE'], create_ok=True)
@@ -95,13 +98,12 @@ jobs:
           elif 't4' not in str(s.machine).lower():
               s.switch_machine(Machine.T4)
 
-          remote = 'virtual_singer_master_run_v10'
+          remote = f'virtual_singer_master_run_{run_id}'
           s.run(f'rm -rf {remote} && mkdir -p {remote}')
 
-          # IMPORTANT: Lightning's upload_file creates its own upload location.
-          # Upload ONE archive so generator, config and reference can never split
-          # across different upload directories.
-          s.upload_file(str(bundle), remote_path='virtual_singer_bundle.tar.gz')
+          # Upload a uniquely named archive. Lightning workspaces can retain
+          # files from earlier runs, so never search for a generic filename.
+          s.upload_file(str(bundle), remote_path=bundle_name)
 
           install = (
               'python -m pip install -q --upgrade '
@@ -110,9 +112,9 @@ jobs:
           )
 
           command = f'''set -euo pipefail
-          echo "=== LOCATING SINGLE UPLOADED BUNDLE ==="
-          BUNDLE=$(find /teamspace/studios/this_studio -type f -name virtual_singer_bundle.tar.gz -print -quit 2>/dev/null || true)
-          test -n "$BUNDLE" || {{ echo "ERROR: virtual_singer_bundle.tar.gz was not found after upload"; exit 1; }}
+          echo "=== LOCATING THIS RUN'S UPLOADED BUNDLE ==="
+          BUNDLE=$(find /teamspace/studios/this_studio -type f -name {bundle_name} -print -quit 2>/dev/null || true)
+          test -n "$BUNDLE" || {{ echo "ERROR: {bundle_name} was not found after upload"; exit 1; }}
           echo "LOCATED_BUNDLE=$BUNDLE"
           rm -rf {remote}/payload
           mkdir -p {remote}/payload
@@ -130,7 +132,7 @@ jobs:
           import transformers
           print("ENV_OK", numpy.__version__, diffusers.__version__, transformers.__version__, flush=True)
           PY2
-          echo "=== RUNNING CURRENT GENERATOR FROM SAME DIRECTORY AS REFERENCE ==="
+          echo "=== RUNNING GENERATOR FROM SAME DIRECTORY AS REFERENCE ==="
           python generate_master_identity.py --seed 71284 --steps 30 --reference reference_input.jpg --output virtual_singer_master_v3.png
           test -s virtual_singer_master_v3.png
           file virtual_singer_master_v3.png
@@ -145,9 +147,8 @@ jobs:
                   pass
               raise SystemExit(code)
 
-          # Find the actual generated file instead of assuming the SDK upload path.
           locate_out, locate_code = s.run_with_exit_code(
-              f"find /teamspace/studios/this_studio -type f -name virtual_singer_master_v3.png -print"
+              f"find /teamspace/studios/this_studio/{remote} -type f -name virtual_singer_master_v3.png -print"
           )
           print(locate_out, flush=True)
           if locate_code != 0:
