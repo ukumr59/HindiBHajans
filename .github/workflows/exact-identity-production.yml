@@ -11,20 +11,16 @@ on:
 permissions:
   contents: read
 
+env:
+  SINGER_REFERENCE_B64: ${{ secrets.SINGER_REFERENCE_B64 }}
+  HF_TOKEN: ${{ secrets.HF_TOKEN }}
+  VIDEO_SECONDS: ${{ inputs.video_seconds }}
+
 jobs:
   build-exact-identity-video:
-    name: Generate bhajan + assemble exact approved singer video
+    name: Generate bhajan remotely and assemble exact approved singer video
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    env:
-      LIGHTNING_USER_ID: ${{ secrets.LIGHTNING_USER_ID }}
-      LIGHTNING_API_KEY: ${{ secrets.LIGHTNING_API_KEY }}
-      LIGHTNING_USERNAME: ${{ secrets.LIGHTNING_USERNAME }}
-      LIGHTNING_ORG: ${{ secrets.LIGHTNING_ORG }}
-      LIGHTNING_TEAMSPACE: ${{ secrets.LIGHTNING_TEAMSPACE }}
-      LIGHTNING_STUDIO: bhajan-aabha-exact-identity
-      SINGER_REFERENCE_B64: ${{ secrets.SINGER_REFERENCE_B64 }}
-      VIDEO_SECONDS: ${{ inputs.video_seconds }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -36,18 +32,17 @@ jobs:
 
       - name: Install runtime dependencies
         run: |
+          set -euo pipefail
           python -m pip install -q --upgrade pip
-          pip install -q pillow lightning-sdk
+          pip install -q pillow gradio_client requests
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg
 
-      - name: Validate configuration before starting GPU work
+      - name: Validate configuration BEFORE any generation
         run: |
           set -euo pipefail
-          test -n "${LIGHTNING_USER_ID:-}" || { echo 'Missing LIGHTNING_USER_ID'; exit 1; }
-          test -n "${LIGHTNING_API_KEY:-}" || { echo 'Missing LIGHTNING_API_KEY'; exit 1; }
-          test -n "${LIGHTNING_TEAMSPACE:-}" || { echo 'Missing LIGHTNING_TEAMSPACE'; exit 1; }
           test -n "${SINGER_REFERENCE_B64:-}" || { echo 'Missing SINGER_REFERENCE_B64'; exit 1; }
+          test -n "${HF_TOKEN:-}" || { echo 'Missing HF_TOKEN'; exit 1; }
           python - <<'PY'
           import base64, io, os
           from PIL import Image
@@ -58,10 +53,14 @@ jobs:
           seconds = int(os.environ.get('VIDEO_SECONDS', '180'))
           assert 180 <= seconds <= 300 and seconds % 15 == 0, seconds
           print('CONFIG_OK seconds=', seconds)
+          print('LIGHTNING_AI=DISABLED')
           PY
 
-      - name: Generate audio and assemble final MP4
-        run: python app/exact_identity_production.py
+      - name: Generate audio and assemble final MP4 (NO LIGHTNING)
+        run: |
+          set -euo pipefail
+          ! grep -RniE 'lightning(_|-)?(sdk|ai)|LIGHTNING_|lightning_ace' app/exact_identity_production.py
+          python app/exact_identity_production.py
 
       - name: Verify outputs
         run: |
@@ -70,6 +69,7 @@ jobs:
           test -s output/bhajan_source.mp3
           ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 output/bhajan_aabha_exact_identity.mp4
           echo 'OUTPUT_VALIDATION_OK'
+          echo 'LIGHTNING_CALLS_CONFIRMED_DISABLED'
 
       - name: Upload final artifacts
         uses: actions/upload-artifact@v4
