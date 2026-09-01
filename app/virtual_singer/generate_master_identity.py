@@ -66,28 +66,32 @@ def main() -> None:
         use_safetensors=True,
         variant="fp16",
     )
-    pipe.enable_model_cpu_offload()
+
+    # IMPORTANT: load IP-Adapter BEFORE enabling model CPU offload.
+    # Diffusers documents that CPU offload must be enabled after IP-Adapter is
+    # loaded; otherwise the IP-Adapter image encoder is also offloaded and can
+    # fail during image encoding on T4 with dtype/device mismatches.
     pipe.load_ip_adapter(
         "h94/IP-Adapter",
         subfolder="sdxl_models",
         weight_name="ip-adapter_sdxl.bin",
         image_encoder_folder="models/image_encoder",
     )
+    print("IP_ADAPTER_LOADED", flush=True)
 
-    # Keep the IP-Adapter CLIP vision encoder in FP16, matching the SDXL/IP-Adapter
-    # pipeline. diffusers 0.31 selects the image tensor dtype from the first
-    # image-encoder parameter; forcing the encoder to float32 while projection
-    # weights remain FP16 causes the Float-vs-Half matmul failure seen on T4.
-    # The supported IP-Adapter configuration uses a float16 image encoder with
-    # a float16 SDXL pipeline.
-    if getattr(pipe, "image_encoder", None) is not None:
-        pipe.image_encoder = pipe.image_encoder.to(dtype=torch.float16)
-        print("IP_ADAPTER_IMAGE_ENCODER_DTYPE=float16", flush=True)
+    # Let diffusers keep the image encoder and projection weights in the
+    # pipeline's native FP16 dtype. Do not manually cast individual components.
+    encoder_dtype = next(pipe.image_encoder.parameters()).dtype if getattr(pipe, "image_encoder", None) is not None else None
+    print(f"IP_ADAPTER_IMAGE_ENCODER_DTYPE={encoder_dtype}", flush=True)
 
     pipe.set_ip_adapter_scale(0.92)
     if hasattr(pipe, "vae"):
         pipe.vae.enable_slicing()
         pipe.vae.enable_tiling()
+
+    # Must be AFTER load_ip_adapter (see comment above).
+    pipe.enable_model_cpu_offload()
+    print("MODEL_CPU_OFFLOAD_ENABLED_AFTER_IP_ADAPTER", flush=True)
 
     generator = torch.Generator(device="cuda").manual_seed(args.seed)
     image = pipe(
