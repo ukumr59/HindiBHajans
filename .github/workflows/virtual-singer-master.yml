@@ -101,9 +101,10 @@ jobs:
           remote = f'virtual_singer_master_run_{run_id}'
           s.run(f'rm -rf {remote} && mkdir -p {remote}')
 
-          # Lightning documents remote_path as relative to the Studio home.
-          # Upload the uniquely named bundle there, then resolve it from $HOME.
-          s.upload_file(str(bundle), remote_path=bundle_name)
+          # IMPORTANT: upload into the exact Studio-relative run directory.
+          # Do not search for the uploaded file: the SDK upload destination is deterministic.
+          remote_bundle = f'{remote}/{bundle_name}'
+          s.upload_file(str(bundle), remote_path=remote_bundle)
 
           install = (
               'python -m pip install -q --upgrade '
@@ -112,11 +113,11 @@ jobs:
           )
 
           command = f'''set -euo pipefail
-          echo "=== LOCATING THIS RUN'S UPLOADED BUNDLE ==="
-          echo "HOME=$HOME"
-          BUNDLE=$(find "$HOME" -type f -name {bundle_name} -print -quit 2>/dev/null || true)
-          test -n "$BUNDLE" || {{ echo "ERROR: {bundle_name} was not found under Studio HOME after upload"; exit 1; }}
-          echo "LOCATED_BUNDLE=$BUNDLE"
+          BUNDLE="$HOME/{remote}/{bundle_name}"
+          echo "=== VERIFYING THIS RUN'S UPLOADED BUNDLE ==="
+          echo "EXPECTED_BUNDLE=$BUNDLE"
+          test -s "$BUNDLE" || {{ echo "ERROR: uploaded bundle is not present at expected Studio path"; exit 1; }}
+          echo "UPLOADED_BUNDLE_OK bytes=$(stat -c %s "$BUNDLE")"
           rm -rf "$HOME/{remote}/payload"
           mkdir -p "$HOME/{remote}/payload"
           tar -xzf "$BUNDLE" -C "$HOME/{remote}/payload"
