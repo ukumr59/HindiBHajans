@@ -65,31 +65,65 @@ def resolve_image(requested: Path) -> Path:
     raise FileNotFoundError('No approved singer image could be resolved under /kaggle/working or /kaggle/input.')
 
 
+def _has_audio_stream(p: Path) -> bool:
+    try:
+        probe = subprocess.run(
+            ['ffprobe', '-v', 'error', '-select_streams', 'a:0',
+             '-show_entries', 'stream=codec_type', '-of', 'csv=p=0', str(p)],
+            capture_output=True, text=True, check=False,
+        )
+        return probe.stdout.strip() == 'audio'
+    except Exception:
+        return False
+
+
 def find_audio(preferred: Path | None = None) -> Path:
     if preferred and preferred.exists():
         return preferred
-    preferred_names = ['bhajan_source.mp3', 'bhajan_aabha_dj_master.mp3', 'bhajan_source.wav']
-    # Search both working files and attached Kaggle inputs.
+
+    preferred_names = [
+        'bhajan_source.mp3', 'bhajan_aabha_dj_master.mp3', 'bhajan_source.wav',
+        'bhajan_source.aac', 'bhajan_source.m4a', 'bhajan_source.flac',
+        'bhajan_source.ogg', 'bhajan_source.opus',
+    ]
     for base in (ROOT, Path('/kaggle/input')):
         if not base.exists():
             continue
         for name in preferred_names:
             for p in base.rglob(name):
-                if p.is_file() and p.stat().st_size > 100_000:
+                if p.is_file() and p.stat().st_size > 100_000 and _has_audio_stream(p):
+                    print(f'AUDIO_AUTO_RESOLVED={p}', flush=True)
                     return p
-    candidates: list[Path] = []
+
+    allowed = {'.mp3', '.wav', '.m4a', '.flac', '.aac', '.ogg', '.opus', '.webm', '.mp4', '.mkv'}
+    candidates: list[tuple[int, Path]] = []
+    seen: set[Path] = set()
     for base in (ROOT, Path('/kaggle/input')):
         if not base.exists():
             continue
-        for ext in ('*.mp3', '*.wav', '*.m4a', '*.flac'):
-            candidates.extend(base.rglob(ext))
-    candidates = [p for p in candidates if p.is_file() and p.stat().st_size > 100_000 and 'test' not in p.name.lower()]
-    if not candidates:
-        raise FileNotFoundError(
-            'No bhajan audio was found under /kaggle/working or /kaggle/input. '
-            'Attach the bhajan audio to this Kaggle notebook if it is not already attached.'
-        )
-    return max(candidates, key=lambda p: p.stat().st_size)
+        for p in base.rglob('*'):
+            if not p.is_file() or p in seen or p.suffix.lower() not in allowed:
+                continue
+            seen.add(p)
+            if p.stat().st_size <= 100_000 or 'test' in p.name.lower():
+                continue
+            if _has_audio_stream(p):
+                score = p.stat().st_size
+                name = p.name.lower()
+                if any(k in name for k in ('bhajan', 'song', 'music', 'audio', 'source')):
+                    score += 10_000_000
+                candidates.append((score, p))
+
+    if candidates:
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        chosen = candidates[0][1]
+        print(f'AUDIO_AUTO_RESOLVED={chosen}', flush=True)
+        return chosen
+
+    raise FileNotFoundError(
+        'No bhajan audio was found under /kaggle/working or /kaggle/input. '
+        'The script checked MP3/WAV/M4A/FLAC/AAC/OGG/OPUS and common audio containers.'
+    )
 
 
 def prepare_source(image_path: Path, tmp: Path) -> Path:
