@@ -1,0 +1,11 @@
+{
+  "id": "ukumr59/bhajan-aabha-t4x2-worker",
+  "title": "Bhajan Aabha — Free Kaggle T4 Production Worker",
+  "code_file": "worker.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "true",
+  "enable_internet": "true",
+  "machine_shape": ""
+}
