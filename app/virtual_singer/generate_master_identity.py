@@ -74,19 +74,15 @@ def main() -> None:
         image_encoder_folder="models/image_encoder",
     )
 
-    # Keep the IP-Adapter vision encoder on CUDA in float32. The main SDXL
-    # components remain CPU-offloaded for T4 memory efficiency. Removing the
-    # offload hook from this small encoder prevents accelerate from moving
-    # its weights back to CPU while the image tensor is on CUDA.
+    # Keep the IP-Adapter CLIP vision encoder in FP16, matching the SDXL/IP-Adapter
+    # pipeline. diffusers 0.31 selects the image tensor dtype from the first
+    # image-encoder parameter; forcing the encoder to float32 while projection
+    # weights remain FP16 causes the Float-vs-Half matmul failure seen on T4.
+    # The supported IP-Adapter configuration uses a float16 image encoder with
+    # a float16 SDXL pipeline.
     if getattr(pipe, "image_encoder", None) is not None:
-        try:
-            from accelerate.hooks import remove_hook_from_module
-            remove_hook_from_module(pipe.image_encoder, recurse=True)
-        except Exception:
-            pass
-        pipe.image_encoder = pipe.image_encoder.to(device="cuda", dtype=torch.float32)
-        print("IP_ADAPTER_IMAGE_ENCODER_DEVICE=cuda", flush=True)
-        print("IP_ADAPTER_IMAGE_ENCODER_DTYPE=float32", flush=True)
+        pipe.image_encoder = pipe.image_encoder.to(dtype=torch.float16)
+        print("IP_ADAPTER_IMAGE_ENCODER_DTYPE=float16", flush=True)
 
     pipe.set_ip_adapter_scale(0.92)
     if hasattr(pipe, "vae"):
