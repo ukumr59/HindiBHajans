@@ -75,6 +75,7 @@ jobs:
           python - <<'PY'
           import os
           import tarfile
+          import time
           from pathlib import Path
           from lightning_sdk import Machine, Studio
 
@@ -92,17 +93,37 @@ jobs:
           kwargs = dict(name='bhajan-aabha-virtual-singer', teamspace=os.environ['LIGHTNING_TEAMSPACE'], create_ok=True)
           kwargs['user' if os.environ.get('LIGHTNING_USERNAME') else 'org'] = owner
           s = Studio(**kwargs)
+
+          # A previous failed run can leave the Studio in the asynchronous
+          # Stopping state. Lightning refuses start() until it reaches Stopped.
+          # Wait for that transition instead of blindly calling start().
           status = str(s.status).lower()
+          print(f'STUDIO_INITIAL_STATUS={status}', flush=True)
+          deadline = time.time() + 300
+          while 'stopping' in status:
+              if time.time() >= deadline:
+                  raise RuntimeError('Studio remained Stopping for 5 minutes; refusing to start concurrently.')
+              print('STUDIO_WAITING_FOR_STOP', flush=True)
+              time.sleep(10)
+              status = str(s.status).lower()
+              print(f'STUDIO_STATUS={status}', flush=True)
+
           if 'running' not in status:
+              if 'failed' in status:
+                  raise RuntimeError(f'Studio is in Failed state: {s.status}')
+              print('STUDIO_STARTING_T4', flush=True)
               s.start(Machine.T4)
           elif 't4' not in str(s.machine).lower():
+              print(f'STUDIO_SWITCHING_TO_T4 current={s.machine}', flush=True)
               s.switch_machine(Machine.T4)
+
+          print(f'STUDIO_READY status={s.status} machine={s.machine}', flush=True)
 
           remote = f'virtual_singer_master_run_{run_id}'
           s.run(f'rm -rf {remote} && mkdir -p {remote}')
 
-          # IMPORTANT: upload into the exact Studio-relative run directory.
-          # Do not search for the uploaded file: the SDK upload destination is deterministic.
+          # Upload into the exact Studio-relative run directory.
+          # Do not search for the uploaded file.
           remote_bundle = f'{remote}/{bundle_name}'
           s.upload_file(str(bundle), remote_path=remote_bundle)
 
