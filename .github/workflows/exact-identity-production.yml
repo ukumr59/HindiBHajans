@@ -1,0 +1,83 @@
+name: Bhajan Aabha — Exact Identity Production Video
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_seconds:
+        description: 'Final video duration in seconds (must be divisible by 15)'
+        required: false
+        default: '180'
+
+permissions:
+  contents: read
+
+jobs:
+  build-exact-identity-video:
+    name: Generate bhajan + assemble exact approved singer video
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      LIGHTNING_USER_ID: ${{ secrets.LIGHTNING_USER_ID }}
+      LIGHTNING_API_KEY: ${{ secrets.LIGHTNING_API_KEY }}
+      LIGHTNING_USERNAME: ${{ secrets.LIGHTNING_USERNAME }}
+      LIGHTNING_ORG: ${{ secrets.LIGHTNING_ORG }}
+      LIGHTNING_TEAMSPACE: ${{ secrets.LIGHTNING_TEAMSPACE }}
+      LIGHTNING_STUDIO: bhajan-aabha-exact-identity
+      SINGER_REFERENCE_B64: ${{ secrets.SINGER_REFERENCE_B64 }}
+      VIDEO_SECONDS: ${{ inputs.video_seconds }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install runtime dependencies
+        run: |
+          python -m pip install -q --upgrade pip
+          pip install -q pillow lightning-sdk
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+
+      - name: Validate configuration before starting GPU work
+        run: |
+          set -euo pipefail
+          test -n "${LIGHTNING_USER_ID:-}" || { echo 'Missing LIGHTNING_USER_ID'; exit 1; }
+          test -n "${LIGHTNING_API_KEY:-}" || { echo 'Missing LIGHTNING_API_KEY'; exit 1; }
+          test -n "${LIGHTNING_TEAMSPACE:-}" || { echo 'Missing LIGHTNING_TEAMSPACE'; exit 1; }
+          test -n "${SINGER_REFERENCE_B64:-}" || { echo 'Missing SINGER_REFERENCE_B64'; exit 1; }
+          python - <<'PY'
+          import base64, io, os
+          from PIL import Image
+          raw = base64.b64decode(os.environ['SINGER_REFERENCE_B64'], validate=True)
+          im = Image.open(io.BytesIO(raw))
+          print('REFERENCE_SIZE=', im.size)
+          assert im.size == (1024, 1536), im.size
+          seconds = int(os.environ.get('VIDEO_SECONDS', '180'))
+          assert 180 <= seconds <= 300 and seconds % 15 == 0, seconds
+          print('CONFIG_OK seconds=', seconds)
+          PY
+
+      - name: Generate audio and assemble final MP4
+        run: python app/exact_identity_production.py
+
+      - name: Verify outputs
+        run: |
+          set -euo pipefail
+          test -s output/bhajan_aabha_exact_identity.mp4
+          test -s output/bhajan_source.mp3
+          ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 output/bhajan_aabha_exact_identity.mp4
+          echo 'OUTPUT_VALIDATION_OK'
+
+      - name: Upload final artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bhajan-aabha-exact-identity-production
+          path: |
+            output/bhajan_aabha_exact_identity.mp4
+            output/bhajan_source.mp3
+            output/bhajan_aabha_locked_identity_source.png
+            output/manifest.json
+          if-no-files-found: error
