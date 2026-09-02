@@ -1,0 +1,223 @@
+name: Bhajan Aabha — MuseTalk Smoke Test (₹0) — Authenticated Dataset Read
+
+on:
+  workflow_dispatch:
+    inputs:
+      smoke_seconds:
+        description: 'Smoke-test duration in seconds (8-15)'
+        required: false
+        default: '10'
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  KAGGLE_USERNAME: 'bhjanaabha'
+  KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN3 }}
+  KAGGLE_API_TOKEN3: ${{ secrets.KAGGLE_API_TOKEN3 }}
+  KAGGLE_OWNER: 'bhjanaabha'
+  KAGGLE_DATASET: 'bhjanaabha/bhajan-aabha-production-output'
+  SMOKE_SECONDS: ${{ inputs.smoke_seconds || '10' }}
+
+jobs:
+  smoke:
+    name: Validate actual audio-driven singing animation
+    runs-on: ubuntu-latest
+    timeout-minutes: 110
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install validation tools
+        run: |
+          set -euo pipefail
+          python -m pip install -q --upgrade pip pillow
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+
+      - name: Validate smoke configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${KAGGLE_API_TOKEN:-}" || { echo 'MISSING_KAGGLE_API_TOKEN'; exit 1; }
+          test -s 'assets/uks model image.png' || { echo 'MISSING_APPROVED_SINGER_ASSET'; exit 1; }
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from PIL import Image
+          p = Path('assets/uks model image.png')
+          im = Image.open(p)
+          print('REFERENCE=', p)
+          print('REFERENCE_SIZE=', im.size)
+          if im.size != (1536, 1024):
+              raise SystemExit(f'REFERENCE_SIZE_FATAL: {im.size}')
+          seconds = int(os.environ.get('SMOKE_SECONDS', '10'))
+          if seconds < 8 or seconds > 15:
+              raise SystemExit(f'SMOKE_SECONDS_FATAL: {seconds}; expected 8-15')
+          print('SMOKE_CONFIG_OK')
+          print('BACKEND=KAGGLE_FREE_GPU')
+          print('MODEL=MuseTalk_1.5')
+          print('IDENTITY_SOURCE=assets/uks model image.png')
+          print('IDENTITY_REGENERATION=FALSE')
+          print('LIGHTNING_AI=DISABLED')
+          print('HF_ZEROGPU=DISABLED')
+          print('NEW_API_KEYS=NONE')
+          PY
+
+      - name: Install Kaggle CLI
+        run: |
+          set -euo pipefail
+          python -m pip install -q --upgrade 'kaggle>=2.2.3'
+          kaggle --version
+
+      - name: Verify authenticated Kaggle dataset access BEFORE GPU
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'Checking Kaggle dataset read permission before starting T4 work.'
+          set +e
+          kaggle datasets files "$KAGGLE_DATASET" --page-size 1
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            echo 'KAGGLE_DATASET_ACCESS_FAILED'
+            echo 'The GitHub secret KAGGLE_API_TOKEN3 is valid enough to reach Kaggle, but it does not currently have access to the target dataset.'
+            echo 'Required permission: datasets.get (or datasets.viewer) for bhjanaabha/bhajan-aabha-production-output.'
+            exit 1
+          fi
+          echo 'KAGGLE_DATASET_ACCESS_OK'
+
+      - name: Prepare unique public Kaggle smoke kernel
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          run_id = os.environ['GITHUB_RUN_ID']
+          attempt = os.environ.get('GITHUB_RUN_ATTEMPT', '1')
+          owner = os.environ['KAGGLE_OWNER']
+          slug = f'bhajan-aabha-musetalk-smoke-{run_id}-{attempt}'
+          title = f'Bhajan Aabha MuseTalk Smoke {run_id} Attempt {attempt}'
+          seconds = int(os.environ.get('SMOKE_SECONDS', '10'))
+          Path('kaggle_kernel/kernel-metadata.json').write_text(json.dumps({
+              'id': f'{owner}/{slug}',
+              'title': title,
+              'code_file': 'worker_v2.py',
+              'language': 'python',
+              'kernel_type': 'script',
+              'is_private': False,
+              'enable_gpu': True,
+              'enable_internet': True,
+          }, indent=2), encoding='utf-8')
+          Path('kaggle_kernel/run_config.json').write_text(json.dumps({
+              'video_seconds': seconds,
+              'run_id': run_id,
+              'run_attempt': attempt,
+              'smoke_test': True,
+              'config_version': 12,
+          }, indent=2), encoding='utf-8')
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as f:
+              f.write(f'KAGGLE_KERNEL={owner}/{slug}\n')
+          print('KAGGLE_KERNEL=', f'{owner}/{slug}')
+          PY
+
+      - name: Push and run Kaggle T4 smoke worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          kaggle kernels push -p kaggle_kernel --accelerator NvidiaTeslaT4 -t 6600
+
+      - name: Wait for smoke output via authenticated Kaggle dataset download
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf kaggle_output
+          mkdir -p kaggle_output/files
+          deadline=$((SECONDS + 6000))
+          while true; do
+            rm -rf kaggle_output/files
+            mkdir -p kaggle_output/files
+            set +e
+            kaggle datasets download "$KAGGLE_DATASET" --path kaggle_output/files --unzip --force -q
+            rc=$?
+            set -e
+            echo "KAGGLE_DATASET_DOWNLOAD_RC=$rc"
+            if [ "$rc" -eq 0 ] && [ -s kaggle_output/files/manifest.json ] && [ -s kaggle_output/files/bhajan_source.mp3 ] && [ -s kaggle_output/files/bhajan_aabha_exact_identity.mp4 ]; then
+              python - <<'PY'
+          import json, os
+          from pathlib import Path
+          m = json.loads(Path('kaggle_output/files/manifest.json').read_text(encoding='utf-8'))
+          if str(m.get('run_id')) != os.environ['GITHUB_RUN_ID']:
+              raise SystemExit('RUN_ID_MISMATCH')
+          if not m.get('smoke_test'):
+              raise SystemExit('SMOKE_FLAG_MISSING')
+          if not m.get('lip_sync'):
+              raise SystemExit('LIP_SYNC_FLAG_MISSING')
+          print('SMOKE_MANIFEST_OK')
+          print(json.dumps(m, ensure_ascii=False, indent=2))
+          PY
+              break
+            fi
+            echo "SMOKE_DATASET_NOT_READY rc=${rc}"
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo 'SMOKE_DATASET_TRANSFER_TIMEOUT'
+              exit 1
+            fi
+            sleep 60
+          done
+
+      - name: Validate smoke MP4
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p smoke_output
+          cp kaggle_output/files/bhajan_source.mp3 smoke_output/bhajan_source.mp3
+          cp kaggle_output/files/bhajan_aabha_exact_identity.mp4 smoke_output/bhajan_aabha_musetalk_smoke.mp4
+          cp kaggle_output/files/manifest.json smoke_output/manifest.json
+          VIDEO='smoke_output/bhajan_aabha_musetalk_smoke.mp4'
+          VINFO=$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name,width,height,r_frame_rate -of csv=p=0 "$VIDEO")
+          AINFO=$(ffprobe -v error -select_streams a:0 -show_entries stream=codec_name,sample_rate,channels -of csv=p=0 "$VIDEO")
+          DURATION=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$VIDEO")
+          export DURATION
+          test -n "$VINFO"
+          test -n "$AINFO"
+          python - <<'PY'
+          import os
+          d = float(os.environ['DURATION'])
+          expected = float(os.environ['SMOKE_SECONDS'])
+          if d < expected - 1.0 or d > expected + 1.0:
+              raise SystemExit(f'SMOKE_DURATION_FATAL: {d:.2f}s vs expected {expected:.2f}s')
+          PY
+          echo "SMOKE_VIDEO_STREAM=$VINFO"
+          echo "SMOKE_AUDIO_STREAM=$AINFO"
+          echo "SMOKE_DURATION=$DURATION"
+          echo 'SMOKE_MP4_CONTAINER_OK'
+
+      - name: Publish smoke-test artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          TAG='bhajan-aabha-musetalk-smoke'
+          gh release delete "$TAG" --repo "$REPO" --cleanup-tag --yes 2>/dev/null || true
+          gh release create "$TAG" --repo "$REPO" \
+            --title 'Bhajan Aabha — MuseTalk Smoke Test' \
+            --notes '₹0 validation run: approved singer image + real audio-driven MuseTalk lip synchronization. Not a production run.' \
+            --prerelease \
+            smoke_output/bhajan_aabha_musetalk_smoke.mp4 \
+            smoke_output/bhajan_source.mp3 \
+            smoke_output/manifest.json
+
+      - name: Smoke summary
+        run: |
+          echo 'MUSE_TALK_SMOKE_PIPELINE_OK'
+          echo 'BACKEND=KAGGLE_FREE_GPU'
+          echo 'MODEL=MuseTalk_1.5'
+          echo 'IDENTITY_SOURCE=assets/uks model image.png'
+          echo 'IDENTITY_REGENERATION=FALSE'
+          echo 'PRODUCTION_180S=NOT_RUN'
+          echo 'YOUTUBE=NOT_RUN'
