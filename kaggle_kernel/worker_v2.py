@@ -1,6 +1,7 @@
 import json
 import runpy
 import shutil
+import subprocess
 from pathlib import Path
 
 ROOT = Path('/kaggle/working')
@@ -23,20 +24,19 @@ for p in expected:
 
 cfg = json.loads(RUN_CONFIG.read_text(encoding='utf-8')) if RUN_CONFIG.exists() else {}
 run_id = str(cfg.get('run_id', 'unknown'))
-dataset_handle = f'bhjanaabha/bhajan-aabha-run-{run_id}'
+dataset_handle = 'bhjanaabha/bhajan-aabha-production-output'
 
 manifest = json.loads((OUT / 'manifest.json').read_text(encoding='utf-8'))
-manifest['transfer'] = 'kaggle_dataset'
+manifest['transfer'] = 'kaggle_dataset_version'
 manifest['transfer_dataset'] = dataset_handle
 (OUT / 'manifest.json').write_text(
     json.dumps(manifest, ensure_ascii=False, indent=2),
     encoding='utf-8',
 )
 
-# kagglehub is authenticated by default inside Kaggle notebooks. This avoids
-# embedding a credential in the public kernel source and avoids the notebook
-# output-download API that was returning kernels.get 403.
-import subprocess
+# Use Kaggle notebook-native authentication to publish a NEW VERSION of the
+# permanent public dataset. This removes the failing kernel-output API and
+# removes per-run dataset creation/ownership problems.
 subprocess.run([
     'python', '-m', 'pip', 'install', '--quiet', '--upgrade', 'kagglehub>=1.0.0'
 ], check=True)
@@ -49,3 +49,5 @@ kagglehub.dataset_upload(
 )
 
 print(f'TRANSFER_DATASET={dataset_handle}', flush=True)
+print(f'TRANSFER_RUN_ID={run_id}', flush=True)
+print('TRANSFER_MODE=EXISTING_PUBLIC_DATASET_NEW_VERSION', flush=True)
