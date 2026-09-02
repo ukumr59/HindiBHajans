@@ -1,6 +1,6 @@
 {
-  "id": "bhjanaabha/bhajan-aabha-production",
-  "title": "Bhajan Aabha Production",
+  "id": "bhjanaabha/bhajan-aabha-ace-step-gpu-worker-842537521398",
+  "title": "Bhajan Aabha ACE-Step GPU Worker 842537521398",
   "code_file": "worker.py",
   "language": "python",
   "kernel_type": "script",
