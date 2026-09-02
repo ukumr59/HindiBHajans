@@ -73,9 +73,10 @@ jobs:
               raise SystemExit(f'VIDEO_SECONDS_FATAL: {seconds}')
           print('CONFIG_OK')
           print('GPU_BACKEND=KAGGLE')
-          print('TRANSFER=EXISTING_PUBLIC_KAGGLE_DATASET_VIA_KAGGLEHUB')
+          print('TRANSFER=EXISTING_PUBLIC_KAGGLE_DATASET_VIA_KAGGLEHUB_ANONYMOUS')
           print('KAGGLE_DATASET=', os.environ['KAGGLE_DATASET'])
-          print('KAGGLE_AUTH_SOURCE=KAGGLE_API_TOKEN3_EXPOSED_AS_KAGGLE_API_TOKEN')
+          print('KAGGLE_AUTH_FOR_UPLOAD=KAGGLE_API_TOKEN3')
+          print('KAGGLE_AUTH_FOR_DOWNLOAD=ANONYMOUS_PUBLIC_DATASET')
           print('LIGHTNING_AI=DISABLED')
           print('HF_ZEROGPU=DISABLED')
           print('PEXELS=DISABLED')
@@ -115,7 +116,7 @@ jobs:
               'video_seconds': seconds,
               'run_id': run_id,
               'run_attempt': attempt,
-              'config_version': 8,
+              'config_version': 9,
           }, indent=2), encoding='utf-8')
           with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as f:
               f.write(f'KAGGLE_KERNEL={owner}/{slug}\n')
@@ -130,10 +131,9 @@ jobs:
           set -euo pipefail
           kaggle kernels push -p kaggle_kernel --accelerator NvidiaTeslaT4 -t 6600
 
-      - name: Wait for permanent public Kaggle Dataset via kagglehub
+      - name: Wait for permanent public Kaggle Dataset via kagglehub (anonymous)
         shell: bash
         env:
-          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN3 }}
           KAGGLE_DATASET: ${{ env.KAGGLE_DATASET }}
         run: |
           set -euo pipefail
@@ -144,15 +144,19 @@ jobs:
             rm -rf kaggle_output/files
             mkdir -p kaggle_output/files
             set +e
-            python - <<'PY'
+            env -u KAGGLE_API_TOKEN -u KAGGLE_API_TOKEN3 -u KAGGLE_KEY -u KAGGLE_USERNAME python - <<'PY'
           import os, shutil
           from pathlib import Path
           import kagglehub
-          from kagglehub.config import set_kaggle_api_token
 
-          token = os.environ.get('KAGGLE_API_TOKEN', '').strip()
-          if token:
-              set_kaggle_api_token(token)
+          # Intentionally perform this download unauthenticated. The dataset is
+          # public, and authenticated requests were rejected by Kaggle because
+          # the production token does not carry datasets.get permission.
+          assert not os.environ.get('KAGGLE_API_TOKEN')
+          assert not os.environ.get('KAGGLE_API_TOKEN3')
+          assert not os.environ.get('KAGGLE_KEY')
+          assert not os.environ.get('KAGGLE_USERNAME')
+          print('AUTH_MODE=ANONYMOUS_PUBLIC_DATASET', flush=True)
 
           dataset = os.environ['KAGGLE_DATASET']
           dest = Path('kaggle_output/files')
@@ -162,7 +166,7 @@ jobs:
                   output_dir=str(dest),
                   force_download=True,
               )
-              print('KAGGLEHUB_DATASET_PATH=', result)
+              print('KAGGLEHUB_DATASET_PATH=', result, flush=True)
               src = Path(result)
               if src.exists() and src.resolve() != dest.resolve():
                   for p in src.rglob('*'):
@@ -172,7 +176,7 @@ jobs:
                           out.parent.mkdir(parents=True, exist_ok=True)
                           shutil.copy2(p, out)
           except Exception as exc:
-              print('KAGGLEHUB_DOWNLOAD_ERROR=', repr(exc))
+              print('KAGGLEHUB_DOWNLOAD_ERROR=', repr(exc), flush=True)
               raise SystemExit(1)
           PY
             rc=$?
@@ -254,8 +258,9 @@ jobs:
           echo 'BACKEND=KAGGLE_FREE_GPU'
           echo "KAGGLE_KERNEL=$KAGGLE_KERNEL"
           echo "KAGGLE_DATASET=$KAGGLE_DATASET"
-          echo 'TRANSFER=EXISTING_PUBLIC_KAGGLE_DATASET_VIA_KAGGLEHUB'
-          echo 'AUTH=KAGGLE_API_TOKEN3'
+          echo 'TRANSFER=EXISTING_PUBLIC_KAGGLE_DATASET_VIA_KAGGLEHUB_ANONYMOUS'
+          echo 'AUTH_UPLOAD=KAGGLE_API_TOKEN3'
+          echo 'AUTH_DOWNLOAD=ANONYMOUS_PUBLIC_DATASET'
           echo 'LIGHTNING_AI=DISABLED'
           echo 'HF_ZEROGPU=DISABLED'
           echo 'PEXELS=DISABLED'
