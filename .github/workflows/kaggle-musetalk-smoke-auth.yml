@@ -1,4 +1,4 @@
-name: Bhajan Aabha — MuseTalk Smoke Test (₹0) — Authenticated Dataset Read
+name: Bhajan Aabha — MuseTalk Smoke Test (₹0) — Authenticated Kernel Output
 
 on:
   workflow_dispatch:
@@ -72,23 +72,6 @@ jobs:
           python -m pip install -q --upgrade 'kaggle>=2.2.3'
           kaggle --version
 
-      - name: Verify authenticated Kaggle dataset access BEFORE GPU
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo 'Checking Kaggle dataset read permission before starting T4 work.'
-          set +e
-          kaggle datasets files "$KAGGLE_DATASET" --page-size 1
-          rc=$?
-          set -e
-          if [ "$rc" -ne 0 ]; then
-            echo 'KAGGLE_DATASET_ACCESS_FAILED'
-            echo 'The GitHub secret KAGGLE_API_TOKEN3 is valid enough to reach Kaggle, but it does not currently have access to the target dataset.'
-            echo 'Required permission: datasets.get (or datasets.viewer) for bhjanaabha/bhajan-aabha-production-output.'
-            exit 1
-          fi
-          echo 'KAGGLE_DATASET_ACCESS_OK'
-
       - name: Prepare unique public Kaggle smoke kernel
         shell: bash
         run: |
@@ -117,7 +100,7 @@ jobs:
               'run_id': run_id,
               'run_attempt': attempt,
               'smoke_test': True,
-              'config_version': 12,
+              'config_version': 13,
           }, indent=2), encoding='utf-8')
           with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as f:
               f.write(f'KAGGLE_KERNEL={owner}/{slug}\n')
@@ -130,26 +113,28 @@ jobs:
           set -euo pipefail
           kaggle kernels push -p kaggle_kernel --accelerator NvidiaTeslaT4 -t 6600
 
-      - name: Wait for smoke output via authenticated Kaggle dataset download
+      - name: Wait for smoke output via authenticated Kaggle kernel output
         shell: bash
         run: |
           set -euo pipefail
           rm -rf kaggle_output
-          mkdir -p kaggle_output/files
+          mkdir -p kaggle_output
           deadline=$((SECONDS + 6000))
           while true; do
-            rm -rf kaggle_output/files
-            mkdir -p kaggle_output/files
+            rm -rf kaggle_output
+            mkdir -p kaggle_output
             set +e
-            kaggle datasets download "$KAGGLE_DATASET" --path kaggle_output/files --unzip --force -q
+            kaggle kernels output "$KAGGLE_KERNEL" --path kaggle_output --force -q
             rc=$?
             set -e
-            echo "KAGGLE_DATASET_DOWNLOAD_RC=$rc"
-            if [ "$rc" -eq 0 ] && [ -s kaggle_output/files/manifest.json ] && [ -s kaggle_output/files/bhajan_source.mp3 ] && [ -s kaggle_output/files/bhajan_aabha_exact_identity.mp4 ]; then
+            echo "KAGGLE_KERNEL_OUTPUT_RC=$rc"
+            echo 'KAGGLE_KERNEL_OUTPUT_FILES:'
+            find kaggle_output -maxdepth 3 -type f -printf '%p %s bytes\n' | sort || true
+            if [ "$rc" -eq 0 ] && [ -s kaggle_output/manifest.json ] && [ -s kaggle_output/bhajan_source.mp3 ] && [ -s kaggle_output/bhajan_aabha_exact_identity.mp4 ]; then
               python - <<'PY'
           import json, os
           from pathlib import Path
-          m = json.loads(Path('kaggle_output/files/manifest.json').read_text(encoding='utf-8'))
+          m = json.loads(Path('kaggle_output/manifest.json').read_text(encoding='utf-8'))
           if str(m.get('run_id')) != os.environ['GITHUB_RUN_ID']:
               raise SystemExit('RUN_ID_MISMATCH')
           if not m.get('smoke_test'):
@@ -161,9 +146,9 @@ jobs:
           PY
               break
             fi
-            echo "SMOKE_DATASET_NOT_READY rc=${rc}"
+            echo "SMOKE_KERNEL_OUTPUT_NOT_READY rc=${rc}"
             if [ "$SECONDS" -ge "$deadline" ]; then
-              echo 'SMOKE_DATASET_TRANSFER_TIMEOUT'
+              echo 'SMOKE_KERNEL_OUTPUT_TIMEOUT'
               exit 1
             fi
             sleep 60
@@ -174,9 +159,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p smoke_output
-          cp kaggle_output/files/bhajan_source.mp3 smoke_output/bhajan_source.mp3
-          cp kaggle_output/files/bhajan_aabha_exact_identity.mp4 smoke_output/bhajan_aabha_musetalk_smoke.mp4
-          cp kaggle_output/files/manifest.json smoke_output/manifest.json
+          cp kaggle_output/bhajan_source.mp3 smoke_output/bhajan_source.mp3
+          cp kaggle_output/bhajan_aabha_exact_identity.mp4 smoke_output/bhajan_aabha_musetalk_smoke.mp4
+          cp kaggle_output/manifest.json smoke_output/manifest.json
           VIDEO='smoke_output/bhajan_aabha_musetalk_smoke.mp4'
           VINFO=$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name,width,height,r_frame_rate -of csv=p=0 "$VIDEO")
           AINFO=$(ffprobe -v error -select_streams a:0 -show_entries stream=codec_name,sample_rate,channels -of csv=p=0 "$VIDEO")
