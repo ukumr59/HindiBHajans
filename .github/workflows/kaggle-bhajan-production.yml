@@ -45,7 +45,7 @@ jobs:
       - name: Install validation tools
         run: |
           set -euo pipefail
-          python -m pip install -q --upgrade pip pillow
+          python -m pip install -q --upgrade pip pillow kagglehub
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg
 
@@ -109,14 +109,14 @@ jobs:
               json.dumps(metadata, indent=2), encoding='utf-8'
           )
           Path('kaggle_kernel/run_config.json').write_text(
-              json.dumps({'video_seconds': seconds, 'config_version': 2, 'github_run_id': run_id}, indent=2),
+              json.dumps({'video_seconds': seconds, 'config_version': 2, 'run_id': run_id}, indent=2),
               encoding='utf-8'
           )
           with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as f:
               f.write(f'KAGGLE_KERNEL={owner}/{slug}\n')
           print('KAGGLE_KERNEL=', f'{owner}/{slug}')
           print('KAGGLE_TITLE=', title)
-          print('KAGGLE_RUN_CONFIG=', json.dumps({'video_seconds': seconds, 'github_run_id': run_id}))
+          print('KAGGLE_RUN_CONFIG=', json.dumps({'video_seconds': seconds, 'run_id': run_id}))
           PY
           cat kaggle_kernel/kernel-metadata.json
           cat kaggle_kernel/run_config.json
@@ -128,7 +128,7 @@ jobs:
           echo "PUSHING_KAGGLE_KERNEL=$KAGGLE_KERNEL"
           kaggle kernels push -p kaggle_kernel --accelerator NvidiaTeslaT4 -t 6600
 
-      - name: Wait for Kaggle worker using public output API
+      - name: Wait for Kaggle output via public kagglehub (no kernels.get)
         shell: bash
         run: |
           set -euo pipefail
@@ -137,36 +137,64 @@ jobs:
           deadline=$((SECONDS + 6000))
           while true; do
             rm -rf kaggle_poll/*
-            output_status=0
-            kaggle kernels output "$KAGGLE_KERNEL" -p kaggle_poll -o >/tmp/kaggle_output.log 2>&1 || output_status=$?
-            cat /tmp/kaggle_output.log
-            if [ "$output_status" -eq 0 ]; then
-              if find kaggle_poll -type f -name 'manifest.json' -size +100 | grep -q .; then
-                echo 'KAGGLE_OUTPUT_FOUND'
+            echo "CHECKING_PUBLIC_OUTPUT=$KAGGLE_KERNEL"
+            set +e
+            env -u KAGGLE_API_TOKEN -u KAGGLE_USERNAME -u KAGGLE_KEY python - <<'PY'
+          import sys
+          from pathlib import Path
+          import traceback
+          try:
+              import kagglehub
+              handle = __import__('os').environ['KAGGLE_KERNEL']
+              out = Path('kaggle_poll')
+              result = kagglehub.notebook_output_download(
+                  handle,
+                  output_dir=str(out),
+                  force_download=True,
+              )
+              print('KAGGLEHUB_OUTPUT_PATH=', result)
+              files = list(out.rglob('*'))
+              print('KAGGLEHUB_OUTPUT_FILE_COUNT=', len([p for p in files if p.is_file()]))
+              raise SystemExit(0)
+          except Exception as exc:
+              print('KAGGLEHUB_NOT_READY=', repr(exc))
+              traceback.print_exc()
+              raise SystemExit(1)
+          PY
+            rc=$?
+            set -e
+
+            if [ "$rc" -eq 0 ]; then
+              MANIFEST=$(find kaggle_poll -type f -name 'manifest.json' -size +100 | head -1 || true)
+              VIDEO=$(find kaggle_poll -type f -name 'bhajan_aabha_exact_identity.mp4' -size +500k | head -1 || true)
+              AUDIO=$(find kaggle_poll -type f -name 'bhajan_source.mp3' -size +100k | head -1 || true)
+              if [ -n "$MANIFEST" ] && [ -n "$VIDEO" ] && [ -n "$AUDIO" ]; then
+                python - <<'PY'
+          import json, os
+          from pathlib import Path
+          mpath = next(Path('kaggle_poll').rglob('manifest.json'))
+          m = json.loads(mpath.read_text(encoding='utf-8'))
+          expected = os.environ['GITHUB_RUN_ID']
+          actual = str(m.get('run_id', ''))
+          print(f'KAGGLE_MANIFEST_RUN_ID={actual}')
+          print(f'EXPECTED_RUN_ID={expected}')
+          if actual != expected:
+              raise SystemExit(f'KAGGLE_RUN_MISMATCH: expected {expected}, got {actual}')
+          if str(m.get('status', '')).upper() != 'OK':
+              raise SystemExit(f'KAGGLE_WORKER_STATUS={m.get("status")}')
+          print('KAGGLE_WORKER_COMPLETE')
+          PY
                 break
               fi
+              echo 'KAGGLEHUB_CONNECTED_BUT_OUTPUTS_NOT_COMPLETE'
             fi
+
             if [ "$SECONDS" -ge "$deadline" ]; then
-              echo 'KAGGLE_TIMEOUT'
+              echo 'KAGGLE_TIMEOUT_OR_PUBLIC_OUTPUT_UNAVAILABLE'
               exit 1
             fi
             sleep 60
           done
-
-          MANIFEST=$(find kaggle_poll -type f -name 'manifest.json' -size +100 | head -1)
-          test -n "$MANIFEST" || { echo 'KAGGLE_MANIFEST_FATAL'; exit 1; }
-          python - <<'PY'
-          import json, os
-          from pathlib import Path
-          manifests = list(Path('kaggle_poll').rglob('manifest.json'))
-          data = json.loads(manifests[0].read_text(encoding='utf-8'))
-          expected = os.environ['GITHUB_RUN_ID']
-          actual = str(data.get('github_run_id', ''))
-          print('MANIFEST_GITHUB_RUN_ID=', actual)
-          if actual != expected:
-              raise SystemExit(f'KAGGLE_RUN_MISMATCH: expected {expected}, got {actual}')
-          print('KAGGLE_RUN_MATCH_OK')
-          PY
 
       - name: Download completed Kaggle outputs
         shell: bash
@@ -174,7 +202,7 @@ jobs:
           set -euo pipefail
           rm -rf kaggle_output output
           mkdir -p kaggle_output output/videos
-          kaggle kernels output "$KAGGLE_KERNEL" -p kaggle_output -o
+          cp -a kaggle_poll/. kaggle_output/
           echo '=== KAGGLE OUTPUTS ==='
           find kaggle_output -type f -printf '%p %s bytes\n' | sort
 
