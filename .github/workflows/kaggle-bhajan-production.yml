@@ -115,7 +115,7 @@ jobs:
               'video_seconds': seconds,
               'run_id': run_id,
               'run_attempt': attempt,
-              'config_version': 7,
+              'config_version': 8,
           }, indent=2), encoding='utf-8')
           with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as f:
               f.write(f'KAGGLE_KERNEL={owner}/{slug}\n')
@@ -148,10 +148,11 @@ jobs:
           import os, shutil
           from pathlib import Path
           import kagglehub
+          from kagglehub.config import set_kaggle_api_token
 
           token = os.environ.get('KAGGLE_API_TOKEN', '').strip()
           if token:
-              kagglehub.login(token=token, validate_credentials=False)
+              set_kaggle_api_token(token)
 
           dataset = os.environ['KAGGLE_DATASET']
           dest = Path('kaggle_output/files')
