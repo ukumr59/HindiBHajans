@@ -1,0 +1,176 @@
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+WORK = Path('/kaggle/working')
+REPO = WORK / 'HindiBHajans'
+OUTPUT = WORK / 'bhajan_aabha_exact_identity.mp4'
+AUDIO = WORK / 'bhajan_source.mp3'
+MANIFEST = WORK / 'manifest.json'
+
+REPO_URL = 'https://github.com/ukumr59/HindiBHajans.git'
+KERNEL_CONFIG = Path(__file__).with_name('run_config.json')
+LYRICS = '''[Intro]\nश्री राम... श्री राम... जय जय राम...\n\n[Verse 1]\nमन में बसो रघुनंदन, चरणों में मेरा ध्यान\nराम नाम की ज्योति जले, रोशन हो हर प्राण\n\n[Pre-Chorus]\nतेरे नाम की धुन बजे, हर धड़कन में आज\nतेरी कृपा से खिल उठे, जीवन का हर राज\n\n[Chorus]\nश्री राम जय राम, जय जय राम\nमेरे मन के दीप में, बसते श्री राम\n\n[Verse 2]\nदुख की घड़ी में साथ दो, हे दीनदयाल भगवान\nतेरा नाम ही आसरा, तेरा नाम ही सम्मान\n\n[Chorus]\nश्री राम जय राम, जय जय राम\nमेरे मन के दीप में, बसते श्री राम\n\n[Verse 3]\nअयोध्या के राजकुमार, करुणा के भंडार\nतेरे चरणों में मिल जाए, जीवन का सच्चा सार\n\n[Build]\nजय श्री राम की गूंज उठे, नभ से धरती तक\nढोल बजे और शंख बजे, प्रेम बहे हर पल\n\n[Final Chorus]\nश्री राम जय राम, जय जय राम\nमेरे मन के दीप में, बसते श्री राम\nश्री राम जय राम, जय जय राम\nजय जय राम... जय जय राम...\n\n[Outro]\nश्री राम... जय राम... जय जय राम...'''
+
+CAPTION = (
+    'Modern high-energy Hindi devotional bhajan, 128 BPM, 4/4, polished commercial production, '
+    'powerful expressive Hindi male lead vocal clearly singing every lyric, catchy devotional melody, '
+    'energetic electronic arrangement, punchy kick, controlled bass, synth pads, dhol, dholak, tabla, '
+    'temple bells, bansuri and harmonium accents, strong chorus, professional loud master. '
+    'NOT meditation music, NOT sleepy, NOT ambient, NOT spoken narration, NOT humming, NOT a cappella, '
+    'NOT instrumental-only.'
+)
+
+
+def run(*args: str, cwd: Path | None = None) -> None:
+    print('RUN:', ' '.join(map(str, args)), flush=True)
+    subprocess.run([str(x) for x in args], cwd=str(cwd) if cwd else None, check=True)
+
+
+def ensure_repo() -> None:
+    if (REPO / '.git').exists():
+        run('git', '-C', str(REPO), 'pull', '--ff-only', 'origin', 'main')
+        return
+    run('git', 'clone', '--depth', '1', REPO_URL, str(REPO))
+
+
+def load_config() -> dict:
+    if not KERNEL_CONFIG.exists():
+        return {}
+    try:
+        cfg = json.loads(KERNEL_CONFIG.read_text(encoding='utf-8'))
+    except Exception as exc:
+        raise RuntimeError(f'KAGGLE_CONFIG_FATAL: invalid {KERNEL_CONFIG}: {exc}') from exc
+    if not isinstance(cfg, dict):
+        raise RuntimeError('KAGGLE_CONFIG_FATAL: run_config.json must contain an object')
+    return cfg
+
+
+def requested_duration() -> int:
+    cfg = load_config()
+    requested = cfg.get('video_seconds')
+    smoke_test = bool(cfg.get('smoke_test', False))
+    if requested is not None:
+        requested = int(requested)
+        print(f'RUN_CONFIG_VIDEO_SECONDS={requested}', flush=True)
+    else:
+        requested = int(os.environ.get('VIDEO_SECONDS', '180'))
+        print('RUN_CONFIG_VIDEO_SECONDS=not-found; using environment/default', flush=True)
+    if smoke_test:
+        if requested < 8 or requested > 15:
+            raise RuntimeError(f'SMOKE_SECONDS_FATAL: {requested}; expected 8-15')
+        return requested
+    if requested < 180 or requested > 300 or requested % 15:
+        raise RuntimeError(f'VIDEO_SECONDS_FATAL: {requested}; expected 180-300 divisible by 15')
+    return requested
+
+
+def prepare_request() -> None:
+    requested = requested_duration()
+    req = {
+        'caption': CAPTION,
+        'lyrics': LYRICS,
+        'bpm': 128,
+        'keyscale': 'C Major',
+        'timesignature': '4/4',
+        'vocal_language': 'hi',
+        'duration': requested,
+    }
+    (WORK / 'bhajan_request.json').write_text(
+        json.dumps(req, ensure_ascii=False, indent=2),
+        encoding='utf-8',
+    )
+    print(f'VIDEO_SECONDS={requested}', flush=True)
+
+
+def require_gpu() -> None:
+    run('nvidia-smi')
+    import torch
+    if not torch.cuda.is_available():
+        raise RuntimeError('KAGGLE_PRODUCTION_FATAL: CUDA GPU is unavailable')
+    count = torch.cuda.device_count()
+    names = [torch.cuda.get_device_name(i) for i in range(count)]
+    print(f'GPU_COUNT={count}', flush=True)
+    print(f'GPU_NAMES={names}', flush=True)
+
+
+def generate_audio() -> None:
+    print('AUDIO_STAGE=KAGGLE_LOCAL_ACE_STEP', flush=True)
+    run(sys.executable, str(REPO / 'app' / 'kaggle_ace_step_worker.py'))
+    generated = WORK / 'bhajan_source.mp3'
+    if not generated.exists() or generated.stat().st_size < 100_000:
+        raise RuntimeError('KAGGLE_PRODUCTION_FATAL: ACE-Step did not produce bhajan_source.mp3')
+    duration = float(subprocess.check_output([
+        'ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+        '-of', 'default=noprint_wrappers=1:nokey=1', str(generated)
+    ], text=True).strip())
+    print(f'AUDIO_OK={generated} duration={duration:.2f}s', flush=True)
+
+
+def assemble_video() -> None:
+    image = REPO / 'assets' / 'uks model image.png'
+    if not image.exists():
+        raise RuntimeError(f'KAGGLE_PRODUCTION_FATAL: singer asset missing: {image}')
+    cfg = load_config()
+    smoke_test = bool(cfg.get('smoke_test', False))
+    smoke_seconds = int(cfg.get('video_seconds', 0)) if smoke_test else 0
+    print(f'IDENTITY_SOURCE={image}', flush=True)
+    args = [
+        sys.executable,
+        str(REPO / 'app' / 'kaggle_exact_identity_video.py'),
+        '--image', str(image),
+        '--audio', str(AUDIO),
+        '--output', str(OUTPUT),
+    ]
+    if smoke_test:
+        args += ['--seconds', str(smoke_seconds)]
+    run(*args)
+    if not OUTPUT.exists() or OUTPUT.stat().st_size < 500_000:
+        raise RuntimeError('KAGGLE_PRODUCTION_FATAL: final MP4 missing or suspiciously small')
+
+
+def write_manifest() -> None:
+    duration = float(subprocess.check_output([
+        'ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+        '-of', 'default=noprint_wrappers=1:nokey=1', str(OUTPUT)
+    ], text=True).strip())
+    cfg = load_config()
+    run_id = str(cfg.get('run_id', 'unknown'))
+    smoke_test = bool(cfg.get('smoke_test', False))
+    manifest = {
+        'status': 'OK',
+        'run_id': run_id,
+        'backend': 'Kaggle free GPU + local ACE-Step 1.5 + MuseTalk 1.5',
+        'lightning_ai': False,
+        'huggingface_zerogpu': False,
+        'identity_source': 'assets/uks model image.png',
+        'identity_regeneration': False,
+        'lip_sync': True,
+        'smoke_test': smoke_test,
+        'duration_seconds': duration,
+        'video': OUTPUT.name,
+        'audio': AUDIO.name,
+        'note': 'Approved singer image is used as the identity source; MuseTalk audio-driven lower-face lip synchronization is applied without whole-face identity regeneration.',
+    }
+    MANIFEST.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')
+
+
+def main() -> None:
+    print('KAGGLE_BHAJAN_AABHA_PRODUCTION_START', flush=True)
+    print('LIGHTNING_AI=DISABLED', flush=True)
+    print('HF_ZEROGPU=DISABLED', flush=True)
+    require_gpu()
+    ensure_repo()
+    prepare_request()
+    generate_audio()
+    assemble_video()
+    write_manifest()
+    print(f'KAGGLE_BHAJAN_AABHA_PRODUCTION_OK={OUTPUT}', flush=True)
+
+
+if __name__ == '__main__':
+    main()
