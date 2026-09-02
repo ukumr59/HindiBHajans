@@ -4,8 +4,8 @@
   "code_file": "worker.py",
   "language": "python",
   "kernel_type": "script",
-  "is_private": "false",
-  "enable_gpu": "true",
-  "enable_internet": "true",
+  "is_private": false,
+  "enable_gpu": true,
+  "enable_internet": true,
   "machine_shape": ""
 }
