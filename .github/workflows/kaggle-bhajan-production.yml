@@ -25,7 +25,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN2 }}
+  # Full-access token is used for both kernel submission and Dataset transfer.
+  KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
   KAGGLE_OWNER: 'bhjanaabha'
   VIDEO_SECONDS: ${{ inputs.video_seconds || '180' }}
   YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
@@ -47,13 +48,13 @@ jobs:
           set -euo pipefail
           python -m pip install -q --upgrade pip pillow
           sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg curl
+          sudo apt-get install -y -qq ffmpeg
 
       - name: Validate configuration
         shell: bash
         run: |
           set -euo pipefail
-          test -n "${KAGGLE_API_TOKEN:-}" || { echo 'MISSING_KAGGLE_API_TOKEN2'; exit 1; }
+          test -n "${KAGGLE_API_TOKEN:-}" || { echo 'MISSING_KAGGLE_API_TOKEN'; exit 1; }
           test -s 'assets/uks model image.png' || { echo 'MISSING_APPROVED_SINGER_ASSET'; exit 1; }
           python - <<'PY'
           import os
@@ -61,8 +62,6 @@ jobs:
           from PIL import Image
           p = Path('assets/uks model image.png')
           im = Image.open(p)
-          print('REFERENCE=', p)
-          print('REFERENCE_SIZE=', im.size)
           if im.size != (1536, 1024):
               raise SystemExit(f'REFERENCE_SIZE_FATAL: {im.size}')
           seconds = int(os.environ.get('VIDEO_SECONDS', '180'))
@@ -70,7 +69,7 @@ jobs:
               raise SystemExit(f'VIDEO_SECONDS_FATAL: {seconds}')
           print('CONFIG_OK')
           print('GPU_BACKEND=KAGGLE')
-          print('KAGGLE_AUTH_SECRET=KAGGLE_API_TOKEN2')
+          print('TRANSFER=KAGGLE_DATASET')
           print('LIGHTNING_AI=DISABLED')
           print('HF_ZEROGPU=DISABLED')
           print('PEXELS=DISABLED')
@@ -80,10 +79,10 @@ jobs:
       - name: Install Kaggle CLI
         run: |
           set -euo pipefail
-          python -m pip install -q --upgrade 'kaggle>=1.8.4'
+          python -m pip install -q --upgrade 'kaggle>=2.2.3'
           kaggle --version
 
-      - name: Prepare unique public Kaggle kernel
+      - name: Prepare unique Kaggle GPU worker
         shell: bash
         run: |
           set -euo pipefail
@@ -98,7 +97,7 @@ jobs:
           Path('kaggle_kernel/kernel-metadata.json').write_text(json.dumps({
               'id': f'{owner}/{slug}',
               'title': title,
-              'code_file': 'worker.py',
+              'code_file': 'worker_v2.py',
               'language': 'python',
               'kernel_type': 'script',
               'is_private': False,
@@ -108,95 +107,69 @@ jobs:
           Path('kaggle_kernel/run_config.json').write_text(json.dumps({
               'video_seconds': seconds,
               'run_id': run_id,
-              'config_version': 3,
+              'config_version': 4,
           }, indent=2), encoding='utf-8')
           with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as f:
               f.write(f'KAGGLE_KERNEL={owner}/{slug}\n')
+              f.write(f'KAGGLE_DATASET={owner}/{slug}\n')
           print('KAGGLE_KERNEL=', f'{owner}/{slug}')
-          print('KAGGLE_TITLE=', title)
-          print('KAGGLE_VERSION=1')
+          print('KAGGLE_DATASET=', f'{owner}/{slug}')
           PY
-          cat kaggle_kernel/kernel-metadata.json
-          cat kaggle_kernel/run_config.json
 
       - name: Push and run the Kaggle GPU worker
         shell: bash
         run: |
           set -euo pipefail
-          echo "PUSHING_KAGGLE_KERNEL=$KAGGLE_KERNEL"
-          kaggle kernels push -p kaggle_kernel --accelerator NvidiaTeslaT4 -t 6600
+          kaggle kernels push -p kaggle_kernel --accelerator NvidiaTeslaT4 --timeout 6600
 
-      - name: Wait for Kaggle output without kernels.get
+      - name: Wait for Kaggle Dataset transfer
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf kaggle_poll
-          mkdir -p kaggle_poll
-          base="https://www.kaggle.com/api/v1/kernels/output/download/${KAGGLE_KERNEL}"
           deadline=$((SECONDS + 6000))
           while true; do
-            rm -f kaggle_poll/manifest.json kaggle_poll/bhajan_source.mp3 kaggle_poll/bhajan_aabha_exact_identity.mp4
-            manifest_url="${base}/manifest.json?version_number=1"
+            rm -rf kaggle_output
+            mkdir -p kaggle_output
             set +e
-            curl -fL --retry 2 --connect-timeout 20 --max-time 120 \
-              -H "Authorization: Bearer ${KAGGLE_API_TOKEN}" \
-              "$manifest_url" -o kaggle_poll/manifest.json
+            kaggle datasets download "${KAGGLE_DATASET}" -p kaggle_output --unzip -o
             rc=$?
             set -e
-            if [ "$rc" -eq 0 ] && [ -s kaggle_poll/manifest.json ]; then
+            if [ "$rc" -eq 0 ] && [ -s kaggle_output/manifest.json ] && [ -s kaggle_output/bhajan_source.mp3 ] && [ -s kaggle_output/bhajan_aabha_exact_identity.mp4 ]; then
               python - <<'PY'
           import json, os
           from pathlib import Path
-          p = Path('kaggle_poll/manifest.json')
-          try:
-              m = json.loads(p.read_text(encoding='utf-8'))
-          except Exception as exc:
-              print('MANIFEST_NOT_JSON=', repr(exc))
-              raise SystemExit(2)
+          m = json.loads(Path('kaggle_output/manifest.json').read_text(encoding='utf-8'))
           expected = os.environ['GITHUB_RUN_ID']
           actual = str(m.get('run_id', ''))
-          print('KAGGLE_MANIFEST_RUN_ID=', actual)
+          print('KAGGLE_DATASET_MANIFEST_RUN_ID=', actual)
           print('EXPECTED_RUN_ID=', expected)
-          print('KAGGLE_MANIFEST_STATUS=', m.get('status'))
+          print('KAGGLE_DATASET_MANIFEST_STATUS=', m.get('status'))
           if actual != expected:
-              raise SystemExit(3)
-          if str(m.get('status', '')).upper() == 'OK':
-              raise SystemExit(0)
-          if str(m.get('status', '')).upper() in {'ERROR', 'FAILED'}:
-              raise SystemExit(4)
-          raise SystemExit(5)
+              raise SystemExit('RUN_ID_MISMATCH')
+          if str(m.get('status', '')).upper() not in {'OK', ''}:
+              raise SystemExit('KAGGLE_WORKER_FAILED')
           PY
-              check=$?
-              if [ "$check" -eq 0 ]; then
-                break
-              fi
-              if [ "$check" -eq 4 ]; then
-                echo 'KAGGLE_WORKER_FAILED'
-                exit 1
-              fi
-            else
-              echo "KAGGLE_OUTPUT_NOT_READY curl_rc=$rc"
+              break
             fi
+            echo "KAGGLE_DATASET_NOT_READY rc=$rc"
             if [ "$SECONDS" -ge "$deadline" ]; then
-              echo 'KAGGLE_TIMEOUT_OR_OUTPUT_ACCESS_FAILURE'
+              echo 'KAGGLE_DATASET_TRANSFER_TIMEOUT'
               exit 1
             fi
             sleep 60
           done
 
-      - name: Download completed Kaggle outputs without kernels.get
+      - name: Validate downloaded production output
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p output/videos
-          base="https://www.kaggle.com/api/v1/kernels/output/download/${KAGGLE_KERNEL}"
-          auth=(-H "Authorization: Bearer ${KAGGLE_API_TOKEN}")
-          curl -fL --retry 2 --connect-timeout 20 --max-time 600 "${auth[@]}" "${base}/bhajan_source.mp3?version_number=1" -o output/bhajan_source.mp3
-          curl -fL --retry 2 --connect-timeout 20 --max-time 600 "${auth[@]}" "${base}/bhajan_aabha_exact_identity.mp4?version_number=1" -o output/videos/bhajan_aabha_exact_identity.mp4
-          cp kaggle_poll/manifest.json output/manifest.json
-          test -s output/bhajan_source.mp3 || { echo 'KAGGLE_OUTPUT_FATAL: audio missing'; exit 1; }
-          test -s output/videos/bhajan_aabha_exact_identity.mp4 || { echo 'KAGGLE_OUTPUT_FATAL: MP4 missing'; exit 1; }
-          test -s output/manifest.json || { echo 'KAGGLE_OUTPUT_FATAL: manifest missing'; exit 1; }
+          cp kaggle_output/bhajan_source.mp3 output/bhajan_source.mp3
+          cp kaggle_output/bhajan_aabha_exact_identity.mp4 output/videos/bhajan_aabha_exact_identity.mp4
+          cp kaggle_output/manifest.json output/manifest.json
+          test -s output/bhajan_source.mp3
+          test -s output/videos/bhajan_aabha_exact_identity.mp4
+          test -s output/manifest.json
           DURATION=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 output/videos/bhajan_aabha_exact_identity.mp4)
           echo "FINAL_DURATION=$DURATION"
           echo 'OUTPUT_VALIDATION_OK'
@@ -211,7 +184,7 @@ jobs:
           gh release delete "$TAG" --repo "$REPO" --cleanup-tag --yes 2>/dev/null || true
           gh release create "$TAG" --repo "$REPO" \
             --title 'Bhajan Aabha — Latest Production Output' \
-            --notes 'Generated on Kaggle free GPU. Approved singer reference preserved; Lightning AI and HF ZeroGPU are disabled.' \
+            --notes 'Generated on Kaggle free GPU and transferred through a Kaggle Dataset.' \
             --prerelease \
             output/videos/bhajan_aabha_exact_identity.mp4 \
             output/bhajan_source.mp3 \
@@ -235,7 +208,8 @@ jobs:
           echo 'BHAJAN_AABHA_PRODUCTION_OK'
           echo 'BACKEND=KAGGLE_FREE_GPU'
           echo "KAGGLE_KERNEL=$KAGGLE_KERNEL"
-          echo 'AUTH=KAGGLE_API_TOKEN2'
+          echo "KAGGLE_DATASET=$KAGGLE_DATASET"
+          echo 'TRANSFER=KAGGLE_DATASET'
           echo 'LIGHTNING_AI=DISABLED'
           echo 'HF_ZEROGPU=DISABLED'
           echo 'PEXELS=DISABLED'
