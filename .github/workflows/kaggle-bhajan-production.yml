@@ -26,10 +26,9 @@ concurrency:
 
 env:
   KAGGLE_USERNAME: 'bhjanaabha'
-  KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
-  KAGGLE_API_TOKEN2: ${{ secrets.KAGGLE_API_TOKEN2 }}
   KAGGLE_API_TOKEN3: ${{ secrets.KAGGLE_API_TOKEN3 }}
   KAGGLE_OWNER: 'bhjanaabha'
+  KAGGLE_DATASET: 'bhjanaabha/bhajan-aabha-production-output'
   VIDEO_SECONDS: ${{ inputs.video_seconds || '180' }}
   YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
   YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
@@ -56,7 +55,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -n "${KAGGLE_API_TOKEN3:-}" || test -n "${KAGGLE_API_TOKEN:-}" || test -n "${KAGGLE_API_TOKEN2:-}" || { echo 'MISSING_KAGGLE_API_TOKEN'; exit 1; }
+          test -n "${KAGGLE_API_TOKEN3:-}" || { echo 'MISSING_KAGGLE_API_TOKEN3'; exit 1; }
           test -s 'assets/uks model image.png' || { echo 'MISSING_APPROVED_SINGER_ASSET'; exit 1; }
           python - <<'PY'
           import os
@@ -73,7 +72,8 @@ jobs:
               raise SystemExit(f'VIDEO_SECONDS_FATAL: {seconds}')
           print('CONFIG_OK')
           print('GPU_BACKEND=KAGGLE')
-          print('TRANSFER=PUBLIC_KAGGLE_DATASET_ANONYMOUS_DOWNLOAD')
+          print('TRANSFER=EXISTING_PUBLIC_KAGGLE_DATASET')
+          print('KAGGLE_DATASET=', os.environ['KAGGLE_DATASET'])
           print('LIGHTNING_AI=DISABLED')
           print('HF_ZEROGPU=DISABLED')
           print('PEXELS=DISABLED')
@@ -86,69 +86,57 @@ jobs:
           python -m pip install -q --upgrade 'kaggle>=2.2.3'
           kaggle --version
 
-      - name: Prepare unique public Kaggle dataset
+      - name: Prepare unique public Kaggle kernel
         shell: bash
         run: |
           set -euo pipefail
-          slug="bhajan-aabha-run-${GITHUB_RUN_ID}"
-          rm -rf transfer_seed
-          mkdir -p transfer_seed
-          printf 'Bhajan Aabha transfer seed for run %s\n' "$GITHUB_RUN_ID" > transfer_seed/README.txt
-          cat > transfer_seed/dataset-metadata.json <<JSON
-          {
-            "title": "Bhajan Aabha Run ${GITHUB_RUN_ID}",
-            "id": "${KAGGLE_OWNER}/${slug}",
-            "subtitle": "Automated Bhajan Aabha production transfer",
-            "description": "Public transfer dataset for Bhajan Aabha run ${GITHUB_RUN_ID}.",
-            "licenses": [{"name": "CC0-1.0"}]
-          }
-          JSON
-          echo "KAGGLE_KERNEL=${KAGGLE_OWNER}/${slug}" >> "$GITHUB_ENV"
-          echo "KAGGLE_DATASET=${KAGGLE_OWNER}/${slug}" >> "$GITHUB_ENV"
-
-      - name: Create public Kaggle dataset using the newest token first
-        shell: bash
-        run: |
-          set -euo pipefail
-          success=0
-          for token_name in KAGGLE_API_TOKEN3 KAGGLE_API_TOKEN KAGGLE_API_TOKEN2; do
-            token="${!token_name:-}"
-            if [ -z "$token" ]; then
-              continue
-            fi
-            echo "Trying ${token_name} for public dataset creation"
-            export KAGGLE_API_TOKEN="$token"
-            set +e
-            kaggle datasets create -p transfer_seed -u
-            rc=$?
-            set -e
-            if [ "$rc" -eq 0 ]; then
-              echo "DATASET_CREATE_OK_USING=${token_name}"
-              echo "KAGGLE_ACTIVE_TOKEN=$token" >> "$GITHUB_ENV"
-              success=1
-              break
-            fi
-            echo "DATASET_CREATE_FAILED_USING=${token_name} rc=${rc}"
-          done
-          if [ "$success" -ne 1 ]; then
-            echo 'PUBLIC_DATASET_CREATE_FAILED'
-            exit 1
-          fi
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          run_id = os.environ['GITHUB_RUN_ID']
+          attempt = os.environ.get('GITHUB_RUN_ATTEMPT', '1')
+          owner = os.environ['KAGGLE_OWNER']
+          slug = f'bhajan-aabha-{run_id}-{attempt}'
+          title = f'Bhajan Aabha Run {run_id} Attempt {attempt}'
+          seconds = int(os.environ.get('VIDEO_SECONDS', '180'))
+          Path('kaggle_kernel/kernel-metadata.json').write_text(json.dumps({
+              'id': f'{owner}/{slug}',
+              'title': title,
+              'code_file': 'worker_v2.py',
+              'language': 'python',
+              'kernel_type': 'script',
+              'is_private': False,
+              'enable_gpu': True,
+              'enable_internet': True,
+          }, indent=2), encoding='utf-8')
+          Path('kaggle_kernel/run_config.json').write_text(json.dumps({
+              'video_seconds': seconds,
+              'run_id': run_id,
+              'run_attempt': attempt,
+              'config_version': 5,
+          }, indent=2), encoding='utf-8')
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as f:
+              f.write(f'KAGGLE_KERNEL={owner}/{slug}\n')
+          print('KAGGLE_KERNEL=', f'{owner}/{slug}')
+          PY
+          cat kaggle_kernel/kernel-metadata.json
+          cat kaggle_kernel/run_config.json
 
       - name: Push and run the Kaggle GPU worker
         shell: bash
         run: |
           set -euo pipefail
-          export KAGGLE_API_TOKEN="$KAGGLE_ACTIVE_TOKEN"
+          export KAGGLE_API_TOKEN="$KAGGLE_API_TOKEN3"
+          echo "PUSHING_KAGGLE_KERNEL=$KAGGLE_KERNEL"
           kaggle kernels push -p kaggle_kernel --accelerator NvidiaTeslaT4 -t 6600
 
-      - name: Wait for public Kaggle Dataset and download without datasets.get
+      - name: Wait for permanent public Kaggle Dataset and download anonymously
         shell: bash
         run: |
           set -euo pipefail
           rm -rf kaggle_output
           mkdir -p kaggle_output
-          zip_url="https://www.kaggle.com/api/v1/datasets/download/${KAGGLE_DATASET}?datasetVersionNumber=2"
+          zip_url="https://www.kaggle.com/api/v1/datasets/download/${KAGGLE_DATASET}"
           deadline=$((SECONDS + 6000))
           while true; do
             rm -f kaggle_output/dataset.zip
@@ -213,7 +201,7 @@ jobs:
           gh release delete "$TAG" --repo "$REPO" --cleanup-tag --yes 2>/dev/null || true
           gh release create "$TAG" --repo "$REPO" \
             --title 'Bhajan Aabha — Latest Production Output' \
-            --notes 'Generated on Kaggle free GPU and transferred through a public Kaggle Dataset.' \
+            --notes 'Generated on Kaggle free GPU and transferred through the permanent public Kaggle Dataset.' \
             --prerelease \
             output/videos/bhajan_aabha_exact_identity.mp4 \
             output/bhajan_source.mp3 \
@@ -238,7 +226,7 @@ jobs:
           echo 'BACKEND=KAGGLE_FREE_GPU'
           echo "KAGGLE_KERNEL=$KAGGLE_KERNEL"
           echo "KAGGLE_DATASET=$KAGGLE_DATASET"
-          echo 'TRANSFER=PUBLIC_KAGGLE_DATASET_ANONYMOUS_DOWNLOAD'
+          echo 'TRANSFER=EXISTING_PUBLIC_KAGGLE_DATASET'
           echo 'LIGHTNING_AI=DISABLED'
           echo 'HF_ZEROGPU=DISABLED'
           echo 'PEXELS=DISABLED'
