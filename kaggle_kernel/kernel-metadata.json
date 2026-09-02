@@ -1,10 +1,10 @@
 {
-  "id": "ukumr59/bhajan-aabha-production-gpu",
+  "id": "bhjanaabha/bhajan-aabha-production-gpu",
   "title": "Bhajan Aabha Production GPU",
   "code_file": "worker.py",
   "language": "python",
   "kernel_type": "script",
-  "is_private": "true",
+  "is_private": "false",
   "enable_gpu": "true",
   "enable_internet": "true",
   "machine_shape": ""
