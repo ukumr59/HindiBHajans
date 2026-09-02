@@ -1,9 +1,17 @@
-name: Bhajan Aabha — Production v2 (Kaggle GPU via Dataset Transfer)
+name: Bhajan Aabha — Production v2 (Kaggle GPU via Public Dataset Transfer)
 
 on:
   workflow_dispatch:
   schedule:
     - cron: '0 16 * * *'
+
+permissions:
+  contents: write
+
+env:
+  KAGGLE_USERNAME: bhjanaabha
+  KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+  KAGGLE_API_TOKEN2: ${{ secrets.KAGGLE_API_TOKEN2 }}
 
 jobs:
   generate:
@@ -15,10 +23,14 @@ jobs:
 
       - name: Install validation tools
         run: |
+          set -euo pipefail
           python -m pip install --upgrade pip pillow
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq curl unzip
 
       - name: Validate approved identity source
         run: |
+          set -euo pipefail
           test -f 'assets/uks model image.png'
           python - <<'PY'
           from PIL import Image
@@ -29,78 +41,142 @@ jobs:
           PY
 
       - name: Install Kaggle CLI
-        run: python -m pip install --upgrade kaggle
+        run: python -m pip install --upgrade 'kaggle>=2.2.3'
 
-      - name: Prepare unique Kaggle GPU worker
+      - name: Prepare unique public Kaggle dataset
         env:
           GITHUB_RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
           slug="bhajan-aabha-run-${GITHUB_RUN_ID}"
-          python - <<PY
-          import json
-          p='kaggle_kernel/kernel-metadata.json'
-          d=json.load(open(p))
-          d.update({
-            'id': f'bhjanaabha/{"$slug"}',
-            'title': f'Bhajan Aabha Run {GITHUB_RUN_ID}',
-            'code_file': 'worker_v2.py',
-            'language': 'python',
-            'kernel_type': 'script',
-            'is_private': False,
-            'enable_gpu': True,
-            'enable_internet': True
-          })
-          json.dump(d, open(p,'w'), indent=2)
-          PY
-          printf '{"run_id":"%s","video_seconds":180}\n' "$GITHUB_RUN_ID" > kaggle_kernel/run_config.json
-          echo "KAGGLE_KERNEL=${slug}" >> "$GITHUB_ENV"
+          rm -rf transfer_seed
+          mkdir -p transfer_seed
+          printf 'Bhajan Aabha transfer seed for run %s\n' "$GITHUB_RUN_ID" > transfer_seed/README.txt
+          cat > transfer_seed/dataset-metadata.json <<JSON
+          {
+            "title": "Bhajan Aabha Run ${GITHUB_RUN_ID}",
+            "id": "bhjanaabha/${slug}",
+            "subtitle": "Automated Bhajan Aabha production transfer",
+            "description": "Public transfer dataset for Bhajan Aabha run ${GITHUB_RUN_ID}.",
+            "licenses": [{"name": "CC0-1.0"}]
+          }
+          JSON
+          echo "KAGGLE_KERNEL=bhjanaabha/${slug}" >> "$GITHUB_ENV"
           echo "KAGGLE_DATASET=bhjanaabha/${slug}" >> "$GITHUB_ENV"
+
+      - name: Create public Kaggle dataset using available token
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf transfer_seed/.kaggle* || true
+          success=0
+          for token_name in KAGGLE_API_TOKEN KAGGLE_API_TOKEN2; do
+            token="${!token_name:-}"
+            if [ -z "$token" ]; then
+              continue
+            fi
+            echo "Trying ${token_name} for public dataset creation"
+            export KAGGLE_API_TOKEN="$token"
+            set +e
+            kaggle datasets create -p transfer_seed -u
+            rc=$?
+            set -e
+            if [ "$rc" -eq 0 ]; then
+              echo "DATASET_CREATE_OK_USING=${token_name}"
+              echo "KAGGLE_TRANSFER_TOKEN=${token_name}" >> "$GITHUB_ENV"
+              success=1
+              break
+            fi
+            echo "DATASET_CREATE_FAILED_USING=${token_name} rc=${rc}"
+          done
+          if [ "$success" -ne 1 ]; then
+            echo 'PUBLIC_DATASET_CREATE_FAILED'
+            exit 1
+          fi
 
       - name: Push and run Kaggle GPU worker
         env:
-          KAGGLE_USERNAME: bhjanaabha
-          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN2 }}
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
         run: |
           set -euo pipefail
           kaggle kernels push -p kaggle_kernel --accelerator NvidiaTeslaT4 --timeout 6600
 
-      - name: Wait for Kaggle worker window
-        run: |
-          set -euo pipefail
-          echo "Kaggle GPU worker submitted: ${KAGGLE_KERNEL}"
-          echo "The workflow no longer polls or downloads the Kaggle kernel output endpoint."
-          echo "The worker creates a public Kaggle Dataset containing the MP4/MP3/manifest."
-          sleep 35m
-
-      - name: Download production files from Kaggle Dataset
-        env:
-          KAGGLE_USERNAME: bhjanaabha
-          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN2 }}
-          KAGGLE_DATASET: ${{ env.KAGGLE_DATASET }}
+      - name: Wait for public Kaggle Dataset and download without datasets.get
+        shell: bash
         run: |
           set -euo pipefail
           rm -rf kaggle_output
           mkdir -p kaggle_output
-          kaggle datasets download -d "${KAGGLE_DATASET}" -p kaggle_output --unzip
-          test -f kaggle_output/manifest.json
-          test -f kaggle_output/bhajan_source.mp3
-          test -f kaggle_output/bhajan_aabha_exact_identity.mp4
-          echo 'Kaggle Dataset transfer verified.'
+          zip_url="https://www.kaggle.com/api/v1/datasets/download/${KAGGLE_DATASET}?datasetVersionNumber=1"
+          deadline=$((SECONDS + 5400))
+          while true; do
+            rm -f kaggle_output/dataset.zip
+            set +e
+            curl -fL --retry 2 --connect-timeout 20 --max-time 300 "$zip_url" -o kaggle_output/dataset.zip
+            rc=$?
+            set -e
+            if [ "$rc" -eq 0 ] && [ -s kaggle_output/dataset.zip ]; then
+              rm -rf kaggle_output/files
+              mkdir -p kaggle_output/files
+              if unzip -tq kaggle_output/dataset.zip >/dev/null 2>&1; then
+                unzip -oq kaggle_output/dataset.zip -d kaggle_output/files
+              fi
+              if [ -s kaggle_output/files/manifest.json ] && [ -s kaggle_output/files/bhajan_source.mp3 ] && [ -s kaggle_output/files/bhajan_aabha_exact_identity.mp4 ]; then
+                python - <<'PY'
+          import json, os
+          from pathlib import Path
+          m = json.loads(Path('kaggle_output/files/manifest.json').read_text(encoding='utf-8'))
+          expected = os.environ['GITHUB_RUN_ID']
+          actual = str(m.get('run_id', ''))
+          print('KAGGLE_DATASET_MANIFEST_RUN_ID=', actual)
+          print('EXPECTED_RUN_ID=', expected)
+          if actual != expected:
+              raise SystemExit('RUN_ID_MISMATCH')
+          if str(m.get('status', '')).upper() not in {'OK', ''}:
+              raise SystemExit('KAGGLE_WORKER_FAILED')
+          PY
+                break
+              fi
+            fi
+            echo "KAGGLE_PUBLIC_DATASET_NOT_READY rc=${rc}"
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo 'KAGGLE_PUBLIC_DATASET_TRANSFER_TIMEOUT'
+              exit 1
+            fi
+            sleep 60
+          done
 
-      - name: Publish latest production artifact
+      - name: Validate downloaded production output
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p output/videos
+          cp kaggle_output/files/bhajan_source.mp3 output/bhajan_source.mp3
+          cp kaggle_output/files/bhajan_aabha_exact_identity.mp4 output/videos/bhajan_aabha_exact_identity.mp4
+          cp kaggle_output/files/manifest.json output/manifest.json
+          test -s output/bhajan_source.mp3
+          test -s output/videos/bhajan_aabha_exact_identity.mp4
+          test -s output/manifest.json
+          echo 'OUTPUT_VALIDATION_OK'
+
+      - name: Publish production artifact
         uses: actions/upload-artifact@v4
         with:
           name: bhajan-aabha-production
           path: |
-            kaggle_output/manifest.json
-            kaggle_output/bhajan_source.mp3
-            kaggle_output/bhajan_aabha_exact_identity.mp4
+            output/manifest.json
+            output/bhajan_source.mp3
+            output/videos/bhajan_aabha_exact_identity.mp4
           if-no-files-found: error
 
       - name: Production summary
         run: |
-          python - <<'PY'
-          import json
-          print(json.dumps(json.load(open('kaggle_output/manifest.json')), indent=2))
-          PY
+          set -euo pipefail
+          echo 'BHAJAN_AABHA_PRODUCTION_OK'
+          echo 'BACKEND=KAGGLE_FREE_GPU'
+          echo "KAGGLE_KERNEL=$KAGGLE_KERNEL"
+          echo "KAGGLE_DATASET=$KAGGLE_DATASET"
+          echo 'TRANSFER=PUBLIC_KAGGLE_DATASET_ANONYMOUS_DOWNLOAD'
+          echo 'LIGHTNING_AI=DISABLED'
+          echo 'HF_ZEROGPU=DISABLED'
+          echo 'IDENTITY_SOURCE=assets/uks model image.png'
