@@ -77,7 +77,10 @@ jobs:
           attempt = os.environ.get('GITHUB_RUN_ATTEMPT', '1')
           owner = os.environ['KAGGLE_OWNER']
           slug = f'bhajan-aabha-musetalk-smoke-{run_id}-{attempt}'
-          title = f'Bhajan Aabha MuseTalk Smoke {run_id} Attempt {attempt}'
+          # Kaggle requires the title-derived slug to match the id slug.
+          # Keep the title exactly equal to the slug so push cannot fail on
+          # "title does not resolve to the specified id".
+          title = slug
           seconds = int(os.environ.get('SMOKE_SECONDS', '10'))
           Path('kaggle_kernel/kernel-metadata.json').write_text(json.dumps({
               'id': f'{owner}/{slug}',
@@ -94,18 +97,17 @@ jobs:
               'run_id': run_id,
               'run_attempt': attempt,
               'smoke_test': True,
-              'config_version': 14,
+              'config_version': 15,
           }, indent=2), encoding='utf-8')
           with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as f:
               f.write(f'KAGGLE_KERNEL={owner}/{slug}\n')
           print('KAGGLE_KERNEL=', f'{owner}/{slug}')
+          print('KAGGLE_KERNEL_TITLE=', title)
           PY
       - name: Push and run Kaggle T4 smoke worker
         shell: bash
         run: |
           set -euo pipefail
-          # IMPORTANT: -t is NOT a timeout option in Kaggle CLI; it overrides the kernel title.
-          # The title is already defined in kernel-metadata.json and must not be overridden.
           kaggle kernels push -p kaggle_kernel --accelerator NvidiaTeslaT4
       - name: Wait for smoke output via authenticated Kaggle kernel output
         shell: bash
