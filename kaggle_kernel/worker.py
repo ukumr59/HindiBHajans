@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -39,16 +38,25 @@ def ensure_repo() -> None:
     run('git', 'clone', '--depth', '1', REPO_URL, str(REPO))
 
 
+def load_config() -> dict:
+    if not KERNEL_CONFIG.exists():
+        return {}
+    try:
+        cfg = json.loads(KERNEL_CONFIG.read_text(encoding='utf-8'))
+    except Exception as exc:
+        raise RuntimeError(f'KAGGLE_CONFIG_FATAL: invalid {KERNEL_CONFIG}: {exc}') from exc
+    if not isinstance(cfg, dict):
+        raise RuntimeError('KAGGLE_CONFIG_FATAL: run_config.json must contain an object')
+    return cfg
+
+
 def requested_duration() -> int:
-    requested = None
-    if KERNEL_CONFIG.exists():
-        try:
-            cfg = json.loads(KERNEL_CONFIG.read_text(encoding='utf-8'))
-            requested = int(cfg.get('video_seconds'))
-            print(f'RUN_CONFIG_VIDEO_SECONDS={requested}', flush=True)
-        except Exception as exc:
-            raise RuntimeError(f'KAGGLE_CONFIG_FATAL: invalid {KERNEL_CONFIG}: {exc}') from exc
-    if requested is None:
+    cfg = load_config()
+    requested = cfg.get('video_seconds')
+    if requested is not None:
+        requested = int(requested)
+        print(f'RUN_CONFIG_VIDEO_SECONDS={requested}', flush=True)
+    else:
         requested = int(os.environ.get('VIDEO_SECONDS', '180'))
         print('RUN_CONFIG_VIDEO_SECONDS=not-found; using environment/default', flush=True)
     if requested < 180 or requested > 300 or requested % 15:
@@ -119,8 +127,11 @@ def write_manifest() -> None:
         'ffprobe', '-v', 'error', '-show_entries', 'format=duration',
         '-of', 'default=noprint_wrappers=1:nokey=1', str(OUTPUT)
     ], text=True).strip())
+    cfg = load_config()
+    run_id = str(cfg.get('run_id', 'unknown'))
     manifest = {
         'status': 'OK',
+        'run_id': run_id,
         'backend': 'Kaggle free GPU + local ACE-Step 1.5 + deterministic exact-identity assembly',
         'lightning_ai': False,
         'huggingface_zerogpu': False,
