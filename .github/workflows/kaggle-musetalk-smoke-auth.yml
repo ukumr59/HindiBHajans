@@ -77,9 +77,6 @@ jobs:
           attempt = os.environ.get('GITHUB_RUN_ATTEMPT', '1')
           owner = os.environ['KAGGLE_OWNER']
           slug = f'bhajan-aabha-musetalk-smoke-{run_id}-{attempt}'
-          # Kaggle requires the title-derived slug to match the id slug.
-          # Keep the title exactly equal to the slug so push cannot fail on
-          # "title does not resolve to the specified id".
           title = slug
           seconds = int(os.environ.get('SMOKE_SECONDS', '10'))
           Path('kaggle_kernel/kernel-metadata.json').write_text(json.dumps({
@@ -108,7 +105,67 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          kaggle kernels push -p kaggle_kernel --accelerator NvidiaTeslaT4
+          # Kaggle uses dynamic API rate limiting. A 429 here is an API cooldown,
+          # not a MuseTalk/GPU failure. Do not hammer the same slug: on each retry
+          # create a fresh slug, wait, and push again. This also avoids stale slugs
+          # if Kaggle partially records a rejected SaveKernel request.
+          for attempt in 1 2 3 4; do
+            echo "KAGGLE_PUSH_ATTEMPT=$attempt"
+            if [ "$attempt" -gt 1 ]; then
+              case "$attempt" in
+                2) sleep 300 ;;
+                3) sleep 600 ;;
+                4) sleep 1200 ;;
+              esac
+              python - <<'PY'
+          import json, os
+          from pathlib import Path
+          run_id = os.environ['GITHUB_RUN_ID']
+          base_attempt = os.environ.get('GITHUB_RUN_ATTEMPT', '1')
+          push_attempt = os.environ['KAGGLE_PUSH_ATTEMPT']
+          owner = os.environ['KAGGLE_OWNER']
+          slug = f'bhajan-aabha-musetalk-smoke-{run_id}-{base_attempt}-p{push_attempt}'
+          seconds = int(os.environ.get('SMOKE_SECONDS', '10'))
+          Path('kaggle_kernel/kernel-metadata.json').write_text(json.dumps({
+              'id': f'{owner}/{slug}',
+              'title': slug,
+              'code_file': 'worker_v2.py',
+              'language': 'python',
+              'kernel_type': 'script',
+              'is_private': False,
+              'enable_gpu': True,
+              'enable_internet': True,
+          }, indent=2), encoding='utf-8')
+          Path('kaggle_kernel/run_config.json').write_text(json.dumps({
+              'video_seconds': seconds,
+              'run_id': run_id,
+              'run_attempt': base_attempt,
+              'smoke_test': True,
+              'config_version': 15,
+              'push_attempt': int(push_attempt),
+          }, indent=2), encoding='utf-8')
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as f:
+              f.write(f'KAGGLE_KERNEL={owner}/{slug}\n')
+          print('KAGGLE_KERNEL=', f'{owner}/{slug}')
+          PY
+            fi
+            set +e
+            kaggle kernels push -p kaggle_kernel --accelerator NvidiaTeslaT4 2>&1 | tee /tmp/kaggle-push.log
+            rc=${PIPESTATUS[0]}
+            set -e
+            if [ "$rc" -eq 0 ]; then
+              echo 'KAGGLE_PUSH_OK'
+              exit 0
+            fi
+            if grep -q '429 Client Error' /tmp/kaggle-push.log; then
+              echo "KAGGLE_PUSH_RATE_LIMITED attempt=$attempt"
+              continue
+            fi
+            echo 'KAGGLE_PUSH_FATAL'
+            exit "$rc"
+          done
+          echo 'KAGGLE_PUSH_RATE_LIMIT_TIMEOUT'
+          exit 1
       - name: Wait for smoke output via authenticated Kaggle kernel output
         shell: bash
         run: |
