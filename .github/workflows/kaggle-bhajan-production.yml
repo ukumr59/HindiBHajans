@@ -26,7 +26,7 @@ concurrency:
 
 env:
   KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
-  KAGGLE_KERNEL: 'bhjanaabha/bhajan-aabha-ace-step-gpu-worker-842537521398'
+  KAGGLE_KERNEL: 'bhjanaabha/bhajan-aabha-production'
   VIDEO_SECONDS: ${{ inputs.video_seconds || '180' }}
   YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
   YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
@@ -69,7 +69,7 @@ jobs:
           if not 180 <= seconds <= 300 or seconds % 15:
               raise SystemExit(f'VIDEO_SECONDS_FATAL: {seconds}')
           print('CONFIG_OK')
-          print('KAGGLE_KERNEL=bhjanaabha/bhajan-aabha-ace-step-gpu-worker-842537521398')
+          print('KAGGLE_KERNEL=bhjanaabha/bhajan-aabha-production')
           print('GPU_BACKEND=KAGGLE')
           print('LIGHTNING_AI=DISABLED')
           print('HF_ZEROGPU=DISABLED')
