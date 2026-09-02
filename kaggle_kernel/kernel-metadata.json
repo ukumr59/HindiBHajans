@@ -1,6 +1,6 @@
 {
-  "id": "ukumr59/bhajan-aabha-free-kaggle-t4-production-worker",
-  "title": "Bhajan Aabha Free Kaggle T4 Production Worker",
+  "id": "ukumr59/bhajan-aabha-production-gpu",
+  "title": "Bhajan Aabha Production GPU",
   "code_file": "worker.py",
   "language": "python",
   "kernel_type": "script",
