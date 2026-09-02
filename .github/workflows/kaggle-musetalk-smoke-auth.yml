@@ -17,7 +17,6 @@ env:
   KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN3 }}
   KAGGLE_API_TOKEN3: ${{ secrets.KAGGLE_API_TOKEN3 }}
   KAGGLE_OWNER: 'bhjanaabha'
-  KAGGLE_DATASET: 'bhjanaabha/bhajan-aabha-production-output'
   SMOKE_SECONDS: ${{ inputs.smoke_seconds || '10' }}
 
 jobs:
@@ -25,18 +24,15 @@ jobs:
     name: Validate actual audio-driven singing animation
     runs-on: ubuntu-latest
     timeout-minutes: 110
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Install validation tools
         run: |
           set -euo pipefail
           python -m pip install -q --upgrade pip pillow
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg
-
       - name: Validate smoke configuration
         shell: bash
         run: |
@@ -65,13 +61,11 @@ jobs:
           print('HF_ZEROGPU=DISABLED')
           print('NEW_API_KEYS=NONE')
           PY
-
       - name: Install Kaggle CLI
         run: |
           set -euo pipefail
           python -m pip install -q --upgrade 'kaggle>=2.2.3'
           kaggle --version
-
       - name: Prepare unique public Kaggle smoke kernel
         shell: bash
         run: |
@@ -100,19 +94,19 @@ jobs:
               'run_id': run_id,
               'run_attempt': attempt,
               'smoke_test': True,
-              'config_version': 13,
+              'config_version': 14,
           }, indent=2), encoding='utf-8')
           with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as f:
               f.write(f'KAGGLE_KERNEL={owner}/{slug}\n')
           print('KAGGLE_KERNEL=', f'{owner}/{slug}')
           PY
-
       - name: Push and run Kaggle T4 smoke worker
         shell: bash
         run: |
           set -euo pipefail
-          kaggle kernels push -p kaggle_kernel --accelerator NvidiaTeslaT4 -t 6600
-
+          # IMPORTANT: -t is NOT a timeout option in Kaggle CLI; it overrides the kernel title.
+          # The title is already defined in kernel-metadata.json and must not be overridden.
+          kaggle kernels push -p kaggle_kernel --accelerator NvidiaTeslaT4
       - name: Wait for smoke output via authenticated Kaggle kernel output
         shell: bash
         run: |
@@ -128,9 +122,11 @@ jobs:
             rc=$?
             set -e
             echo "KAGGLE_KERNEL_OUTPUT_RC=$rc"
-            echo 'KAGGLE_KERNEL_OUTPUT_FILES:'
             find kaggle_output -maxdepth 3 -type f -printf '%p %s bytes\n' | sort || true
-            if [ "$rc" -eq 0 ] && [ -s kaggle_output/manifest.json ] && [ -s kaggle_output/bhajan_source.mp3 ] && [ -s kaggle_output/bhajan_aabha_exact_identity.mp4 ]; then
+            if [ "$rc" -eq 0 ] && [ -s kaggle_output/transfer_out/manifest.json ] && [ -s kaggle_output/transfer_out/bhajan_source.mp3 ] && [ -s kaggle_output/transfer_out/bhajan_aabha_exact_identity.mp4 ]; then
+              cp kaggle_output/transfer_out/manifest.json kaggle_output/manifest.json
+              cp kaggle_output/transfer_out/bhajan_source.mp3 kaggle_output/bhajan_source.mp3
+              cp kaggle_output/transfer_out/bhajan_aabha_exact_identity.mp4 kaggle_output/bhajan_aabha_exact_identity.mp4
               python - <<'PY'
           import json, os
           from pathlib import Path
@@ -153,7 +149,6 @@ jobs:
             fi
             sleep 60
           done
-
       - name: Validate smoke MP4
         shell: bash
         run: |
@@ -180,7 +175,6 @@ jobs:
           echo "SMOKE_AUDIO_STREAM=$AINFO"
           echo "SMOKE_DURATION=$DURATION"
           echo 'SMOKE_MP4_CONTAINER_OK'
-
       - name: Publish smoke-test artifact
         env:
           GH_TOKEN: ${{ github.token }}
@@ -189,14 +183,7 @@ jobs:
           set -euo pipefail
           TAG='bhajan-aabha-musetalk-smoke'
           gh release delete "$TAG" --repo "$REPO" --cleanup-tag --yes 2>/dev/null || true
-          gh release create "$TAG" --repo "$REPO" \
-            --title 'Bhajan Aabha — MuseTalk Smoke Test' \
-            --notes '₹0 validation run: approved singer image + real audio-driven MuseTalk lip synchronization. Not a production run.' \
-            --prerelease \
-            smoke_output/bhajan_aabha_musetalk_smoke.mp4 \
-            smoke_output/bhajan_source.mp3 \
-            smoke_output/manifest.json
-
+          gh release create "$TAG" --repo "$REPO" --title 'Bhajan Aabha — MuseTalk Smoke Test' --notes '₹0 validation run: approved singer image + real audio-driven MuseTalk lip synchronization. Not a production run.' --prerelease smoke_output/bhajan_aabha_musetalk_smoke.mp4 smoke_output/bhajan_source.mp3 smoke_output/manifest.json
       - name: Smoke summary
         run: |
           echo 'MUSE_TALK_SMOKE_PIPELINE_OK'
