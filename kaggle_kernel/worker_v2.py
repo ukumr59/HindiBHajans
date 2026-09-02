@@ -1,14 +1,14 @@
-import json, os, shutil, subprocess, runpy
+import json
+import runpy
+import shutil
 from pathlib import Path
 
-RUN_CONFIG = Path('/kaggle/working/run_config.json')
 ROOT = Path('/kaggle/working')
+RUN_CONFIG = ROOT / 'run_config.json'
 OUT = ROOT / 'transfer_out'
 OUT.mkdir(exist_ok=True)
 
-# Run the established GPU worker. It creates:
-#   /kaggle/working/bhajan_source.mp3
-#   /kaggle/working/bhajan_aabha_exact_identity.mp4
+# Generate the established audio + exact-identity video on the Kaggle GPU.
 runpy.run_path(str(ROOT / 'worker.py'), run_name='__main__')
 
 expected = [
@@ -21,29 +21,31 @@ for p in expected:
         raise FileNotFoundError(f'Missing expected output: {p}')
     shutil.copy2(p, OUT / p.name)
 
-cfg = json.loads(RUN_CONFIG.read_text()) if RUN_CONFIG.exists() else {}
-manifest = json.loads((OUT / 'manifest.json').read_text())
+cfg = json.loads(RUN_CONFIG.read_text(encoding='utf-8')) if RUN_CONFIG.exists() else {}
+run_id = str(cfg.get('run_id', 'unknown'))
+dataset_handle = f'bhjanaabha/bhajan-aabha-run-{run_id}'
+
+manifest = json.loads((OUT / 'manifest.json').read_text(encoding='utf-8'))
 manifest['transfer'] = 'kaggle_dataset'
-manifest['transfer_dataset'] = f"bhjanaabha/bhajan-aabha-run-{cfg.get('run_id','unknown')}"
-(OUT / 'manifest.json').write_text(json.dumps(manifest, indent=2))
+manifest['transfer_dataset'] = dataset_handle
+(OUT / 'manifest.json').write_text(
+    json.dumps(manifest, ensure_ascii=False, indent=2),
+    encoding='utf-8',
+)
 
-meta = {
-    'title': f"Bhajan Aabha Run {cfg.get('run_id','unknown')}",
-    'id': f"bhjanaabha/bhajan-aabha-run-{cfg.get('run_id','unknown')}",
-    'description': 'Automated Bhajan Aabha production output. Generated on Kaggle GPU and transferred as a public dataset.',
-    'licenses': [{'name': 'CC0-1.0'}]
-}
-(Path(OUT) / 'dataset-metadata.json').write_text(json.dumps(meta, indent=2))
-
-# Kaggle's current dataset API is used for the transfer instead of the broken
-# kernel-output endpoint (which can return kernels.get 403 even for public notebooks).
+# kagglehub is authenticated by default inside Kaggle notebooks. This avoids
+# embedding a credential in the public kernel source and avoids the notebook
+# output-download API that was returning kernels.get 403.
+import subprocess
 subprocess.run([
-    'python', '-m', 'pip', 'install', '--quiet', '--upgrade', 'kagglehub'
+    'python', '-m', 'pip', 'install', '--quiet', '--upgrade', 'kagglehub>=1.0.0'
 ], check=True)
 
-# Create a public dataset. The Kaggle CLI is authenticated inside Kaggle notebook
-# environments, so no credential is embedded in the worker.
-subprocess.run([
-    'kaggle', 'datasets', 'create', '-p', str(OUT), '-u'
-], check=True)
-print(f"TRANSFER_DATASET={meta['id']}")
+import kagglehub
+kagglehub.dataset_upload(
+    dataset_handle,
+    str(OUT),
+    version_notes=f'Bhajan Aabha automated production run {run_id}',
+)
+
+print(f'TRANSFER_DATASET={dataset_handle}', flush=True)
