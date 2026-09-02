@@ -91,7 +91,8 @@ jobs:
           import json, os
           from pathlib import Path
           seconds = int(os.environ.get('VIDEO_SECONDS', '180'))
-          cfg = {'video_seconds': seconds, 'config_version': 1}
+          run_id = os.environ.get('GITHUB_RUN_ID', 'unknown')
+          cfg = {'video_seconds': seconds, 'run_id': run_id, 'config_version': 2}
           Path('kaggle_kernel/run_config.json').write_text(json.dumps(cfg, indent=2), encoding='utf-8')
           print('KAGGLE_RUN_CONFIG=', json.dumps(cfg))
           PY
@@ -103,38 +104,64 @@ jobs:
           set -euo pipefail
           kaggle kernels push -p kaggle_kernel --accelerator NvidiaTeslaT4 -t 6600
 
-      - name: Wait for Kaggle worker (no retries, no duplicate GPU runs)
+      - name: Wait for Kaggle worker using public output API
         shell: bash
         run: |
           set -euo pipefail
+          rm -rf kaggle_output
+          mkdir -p kaggle_output
           deadline=$((SECONDS + 6000))
           while true; do
-            status=$(kaggle kernels status "$KAGGLE_KERNEL" 2>&1 || true)
-            echo "$status"
-            if echo "$status" | grep -qiE 'complete|error|cancel|failed'; then
-              break
+            rm -rf kaggle_output/*
+            set +e
+            output=$(kaggle kernels output "$KAGGLE_KERNEL" -p kaggle_output -o 2>&1)
+            rc=$?
+            set -e
+            echo "$output"
+
+            if [ "$rc" -eq 0 ] && [ -s kaggle_output/manifest.json ]; then
+              python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          p = Path('kaggle_output/manifest.json')
+          m = json.loads(p.read_text(encoding='utf-8'))
+          expected = os.environ.get('GITHUB_RUN_ID', 'unknown')
+          actual = str(m.get('run_id', ''))
+          print(f'KAGGLE_MANIFEST_RUN_ID={actual}')
+          print(f'EXPECTED_RUN_ID={expected}')
+          if actual == expected and m.get('status') == 'OK':
+              for name, minimum in [('bhajan_aabha_exact_identity.mp4', 500000), ('bhajan_source.mp3', 100000)]:
+                  q = Path('kaggle_output') / name
+                  if not q.exists() or q.stat().st_size < minimum:
+                      raise SystemExit(f'KAGGLE_OUTPUT_NOT_READY: {name}')
+              print('KAGGLE_WORKER_COMPLETE')
+              raise SystemExit(0)
+          if actual == expected and str(m.get('status', '')).upper() in {'ERROR', 'FAILED'}:
+              raise SystemExit('KAGGLE_WORKER_FAILED')
+          raise SystemExit(2)
+          PY
+              check=$?
+              if [ "$check" -eq 0 ]; then
+                break
+              fi
+              rm -rf kaggle_output/*
+            elif [ "$rc" -ne 0 ]; then
+              echo "KAGGLE_OUTPUT_API_NOT_READY rc=$rc"
             fi
+
             if [ "$SECONDS" -ge "$deadline" ]; then
-              echo 'KAGGLE_TIMEOUT'
+              echo 'KAGGLE_TIMEOUT_OR_OUTPUT_ACCESS_FAILURE'
               exit 1
             fi
             sleep 60
           done
-          if echo "$status" | grep -qiE 'error|cancel|failed'; then
-            echo 'KAGGLE_WORKER_FAILED'
-            exit 1
-          fi
 
       - name: Download completed Kaggle outputs
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf kaggle_output output
-          mkdir -p kaggle_output output/videos
-          kaggle kernels output "$KAGGLE_KERNEL" -p kaggle_output -o
-          echo '=== KAGGLE OUTPUTS ==='
-          find kaggle_output -type f -printf '%p %s bytes\n' | sort
-
+          mkdir -p output/videos
           VIDEO=$(find kaggle_output -type f -name 'bhajan_aabha_exact_identity.mp4' -size +500k | head -1)
           AUDIO=$(find kaggle_output -type f -name 'bhajan_source.mp3' -size +100k | head -1)
           MANIFEST=$(find kaggle_output -type f -name 'manifest.json' -size +100 | head -1)
