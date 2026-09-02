@@ -33,7 +33,7 @@ jobs:
       - name: Install validation tools
         run: |
           set -euo pipefail
-          python -m pip install -q --upgrade pip pillow kagglehub
+          python -m pip install -q --upgrade pip pillow
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg
 
@@ -100,7 +100,7 @@ jobs:
               'run_id': run_id,
               'run_attempt': attempt,
               'smoke_test': True,
-              'config_version': 10,
+              'config_version': 11,
           }, indent=2), encoding='utf-8')
           with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as f:
               f.write(f'KAGGLE_KERNEL={owner}/{slug}\n')
@@ -113,7 +113,7 @@ jobs:
           set -euo pipefail
           kaggle kernels push -p kaggle_kernel --accelerator NvidiaTeslaT4 -t 6600
 
-      - name: Wait for smoke output via public Kaggle Dataset
+      - name: Wait for smoke output via unauthenticated Kaggle dataset download
         shell: bash
         env:
           KAGGLE_DATASET: ${{ env.KAGGLE_DATASET }}
@@ -126,27 +126,11 @@ jobs:
             rm -rf kaggle_output/files
             mkdir -p kaggle_output/files
             set +e
-            env -u KAGGLE_API_TOKEN -u KAGGLE_API_TOKEN3 -u KAGGLE_KEY -u KAGGLE_USERNAME python - <<'PY'
-          import os, shutil
-          from pathlib import Path
-          import kagglehub
-          assert not os.environ.get('KAGGLE_API_TOKEN')
-          assert not os.environ.get('KAGGLE_API_TOKEN3')
-          assert not os.environ.get('KAGGLE_KEY')
-          assert not os.environ.get('KAGGLE_USERNAME')
-          result = kagglehub.dataset_download(os.environ['KAGGLE_DATASET'], output_dir='kaggle_output/files', force_download=True)
-          print('KAGGLEHUB_DATASET_PATH=', result, flush=True)
-          src = Path(result)
-          dest = Path('kaggle_output/files')
-          if src.exists() and src.resolve() != dest.resolve():
-              for p in src.rglob('*'):
-                  if p.is_file():
-                      out = dest / p.relative_to(src)
-                      out.parent.mkdir(parents=True, exist_ok=True)
-                      shutil.copy2(p, out)
-          PY
+            env -u KAGGLE_API_TOKEN -u KAGGLE_API_TOKEN3 -u KAGGLE_KEY -u KAGGLE_USERNAME \
+              kaggle datasets download "$KAGGLE_DATASET" --path kaggle_output/files --unzip --force -q
             rc=$?
             set -e
+            echo "KAGGLE_DATASET_DOWNLOAD_RC=$rc"
             if [ "$rc" -eq 0 ] && [ -s kaggle_output/files/manifest.json ] && [ -s kaggle_output/files/bhajan_source.mp3 ] && [ -s kaggle_output/files/bhajan_aabha_exact_identity.mp4 ]; then
               python - <<'PY'
           import json, os
