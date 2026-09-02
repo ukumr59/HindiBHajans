@@ -14,6 +14,7 @@ AUDIO = WORK / 'bhajan_source.mp3'
 MANIFEST = WORK / 'manifest.json'
 
 REPO_URL = 'https://github.com/ukumr59/HindiBHajans.git'
+KERNEL_CONFIG = Path(__file__).with_name('run_config.json')
 LYRICS = '''[Intro]\nश्री राम... श्री राम... जय जय राम...\n\n[Verse 1]\nमन में बसो रघुनंदन, चरणों में मेरा ध्यान\nराम नाम की ज्योति जले, रोशन हो हर प्राण\n\n[Pre-Chorus]\nतेरे नाम की धुन बजे, हर धड़कन में आज\nतेरी कृपा से खिल उठे, जीवन का हर राज\n\n[Chorus]\nश्री राम जय राम, जय जय राम\nमेरे मन के दीप में, बसते श्री राम\n\n[Verse 2]\nदुख की घड़ी में साथ दो, हे दीनदयाल भगवान\nतेरा नाम ही आसरा, तेरा नाम ही सम्मान\n\n[Chorus]\nश्री राम जय राम, जय जय राम\nमेरे मन के दीप में, बसते श्री राम\n\n[Verse 3]\nअयोध्या के राजकुमार, करुणा के भंडार\nतेरे चरणों में मिल जाए, जीवन का सच्चा सार\n\n[Build]\nजय श्री राम की गूंज उठे, नभ से धरती तक\nढोल बजे और शंख बजे, प्रेम बहे हर पल\n\n[Final Chorus]\nश्री राम जय राम, जय जय राम\nमेरे मन के दीप में, बसते श्री राम\nश्री राम जय राम, जय जय राम\nजय जय राम... जय जय राम...\n\n[Outro]\nश्री राम... जय राम... जय जय राम...'''
 
 CAPTION = (
@@ -38,10 +39,25 @@ def ensure_repo() -> None:
     run('git', 'clone', '--depth', '1', REPO_URL, str(REPO))
 
 
-def prepare_request() -> None:
-    requested = int(os.environ.get('VIDEO_SECONDS', '180'))
+def requested_duration() -> int:
+    requested = None
+    if KERNEL_CONFIG.exists():
+        try:
+            cfg = json.loads(KERNEL_CONFIG.read_text(encoding='utf-8'))
+            requested = int(cfg.get('video_seconds'))
+            print(f'RUN_CONFIG_VIDEO_SECONDS={requested}', flush=True)
+        except Exception as exc:
+            raise RuntimeError(f'KAGGLE_CONFIG_FATAL: invalid {KERNEL_CONFIG}: {exc}') from exc
+    if requested is None:
+        requested = int(os.environ.get('VIDEO_SECONDS', '180'))
+        print('RUN_CONFIG_VIDEO_SECONDS=not-found; using environment/default', flush=True)
     if requested < 180 or requested > 300 or requested % 15:
         raise RuntimeError(f'VIDEO_SECONDS_FATAL: {requested}; expected 180-300 divisible by 15')
+    return requested
+
+
+def prepare_request() -> None:
+    requested = requested_duration()
     req = {
         'caption': CAPTION,
         'lyrics': LYRICS,
