@@ -26,6 +26,7 @@ concurrency:
 
 env:
   KAGGLE_USERNAME: 'bhjanaabha'
+  KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN3 }}
   KAGGLE_API_TOKEN3: ${{ secrets.KAGGLE_API_TOKEN3 }}
   KAGGLE_OWNER: 'bhjanaabha'
   KAGGLE_DATASET: 'bhjanaabha/bhajan-aabha-production-output'
@@ -55,7 +56,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -n "${KAGGLE_API_TOKEN3:-}" || { echo 'MISSING_KAGGLE_API_TOKEN3'; exit 1; }
+          test -n "${KAGGLE_API_TOKEN:-}" || { echo 'MISSING_KAGGLE_API_TOKEN'; exit 1; }
           test -s 'assets/uks model image.png' || { echo 'MISSING_APPROVED_SINGER_ASSET'; exit 1; }
           python - <<'PY'
           import os
@@ -74,6 +75,7 @@ jobs:
           print('GPU_BACKEND=KAGGLE')
           print('TRANSFER=EXISTING_PUBLIC_KAGGLE_DATASET_VIA_KAGGLEHUB')
           print('KAGGLE_DATASET=', os.environ['KAGGLE_DATASET'])
+          print('KAGGLE_AUTH_SOURCE=KAGGLE_API_TOKEN3_EXPOSED_AS_KAGGLE_API_TOKEN')
           print('LIGHTNING_AI=DISABLED')
           print('HF_ZEROGPU=DISABLED')
           print('PEXELS=DISABLED')
@@ -113,7 +115,7 @@ jobs:
               'video_seconds': seconds,
               'run_id': run_id,
               'run_attempt': attempt,
-              'config_version': 6,
+              'config_version': 7,
           }, indent=2), encoding='utf-8')
           with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as f:
               f.write(f'KAGGLE_KERNEL={owner}/{slug}\n')
@@ -126,18 +128,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          export KAGGLE_API_TOKEN="$KAGGLE_API_TOKEN3"
-          echo "PUSHING_KAGGLE_KERNEL=$KAGGLE_KERNEL"
           kaggle kernels push -p kaggle_kernel --accelerator NvidiaTeslaT4 -t 6600
 
       - name: Wait for permanent public Kaggle Dataset via kagglehub
         shell: bash
         env:
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN3 }}
           KAGGLE_DATASET: ${{ env.KAGGLE_DATASET }}
         run: |
           set -euo pipefail
           rm -rf kaggle_output
-          mkdir -p kaggle_output
+          mkdir -p kaggle_output/files
           deadline=$((SECONDS + 6000))
           while true; do
             rm -rf kaggle_output/files
@@ -147,6 +148,10 @@ jobs:
           import os, shutil
           from pathlib import Path
           import kagglehub
+
+          token = os.environ.get('KAGGLE_API_TOKEN', '').strip()
+          if token:
+              kagglehub.login(token=token, validate_credentials=False)
 
           dataset = os.environ['KAGGLE_DATASET']
           dest = Path('kaggle_output/files')
@@ -249,6 +254,7 @@ jobs:
           echo "KAGGLE_KERNEL=$KAGGLE_KERNEL"
           echo "KAGGLE_DATASET=$KAGGLE_DATASET"
           echo 'TRANSFER=EXISTING_PUBLIC_KAGGLE_DATASET_VIA_KAGGLEHUB'
+          echo 'AUTH=KAGGLE_API_TOKEN3'
           echo 'LIGHTNING_AI=DISABLED'
           echo 'HF_ZEROGPU=DISABLED'
           echo 'PEXELS=DISABLED'
