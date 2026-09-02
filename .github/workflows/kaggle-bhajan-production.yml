@@ -82,6 +82,20 @@ jobs:
           python -m pip install -q --upgrade 'kaggle>=1.8.4'
           kaggle --version
 
+      - name: Prepare Kaggle run configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          seconds = int(os.environ.get('VIDEO_SECONDS', '180'))
+          cfg = {'video_seconds': seconds, 'config_version': 1}
+          Path('kaggle_kernel/run_config.json').write_text(json.dumps(cfg, indent=2), encoding='utf-8')
+          print('KAGGLE_RUN_CONFIG=', json.dumps(cfg))
+          PY
+          cat kaggle_kernel/run_config.json
+
       - name: Push and run the Kaggle GPU worker
         shell: bash
         run: |
