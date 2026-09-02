@@ -4,7 +4,6 @@ import argparse
 import os
 import shutil
 import subprocess
-import sys
 import venv
 from pathlib import Path
 
@@ -16,10 +15,6 @@ DEFAULT_OUT = ROOT / 'bhajan_aabha_exact_identity_final.mp4'
 MUSETALK_DIR = ROOT / 'MuseTalk'
 VENV_DIR = ROOT / '.musetalk_venv'
 MODELS_DIR = MUSETALK_DIR / 'models'
-
-# Pin to the upstream MuseTalk commit whose published v1.5 inference path is
-# known to support an image input. This avoids silently following future API
-# changes during production runs.
 MUSETALK_REPO = 'https://github.com/TMElyralab/MuseTalk.git'
 MUSETALK_COMMIT = '0a89dec45a0192b824e3cf4daf96c239440c5ed8'
 
@@ -30,9 +25,7 @@ def run(*args: str, cwd: Path | None = None, env: dict[str, str] | None = None) 
 
 
 def python_in_venv() -> Path:
-    if os.name == 'nt':
-        return VENV_DIR / 'Scripts' / 'python.exe'
-    return VENV_DIR / 'bin' / 'python'
+    return VENV_DIR / 'bin' / 'python' if os.name != 'nt' else VENV_DIR / 'Scripts' / 'python.exe'
 
 
 def ensure_musetalk_checkout() -> None:
@@ -48,30 +41,13 @@ def ensure_musetalk_venv() -> Path:
     if not py.exists():
         print('Creating isolated MuseTalk virtual environment.', flush=True)
         venv.EnvBuilder(with_pip=True, system_site_packages=True, clear=False).create(VENV_DIR)
-
     marker = VENV_DIR / '.bhajan_aabha_musetalk_deps_ok'
     if not marker.exists():
-        # Keep MuseTalk dependency changes isolated from ACE-Step. In
-        # particular, do not downgrade the parent Kaggle environment's numpy,
-        # transformers, or other packages used by the audio stage.
-        run(
-            str(py), '-m', 'pip', 'install', '--quiet', '--upgrade',
-            'pip',
-            'diffusers==0.30.2',
-            'accelerate==0.28.0',
-            'soundfile==0.12.1',
-            'transformers==4.39.2',
-            'huggingface_hub==0.30.2',
-            'librosa==0.11.0',
-            'einops==0.8.1',
-            'gdown',
-            'requests',
-            'imageio[ffmpeg]',
-            'omegaconf',
-            'ffmpeg-python',
-            'moviepy',
-            'opencv-python',
-        )
+        run(str(py), '-m', 'pip', 'install', '--quiet', '--upgrade',
+            'pip', 'diffusers==0.30.2', 'accelerate==0.28.0', 'soundfile==0.12.1',
+            'transformers==4.39.2', 'huggingface_hub==0.30.2', 'librosa==0.11.0',
+            'einops==0.8.1', 'gdown', 'requests', 'imageio[ffmpeg]', 'omegaconf',
+            'ffmpeg-python', 'moviepy', 'opencv-python')
         marker.write_text('ok\n', encoding='utf-8')
     return py
 
@@ -96,11 +72,9 @@ def ensure_musetalk_weights(py: Path) -> None:
     if have_weights():
         print('MUSETALK_WEIGHTS=CACHED', flush=True)
         return
-
     print('MUSETALK_WEIGHTS=DOWNLOADING_PUBLIC_OPEN_SOURCE_MODELS', flush=True)
-    # Use the official upstream download script inside the isolated venv.
-    # The source commit pins the exact file layout expected by scripts.inference.
     env = dict(os.environ)
+    env['PATH'] = str(py.parent) + os.pathsep + env.get('PATH', '')
     env.pop('HF_TOKEN', None)
     env.pop('HUGGINGFACE_HUB_TOKEN', None)
     run('bash', 'download_weights.sh', cwd=MUSETALK_DIR, env=env)
@@ -113,12 +87,9 @@ def resolve_image(requested: Path) -> Path:
     if requested.exists():
         return requested
     candidates = [
-        ROOT / 'bhajan_aabha_locked_identity_source.png',
-        ROOT / 'uks model image.png',
-        ROOT / 'bhajan_aabha_locked_singer_highres.png',
-        ROOT / 'bhajan_aabha_locked_singer_cutout.png',
-        ROOT / 'bhajan_aabha_locked_singer_cutout_v2.png',
-        ROOT / 'bhajan_aabha_locked_singer_cutout_v3.png',
+        ROOT / 'bhajan_aabha_locked_identity_source.png', ROOT / 'uks model image.png',
+        ROOT / 'bhajan_aabha_locked_singer_highres.png', ROOT / 'bhajan_aabha_locked_singer_cutout.png',
+        ROOT / 'bhajan_aabha_locked_singer_cutout_v2.png', ROOT / 'bhajan_aabha_locked_singer_cutout_v3.png',
     ]
     for p in candidates:
         if p.exists() and p.is_file():
@@ -128,7 +99,6 @@ def resolve_image(requested: Path) -> Path:
                         return p
             except Exception:
                 pass
-
     input_root = Path('/kaggle/input')
     if input_root.exists():
         ranked: list[tuple[int, Path]] = []
@@ -152,22 +122,18 @@ def resolve_image(requested: Path) -> Path:
 
 
 def has_audio_stream(p: Path) -> bool:
-    probe = subprocess.run(
-        ['ffprobe', '-v', 'error', '-select_streams', 'a:0', '-show_entries',
-         'stream=codec_type', '-of', 'csv=p=0', str(p)],
-        capture_output=True, text=True, check=False,
-    )
+    probe = subprocess.run(['ffprobe', '-v', 'error', '-select_streams', 'a:0',
+                            '-show_entries', 'stream=codec_type', '-of', 'csv=p=0', str(p)],
+                           capture_output=True, text=True, check=False)
     return probe.stdout.strip() == 'audio'
 
 
 def find_audio(preferred: Path | None = None) -> Path:
     if preferred and preferred.exists() and has_audio_stream(preferred):
         return preferred
-    names = [
-        'bhajan_source.mp3', 'bhajan_aabha_dj_master.mp3', 'bhajan_source.wav',
-        'bhajan_source.m4a', 'bhajan_source.flac', 'bhajan_source.aac',
-        'bhajan_source.ogg', 'bhajan_source.opus',
-    ]
+    names = ['bhajan_source.mp3', 'bhajan_aabha_dj_master.mp3', 'bhajan_source.wav',
+             'bhajan_source.m4a', 'bhajan_source.flac', 'bhajan_source.aac',
+             'bhajan_source.ogg', 'bhajan_source.opus']
     for base in (ROOT, Path('/kaggle/input')):
         if not base.exists():
             continue
@@ -179,35 +145,26 @@ def find_audio(preferred: Path | None = None) -> Path:
 
 
 def audio_duration(audio: Path) -> float:
-    return float(subprocess.check_output([
-        'ffprobe', '-v', 'error', '-show_entries', 'format=duration',
-        '-of', 'default=noprint_wrappers=1:nokey=1', str(audio)
-    ], text=True).strip())
+    return float(subprocess.check_output(['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+                                          '-of', 'default=noprint_wrappers=1:nokey=1', str(audio)], text=True).strip())
 
 
 def make_audio_clip(audio: Path, seconds: float, tmp: Path) -> Path:
     if seconds <= 0:
         return audio
     clip = tmp / 'musetalk_drive_audio.mp3'
-    run(
-        'ffmpeg', '-y', '-v', 'error', '-i', str(audio), '-t', f'{seconds:.3f}',
-        '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'libmp3lame', '-b:a', '128k', str(clip),
-    )
+    run('ffmpeg', '-y', '-v', 'error', '-i', str(audio), '-t', f'{seconds:.3f}', '-vn',
+        '-ac', '1', '-ar', '16000', '-c:a', 'libmp3lame', '-b:a', '128k', str(clip))
     return clip
 
 
 def write_inference_config(image: Path, audio: Path, result_name: str, config_path: Path) -> None:
-    # MuseTalk's normal inference accepts image files directly and repeats the
-    # single reference frame over the generated audio timeline. That is exactly
-    # what we need: the source identity remains the base frame, while only the
-    # lower face is regenerated per audio-conditioned frame.
-    text = (
+    config_path.write_text(
         'task_0:\n'
         f'  video_path: "{image.as_posix()}"\n'
         f'  audio_path: "{audio.as_posix()}"\n'
-        f'  result_name: "{result_name}"\n'
-    )
-    config_path.write_text(text, encoding='utf-8')
+        f'  result_name: "{result_name}"\n',
+        encoding='utf-8')
 
 
 def locate_result(result_root: Path, result_name: str) -> Path:
@@ -235,7 +192,6 @@ def main() -> None:
     out = Path(args.output)
     tmp = ROOT / 'musetalk_smoke_tmp'
     tmp.mkdir(parents=True, exist_ok=True)
-
     duration = audio_duration(audio)
     if args.seconds > 0:
         duration = min(duration, args.seconds)
@@ -264,47 +220,26 @@ def main() -> None:
     print('IDENTITY_REGENERATION=FALSE', flush=True)
     print(f'PROCESS_SECONDS={duration:.2f}', flush=True)
 
-    run(
-        str(py), '-m', 'scripts.inference',
-        '--inference_config', str(config),
+    run(str(py), '-m', 'scripts.inference', '--inference_config', str(config),
         '--result_dir', str(result_root),
         '--unet_model_path', str(MODELS_DIR / 'musetalkV15' / 'unet.pth'),
         '--unet_config', str(MODELS_DIR / 'musetalkV15' / 'musetalk.json'),
-        '--whisper_dir', str(MODELS_DIR / 'whisper'),
-        '--version', 'v15',
-        '--fps', '25',
-        '--batch_size', str(max(1, args.batch_size)),
-        '--output_vid_name', result_name,
-        '--extra_margin', '10',
-        '--parsing_mode', 'jaw',
-        '--use_float16',
-        cwd=MUSETALK_DIR,
-    )
+        '--whisper_dir', str(MODELS_DIR / 'whisper'), '--version', 'v15', '--fps', '25',
+        '--batch_size', str(max(1, args.batch_size)), '--output_vid_name', result_name,
+        '--extra_margin', '10', '--parsing_mode', 'jaw', '--use_float16', cwd=MUSETALK_DIR)
 
     generated = locate_result(result_root, result_name)
     out.parent.mkdir(parents=True, exist_ok=True)
     if generated.resolve() != out.resolve():
         shutil.copy2(generated, out)
-
     if not out.exists() or out.stat().st_size < 500_000:
         raise RuntimeError('MuseTalk output MP4 is missing or suspiciously small.')
 
-    # Final technical validation: video exists, has video+audio, and duration is
-    # close to the driving audio. This does not claim perceptual lip-sync quality;
-    # that remains a visual QC gate after the smoke test.
-    probe = subprocess.check_output([
-        'ffprobe', '-v', 'error', '-show_entries',
-        'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', str(out)
-    ], text=True).strip()
-    final_duration = float(probe)
-    vstreams = subprocess.check_output([
-        'ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries',
-        'stream=codec_name,width,height,r_frame_rate', '-of', 'csv=p=0', str(out)
-    ], text=True).strip()
-    astreams = subprocess.check_output([
-        'ffprobe', '-v', 'error', '-select_streams', 'a:0', '-show_entries',
-        'stream=codec_name,sample_rate,channels', '-of', 'csv=p=0', str(out)
-    ], text=True).strip()
+    final_duration = audio_duration(out)
+    vstreams = subprocess.check_output(['ffprobe', '-v', 'error', '-select_streams', 'v:0',
+        '-show_entries', 'stream=codec_name,width,height,r_frame_rate', '-of', 'csv=p=0', str(out)], text=True).strip()
+    astreams = subprocess.check_output(['ffprobe', '-v', 'error', '-select_streams', 'a:0',
+        '-show_entries', 'stream=codec_name,sample_rate,channels', '-of', 'csv=p=0', str(out)], text=True).strip()
     if not vstreams or not astreams:
         raise RuntimeError('MuseTalk output must contain both video and audio streams.')
 
@@ -314,7 +249,7 @@ def main() -> None:
     print(f'VIDEO_STREAM={vstreams}', flush=True)
     print(f'AUDIO_STREAM={astreams}', flush=True)
     print('SMOKE_TEST_EXPECTATION=approved_person_visible_with_audio_synchronized_mouth_motion', flush=True)
-    print('IMPORTANT=This stage now performs actual MuseTalk audio-driven lower-face lip synchronization from the approved source image; it no longer uses a still-image zoom/pan substitute.', flush=True)
+    print('IMPORTANT=Actual MuseTalk audio-driven lower-face lip synchronization is now used; the former still-image zoom/pan substitute is removed.', flush=True)
 
 
 if __name__ == '__main__':
