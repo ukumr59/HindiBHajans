@@ -28,35 +28,34 @@ def main():
     (WORK/'request.json').write_text(json.dumps(request,ensure_ascii=False),encoding='utf-8')
     bootstrap=f'''#!/usr/bin/env python3\nimport urllib.request,subprocess,sys,shutil\nurl={RAW_WORKER!r}\npath="/kaggle/working/worker.py"\nurllib.request.urlretrieve(url,path)\nshutil.copy2('/kaggle/working/request.json','/kaggle/working/bhajan_request.json')\nsubprocess.run([sys.executable,path],check=True)\n'''
     (WORK/'kernel.py').write_text(bootstrap,encoding='utf-8')
-    # Public kernel avoids the kernel.get permission failure seen with private free-tier jobs.
-    slug='hindibhajans-ace-step-daily'
+    # IMPORTANT: Kaggle's API can return kernels.get=403 even for a kernel that
+    # was just pushed successfully (notably with restricted/new API tokens).
+    # Do not use kernels status/output as the control plane. Push is the only
+    # operation needed to launch the public script; retrieve the artifact from
+    # the kernel's public output URL after the known execution window.
+    slug=f'hindibhajans-ace-step-{int(time.time())}'
     meta={'id':f'{user}/{slug}','title':slug,'code_file':'kernel.py','language':'python','kernel_type':'script','is_private':False,'enable_gpu':True,'enable_internet':True,'machine_shape':'NvidiaTeslaT4','dataset_sources':[],'competition_sources':[],'kernel_sources':[],'model_sources':[]}
     (WORK/'kernel-metadata.json').write_text(json.dumps(meta,indent=2),encoding='utf-8')
     env=dict(os.environ); env['KAGGLE_API_TOKEN']=token
     push=run('kaggle','kernels','push','-p',str(WORK),'--accelerator','NvidiaTeslaT4','--timeout',str(11*60*60),env=env,capture=True)
     print(push.stdout or push.stderr,flush=True)
-    kernel=meta['id']; deadline=time.time()+11*60*60
-    last=''
-    while time.time()<deadline:
-        p=run('kaggle','kernels','status',kernel,env=env,check=False,capture=True)
-        text=(p.stdout or '')+(p.stderr or '')
-        print(text,flush=True)
-        low=text.lower()
-        if 'complete' in low or 'success' in low: break
-        if any(x in low for x in ('error','failed','cancelled','canceled','permission')):
-            # If status is unavailable, try output retrieval directly; this also handles completed jobs.
-            outp=run('kaggle','kernels','output',kernel,'-p',str(OUT/'kaggle_audio_output'),'--force',env=env,check=False,capture=True)
-            outtext=(outp.stdout or '')+(outp.stderr or '')
-            print(outtext,flush=True)
-            candidates=list((OUT/'kaggle_audio_output').rglob('bhajan_source.mp3')) if (OUT/'kaggle_audio_output').exists() else []
-            if candidates: break
-            raise RuntimeError('KAGGLE_AUDIO_KERNEL_ACCESS_FAILED: '+text.strip())
-        time.sleep(30)
-    else: raise TimeoutError('KAGGLE_AUDIO_KERNEL_TIMEOUT')
+    # The push response is authoritative for launch. We deliberately avoid
+    # kernels/status and kernels/output because the account token currently
+    # returns Permission 'kernels.get' denied for those read APIs.
+    # The public kernel executes independently on Kaggle. Give it enough time
+    # for startup, model download, generation and ffmpeg conversion.
+    wait_seconds=max(15*60, seconds+12*60)
+    print(f'KAGGLE_AUDIO_LAUNCHED: {meta["id"]}; waiting {wait_seconds}s before public artifact retrieval',flush=True)
+    time.sleep(wait_seconds)
     dl=OUT/'kaggle_audio_output'; shutil.rmtree(dl,ignore_errors=True)
-    run('kaggle','kernels','output',kernel,'-p',str(dl),'--force',env=env)
-    candidates=list(dl.rglob('bhajan_source.mp3'))
-    if not candidates: raise RuntimeError('KAGGLE_AUDIO_COMPLETED_BUT_MP3_MISSING')
+    # Try the CLI artifact path once. If the token still lacks kernels.get,
+    # fail with a precise, actionable message rather than looping for hours.
+    outp=run('kaggle','kernels','output',meta['id'],'-p',str(dl),'--force','--file-pattern','bhajan_source\\.mp3$',env=env,check=False,capture=True)
+    outtext=(outp.stdout or '')+(outp.stderr or '')
+    print(outtext,flush=True)
+    candidates=list(dl.rglob('bhajan_source.mp3')) if dl.exists() else []
+    if not candidates:
+        raise RuntimeError('KAGGLE_AUDIO_ARTIFACT_ACCESS_FAILED: Kaggle accepted the kernel push, but this API token cannot read kernel output (kernels.get=403). Replace KAGGLE_API_TOKEN with a Kaggle API token that has kernel read access, then rerun. No Hugging Face path is involved.')
     shutil.copy2(candidates[0],OUT/'bhajan_source.mp3')
     print('KAGGLE_AUDIO_READY',OUT/'bhajan_source.mp3',(OUT/'bhajan_source.mp3').stat().st_size,flush=True)
 
