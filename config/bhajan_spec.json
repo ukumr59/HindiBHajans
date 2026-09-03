@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "duration_seconds": 180,
+  "language": "hi",
+  "content_type": "devotional_bhajan",
+  "identity_source": "assets/uks model image.png",
+  "identity_policy": "LOCKED_REFERENCE_NO_FACE_REGENERATION",
+  "performance_policy": "ONLY_APPROVED_SINGER_VISIBLE_AND_ACTUALLY_SINGING",
+  "wardrobe_policy": "TRADITIONAL_INDIAN_CLOTHES",
+  "scene_policy": "SINGER_PERFORMS_IN_FRONT_OF_CORRECT_DEITY_IN_DEVOTIONAL_TEMPLE_SETTING",
+  "audio_policy": "ORIGINAL_HINDI_SINGING_AUDIO_WITH_SYNCHRONIZED_LIP_MOVEMENT",
+  "master_aspect": "16:9",
+  "short_aspect": "9:16",
+  "short_count": 3,
+  "short_seconds": 45,
+  "publish_targets": ["youtube", "facebook", "instagram"],
+  "cost_policy": "ZERO_COST_ONLY",
+  "provider_policy": "FAILOVER_AFTER_BOUNDED_RETRY",
+  "qa_gates": [
+    "identity",
+    "singing_and_lip_sync",
+    "traditional_indian_wardrobe",
+    "correct_deity_and_devotional_setting",
+    "audio_video_presence",
+    "duration",
+    "platform_format"
+  ]
+}
