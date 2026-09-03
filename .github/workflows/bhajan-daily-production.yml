@@ -25,16 +25,9 @@ concurrency:
 
 env:
   VIDEO_SECONDS: ${{ inputs.video_seconds || '180' }}
-  BH_PROVIDER_ORDER: ${{ vars.BH_PROVIDER_ORDER || 'SATURN,HF_SPACE' }}
-  BH_PROVIDER_ATTEMPTS: '2'
-  BH_PROVIDER_TIMEOUT_SECONDS: '5400'
-  BH_POLL_SECONDS: '30'
-  BH_SATURN_ENDPOINT: ${{ secrets.BH_SATURN_ENDPOINT }}
-  BH_SATURN_TOKEN: ${{ secrets.BH_SATURN_TOKEN }}
-  BH_SATURN_JOB_ID: ${{ secrets.BH_SATURN_JOB_ID }}
-  BH_SATURN_RESULT_URL: ${{ secrets.BH_SATURN_RESULT_URL }}
-  BH_HF_SPACE_ENDPOINT: ${{ secrets.BH_HF_SPACE_ENDPOINT || secrets.GENERATOR_SPACE }}
-  BH_HF_SPACE_TOKEN: ${{ secrets.BH_HF_SPACE_TOKEN || secrets.HF_TOKEN }}
+  KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+  KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN3 || secrets.KAGGLE_API_TOKEN }}
+  HF_TOKEN: ${{ secrets.HF_TOKEN }}
   YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
   YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
   YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
@@ -47,20 +40,23 @@ env:
 jobs:
   produce-publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 720
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Install media tools
+      - name: Install control-plane tools
         run: |
           set -euo pipefail
-          python -m pip install -q --upgrade pip pillow requests google-api-python-client google-auth-oauthlib
+          python -m pip install -q --upgrade pip kaggle pillow requests google-api-python-client google-auth-oauthlib gradio_client
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg
       - name: Hard identity and configuration gates
         run: |
           set -euo pipefail
           test -s 'assets/uks model image.png'
+          test -n "$KAGGLE_USERNAME"
+          test -n "$KAGGLE_API_TOKEN"
+          test -n "$HF_TOKEN"
           python - <<'PY'
           import os
           from PIL import Image
@@ -70,19 +66,34 @@ jobs:
               assert im.width >= 500 and im.height >= 500
           seconds=int(os.environ.get('VIDEO_SECONDS','180'))
           assert 180 <= seconds <= 300 and seconds % 15 == 0
-          print('IDENTITY_POLICY=LOCKED_REFERENCE_NO_FACE_REGENERATION')
+          print('MODEL=EchoMimicV3-Flash')
+          print('GPU=Kaggle free NVIDIA T4')
+          print('IDENTITY_POLICY=LOCKED_REFERENCE')
           print('PERFORMANCE_POLICY=SINGER_ACTUALLY_SINGING')
           print('WARDROBE_POLICY=TRADITIONAL_INDIAN')
           print('SETTING_POLICY=DEVOTIONAL_TEMPLE_WITH_SPECIFIED_DEITY')
-          print('COST_POLICY=ZERO_COST_ONLY')
-          print('PROVIDER_ORDER=', os.environ.get('BH_PROVIDER_ORDER'))
-      - name: Run resilient GPU generation
-        run: python -m app.orchestrator --mode daily --seconds "$VIDEO_SECONDS"
-      - name: Generate Shorts from approved master (no second GPU run)
+          print('COST_POLICY=ZERO_PAID_COMPUTE')
+          PY
+      - name: Generate Hindi bhajan audio (existing proven path)
+        run: python -m app.generate_bhajan_audio
+      - name: Generate singer video on free Kaggle T4
+        run: python -m app.kaggle_echomimic_dispatch --seconds "$VIDEO_SECONDS"
+      - name: Final master gate
         run: |
           set -euo pipefail
           test -s output/master.mp4
-          mkdir -p output/shorts
+          ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of csv=p=0 output/master.mp4 | grep -q .
+          ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 output/master.mp4 | grep -q .
+          DUR=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 output/master.mp4)
+          python - <<PY
+          d=float('$DUR'); target=int('$VIDEO_SECONDS')
+          assert d >= target*0.95, (d,target)
+          print(f'MASTER_GATE=PASS duration={d:.2f}s')
+          PY
+      - name: Generate Shorts from approved master (no second GPU run)
+        run: |
+          set -euo pipefail
+          rm -rf output/shorts; mkdir -p output/shorts
           for n in 0 1 2; do
             start=$((n * 45))
             ffmpeg -y -v error -ss "$start" -i output/master.mp4 -t 45 \
@@ -104,7 +115,7 @@ jobs:
         run: |
           set -euo pipefail
           TAG="bhajan-${GITHUB_RUN_ID}"
-          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Bhajan Aabha ${TAG}" --notes "Approved master + derived Shorts. No paid provider." output/master.mp4 output/shorts/*.mp4 state/current.json
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Bhajan Aabha ${TAG}" --notes "Approved master + derived Shorts. GPU: free Kaggle T4. No paid provider." output/master.mp4 output/shorts/*.mp4
           echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
       - name: Publish YouTube
         if: ${{ inputs.publish != false }}
@@ -125,7 +136,7 @@ jobs:
           import json, os
           from pathlib import Path
           p=Path('state/current.json'); data=json.loads(p.read_text()) if p.exists() else {}
-          data.update({'workflow_run_id':os.environ['GITHUB_RUN_ID'],'workflow':'bhajan-daily-production','shorts':3,'publishing':'youtube+facebook+instagram' if os.environ.get('RELEASE_TAG') else 'not_run'})
+          data.update({'workflow_run_id':os.environ['GITHUB_RUN_ID'],'workflow':'bhajan-daily-production','model':'EchoMimicV3-Flash','gpu_provider':'Kaggle-free-T4','shorts':3,'publishing':'youtube+facebook+instagram' if os.environ.get('RELEASE_TAG') else 'not_run'})
           p.write_text(json.dumps(data,ensure_ascii=False,indent=2))
           PY
           git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
@@ -134,6 +145,7 @@ jobs:
         if: always()
         run: |
           echo 'BHAJAN_AABHA_DAILY_PIPELINE_COMPLETE'
-          echo "PROVIDERS=$BH_PROVIDER_ORDER"
+          echo 'MODEL=EchoMimicV3-Flash'
+          echo 'GPU=Kaggle-free-T4'
           echo 'SHORTS=3 derived locally from approved master'
-          echo 'ZERO_COST_POLICY=NO PAID PROVIDER'
+          echo 'ZERO_PAID_COMPUTE=TRUE'
