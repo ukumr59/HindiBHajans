@@ -27,7 +27,6 @@ env:
   VIDEO_SECONDS: ${{ inputs.video_seconds || '180' }}
   KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
   KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN3 || secrets.KAGGLE_API_TOKEN }}
-  HF_TOKEN: ${{ secrets.HF_TOKEN }}
   YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
   YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
   YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
@@ -47,7 +46,7 @@ jobs:
       - name: Install control-plane tools
         run: |
           set -euo pipefail
-          python -m pip install -q --upgrade pip kaggle pillow requests google-api-python-client google-auth-oauthlib gradio_client
+          python -m pip install -q --upgrade pip kaggle pillow requests google-api-python-client google-auth-oauthlib
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg
       - name: Hard identity and configuration gates
@@ -56,7 +55,6 @@ jobs:
           test -s 'assets/uks model image.png'
           test -n "$KAGGLE_USERNAME"
           test -n "$KAGGLE_API_TOKEN"
-          test -n "$HF_TOKEN"
           python - <<'PY'
           import os
           from PIL import Image
@@ -66,15 +64,17 @@ jobs:
               assert im.width >= 500 and im.height >= 500
           seconds=int(os.environ.get('VIDEO_SECONDS','180'))
           assert 180 <= seconds <= 300 and seconds % 15 == 0
-          print('MODEL=EchoMimicV3-Flash')
-          print('GPU=Kaggle free NVIDIA T4')
+          print('MODEL=A CE-Step-v1.5 turbo for audio; EchoMimicV3-Flash for video')
+          print('AUDIO_GPU=Kaggle free NVIDIA T4')
+          print('VIDEO_GPU=Kaggle free NVIDIA T4')
           print('IDENTITY_POLICY=LOCKED_REFERENCE')
           print('PERFORMANCE_POLICY=SINGER_ACTUALLY_SINGING')
           print('WARDROBE_POLICY=TRADITIONAL_INDIAN')
           print('SETTING_POLICY=DEVOTIONAL_TEMPLE_WITH_SPECIFIED_DEITY')
           print('COST_POLICY=ZERO_PAID_COMPUTE')
+          print('HF_ZEROGPU=DISABLED')
           PY
-      - name: Generate Hindi bhajan audio (existing proven path)
+      - name: Generate Hindi bhajan audio on free Kaggle T4
         run: python -m app.generate_bhajan_audio
       - name: Generate singer video on free Kaggle T4
         run: python -m app.kaggle_echomimic_dispatch --seconds "$VIDEO_SECONDS"
@@ -115,7 +115,7 @@ jobs:
         run: |
           set -euo pipefail
           TAG="bhajan-${GITHUB_RUN_ID}"
-          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Bhajan Aabha ${TAG}" --notes "Approved master + derived Shorts. GPU: free Kaggle T4. No paid provider." output/master.mp4 output/shorts/*.mp4
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Bhajan Aabha ${TAG}" --notes "Approved master + derived Shorts. Audio/video GPU: free Kaggle T4. No paid provider. Hugging Face ZeroGPU disabled." output/master.mp4 output/shorts/*.mp4
           echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
       - name: Publish YouTube
         if: ${{ inputs.publish != false }}
@@ -136,7 +136,7 @@ jobs:
           import json, os
           from pathlib import Path
           p=Path('state/current.json'); data=json.loads(p.read_text()) if p.exists() else {}
-          data.update({'workflow_run_id':os.environ['GITHUB_RUN_ID'],'workflow':'bhajan-daily-production','model':'EchoMimicV3-Flash','gpu_provider':'Kaggle-free-T4','shorts':3,'publishing':'youtube+facebook+instagram' if os.environ.get('RELEASE_TAG') else 'not_run'})
+          data.update({'workflow_run_id':os.environ['GITHUB_RUN_ID'],'workflow':'bhajan-daily-production','audio_model':'ACE-Step-v1.5-turbo','audio_gpu_provider':'Kaggle-free-T4','video_model':'EchoMimicV3-Flash','video_gpu_provider':'Kaggle-free-T4','shorts':3,'publishing':'youtube+facebook+instagram' if os.environ.get('RELEASE_TAG') else 'not_run'})
           p.write_text(json.dumps(data,ensure_ascii=False,indent=2))
           PY
           git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
@@ -145,7 +145,10 @@ jobs:
         if: always()
         run: |
           echo 'BHAJAN_AABHA_DAILY_PIPELINE_COMPLETE'
-          echo 'MODEL=EchoMimicV3-Flash'
-          echo 'GPU=Kaggle-free-T4'
+          echo 'AUDIO_MODEL=ACE-Step-v1.5-turbo'
+          echo 'AUDIO_GPU=Kaggle-free-T4'
+          echo 'VIDEO_MODEL=EchoMimicV3-Flash'
+          echo 'VIDEO_GPU=Kaggle-free-T4'
           echo 'SHORTS=3 derived locally from approved master'
           echo 'ZERO_PAID_COMPUTE=TRUE'
+          echo 'HF_ZEROGPU=DISABLED'
