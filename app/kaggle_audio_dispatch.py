@@ -1,14 +1,19 @@
 """Zero-cost Hindi bhajan audio dispatcher: Kaggle free GPU + ACE-Step 1.5.
 
-Kaggle's kernels.get API is deliberately NOT used here. The account has
-encountered the current 403 kernels.get failure, so the control plane is:
+Kaggle's kernels.get API is deliberately NOT used here. The control plane is:
 1) push a public Kaggle kernel (write/execute), then
-2) download its public output bundle through Kaggle's public HTTP output URL.
+2) download the kernel output bundle through Kaggle's output-download endpoint.
+
+Important: Kaggle's output-download endpoint can return HTTP 403 even for a
+public kernel when called anonymously. Therefore the GitHub runner supplies
+its Kaggle API token as an Authorization header. We never call kernels.get or
+try to infer a leaderboard slug.
 """
 from __future__ import annotations
 import io, json, os, re, shutil, subprocess, time, zipfile
 from pathlib import Path
 from urllib.request import Request, urlopen
+from urllib.error import HTTPError
 
 ROOT=Path(__file__).resolve().parents[1]
 OUT=ROOT/'output'; WORK=ROOT/'.kaggle_audio_worker'
@@ -18,16 +23,34 @@ def run(*args, env=None, check=True, capture=False):
     print('RUN:', ' '.join(map(str,args)), flush=True)
     return subprocess.run(list(map(str,args)), text=True, check=check, env=env, capture_output=capture)
 
-def download_public_output(kernel_id: str, version: int | None, dest: Path) -> None:
+def download_public_output(kernel_id: str, version: int | None, dest: Path, token: str) -> None:
     user, slug = kernel_id.split('/',1)
-    url=f'https://www.kaggle.com/api/v1/kernels/output/download/{user}/{slug}'
-    if version is not None: url += f'?version_number={version}'
-    print('PUBLIC_OUTPUT_URL=',url.split('?')[0],flush=True)
-    req=Request(url,headers={'User-Agent':'HindiBHajans/zero-cost-worker'})
-    with urlopen(req,timeout=120) as r: data=r.read()
-    if not data.startswith(b'PK'): raise RuntimeError(f'KAGGLE_PUBLIC_OUTPUT_NOT_ZIP: HTTP response was {len(data)} bytes')
-    dest.mkdir(parents=True,exist_ok=True)
-    with zipfile.ZipFile(io.BytesIO(data)) as z: z.extractall(dest)
+    base=f'https://www.kaggle.com/api/v1/kernels/output/download/{user}/{slug}'
+    urls=[base + (f'?version_number={version}' if version is not None else '')]
+    # Kaggle has also served this route without the /api/v1 prefix on some
+    # deployments. Keep one deterministic fallback, but never use kernels.get.
+    urls.append(f'https://www.kaggle.com/kernels/output/download/{user}/{slug}' + (f'?version_number={version}' if version is not None else ''))
+    last=None
+    for url in urls:
+        try:
+            print('PUBLIC_OUTPUT_URL=',url.split('?')[0],flush=True)
+            req=Request(url,headers={
+                'User-Agent':'HindiBHajans/zero-cost-worker',
+                'Authorization':f'Bearer {token}',
+                'Accept':'application/zip, application/octet-stream, */*',
+            })
+            with urlopen(req,timeout=120) as r:
+                data=r.read()
+            if not data.startswith(b'PK'):
+                raise RuntimeError(f'KAGGLE_PUBLIC_OUTPUT_NOT_ZIP: HTTP response was {len(data)} bytes')
+            dest.mkdir(parents=True,exist_ok=True)
+            with zipfile.ZipFile(io.BytesIO(data)) as z: z.extractall(dest)
+            return
+        except HTTPError as e:
+            last=e
+            print(f'KAGGLE_OUTPUT_DOWNLOAD_HTTP_{e.code}: {url.split("?")[0]}',flush=True)
+            if e.code not in (403,404): raise
+    raise RuntimeError(f'KAGGLE_PUBLIC_OUTPUT_DOWNLOAD_FAILED: {last}. The kernel may be private or the slug/version may be invalid; no kernels.get call is attempted.')
 
 def main():
     token=os.getenv('KAGGLE_API_TOKEN') or os.getenv('KAGGLE_API_TOKEN3')
@@ -58,7 +81,7 @@ def main():
     print(f'KAGGLE_AUDIO_LAUNCHED: {meta["id"]}; public output retrieval after {wait_seconds}s; version={version}',flush=True)
     time.sleep(wait_seconds)
     dl=OUT/'kaggle_audio_output'; shutil.rmtree(dl,ignore_errors=True)
-    download_public_output(meta['id'],version,dl)
+    download_public_output(meta['id'],version,dl,token)
     candidates=list(dl.rglob('bhajan_source.mp3'))
     if not candidates: raise RuntimeError('KAGGLE_AUDIO_ARTIFACT_MISSING: public Kaggle output bundle was downloaded but bhajan_source.mp3 was not present')
     shutil.copy2(candidates[0],OUT/'bhajan_source.mp3')
