@@ -32,8 +32,8 @@ env:
   BH_POLL_SECONDS: '30'
   BH_MODAL_ENDPOINT: ${{ secrets.BH_MODAL_ENDPOINT }}
   BH_MODAL_TOKEN: ${{ secrets.BH_MODAL_TOKEN }}
-  BH_HF_SPACE_ENDPOINT: ${{ secrets.BH_HF_SPACE_ENDPOINT }}
-  BH_HF_SPACE_TOKEN: ${{ secrets.BH_HF_SPACE_TOKEN }}
+  BH_HF_SPACE_ENDPOINT: ${{ secrets.BH_HF_SPACE_ENDPOINT || secrets.GENERATOR_SPACE }}
+  BH_HF_SPACE_TOKEN: ${{ secrets.BH_HF_SPACE_TOKEN || secrets.HF_TOKEN }}
   BH_BEAM_ENDPOINT: ${{ secrets.BH_BEAM_ENDPOINT }}
   BH_BEAM_TOKEN: ${{ secrets.BH_BEAM_TOKEN }}
   BH_KAGGLE_ENDPOINT: ${{ secrets.BH_KAGGLE_ENDPOINT }}
@@ -120,7 +120,7 @@ jobs:
           TAG="bhajan-${GITHUB_RUN_ID}"
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
             --title "Bhajan Aabha ${TAG}" \
-            --notes "Approved master + derived Shorts. GPU provider is recorded in state/current.json. No paid provider is permitted." \
+            --notes "Approved master + derived Shorts. No paid provider is permitted." \
             output/master.mp4 output/shorts/*.mp4 state/current.json
           echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
 
@@ -144,7 +144,7 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
-          mkdir -p output
+          mkdir -p state
           python - <<'PY'
           import json, os
           from pathlib import Path
@@ -156,7 +156,11 @@ jobs:
           data['publishing']='youtube+facebook+instagram' if os.environ.get('RELEASE_TAG') else 'not_run'
           p.write_text(json.dumps(data, ensure_ascii=False, indent=2))
           PY
-          cat state/current.json
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add state/current.json
+          git diff --cached --quiet || git commit -m "Record latest Bhajan Aabha production state"
+          git push
 
       - name: Production summary
         if: always()
@@ -165,4 +169,4 @@ jobs:
           echo 'MASTER=output/master.mp4'
           echo 'SHORTS=3 derived locally from approved master'
           echo "PROVIDERS=$BH_PROVIDER_ORDER"
-          echo 'ZERO_COST_POLICY=ENFORCED_BY_CONFIGURED_PROVIDER_ALLOWLIST'
+          echo 'ZERO_COST_POLICY=NO PAID FALLBACK'
