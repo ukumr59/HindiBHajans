@@ -10,13 +10,8 @@ concurrency:
   group: bhajan-maintenance
   cancel-in-progress: true
 env:
-  BH_PROVIDER_ORDER: ${{ vars.BH_PROVIDER_ORDER || 'SATURN,HF_SPACE' }}
-  BH_SATURN_ENDPOINT: ${{ secrets.BH_SATURN_ENDPOINT }}
-  BH_SATURN_TOKEN: ${{ secrets.BH_SATURN_TOKEN }}
-  BH_SATURN_JOB_ID: ${{ secrets.BH_SATURN_JOB_ID }}
-  BH_SATURN_RESULT_URL: ${{ secrets.BH_SATURN_RESULT_URL }}
-  BH_HF_SPACE_ENDPOINT: ${{ secrets.BH_HF_SPACE_ENDPOINT }}
-  BH_HF_SPACE_TOKEN: ${{ secrets.BH_HF_SPACE_TOKEN }}
+  KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+  KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN3 || secrets.KAGGLE_API_TOKEN }}
 jobs:
   health:
     runs-on: ubuntu-latest
@@ -26,10 +21,12 @@ jobs:
         uses: actions/checkout@v4
       - name: Install validation tools
         run: python -m pip install -q --upgrade pillow
-      - name: Validate architecture and identity source
+      - name: Validate production code and identity source
         run: |
           set -euo pipefail
           test -s 'assets/uks model image.png'
+          test -n "$KAGGLE_USERNAME"
+          test -n "$KAGGLE_API_TOKEN"
           python - <<'PY'
           import py_compile
           from PIL import Image
@@ -42,16 +39,19 @@ jobs:
       - name: Provider configuration health
         run: |
           set -euo pipefail
-          python -m app.orchestrator --mode health
-          python -m app.provider_router
-          echo 'HEALTH_ONLY=NO_GPU_INFERENCE'
+          command -v kaggle >/dev/null || python -m pip install -q kaggle
+          kaggle kernels list --mine --page-size 1 >/dev/null
+          echo 'KAGGLE_API_ACCESS=PASS'
+          echo 'AUDIO_GPU=Kaggle free NVIDIA T4'
+          echo 'VIDEO_GPU=Kaggle free NVIDIA T4'
+          echo 'HF_ZEROGPU=DISABLED'
       - name: Architecture summary
         run: |
           echo 'CONTROL_PLANE=GitHub Actions'
-          echo 'PRIMARY_GPU=Saturn Cloud free GPU job'
-          echo 'FAILOVER=next configured free provider'
-          echo 'RETRIES=2 per provider with bounded backoff'
+          echo 'GPU_BACKEND=Kaggle free GPU + open-source ACE-Step/EchoMimic'
           echo 'IDENTITY=locked uploaded singer image'
-          echo 'SHORTS=derived from master'
+          echo 'SINGING=audio-driven singer animation'
+          echo 'SHORTS=derived from approved master without second video GPU run'
           echo 'PUBLISH=YouTube + Facebook + Instagram'
           echo 'COST=zero-cost only'
+          echo 'HUGGING_FACE_ZEROGPU=REMOVED_FROM_PRODUCTION'
