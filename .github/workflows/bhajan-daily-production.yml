@@ -76,7 +76,7 @@ jobs:
           print('LIGHTNING=DISABLED')
           PY
       - name: Generate Hindi bhajan audio via ACE-Step hosted API
-        run: python -m app.generate_bhajan_audio
+        run: python -m app.acestep_api_audio
       - name: Generate singer video on free Kaggle T4
         run: python -m app.kaggle_echomimic_public_dispatch --seconds "$VIDEO_SECONDS"
       - name: Final master gate
