@@ -78,7 +78,7 @@ jobs:
       - name: Generate Hindi bhajan audio on free Kaggle T4
         run: python -m app.kaggle_audio_dispatch
       - name: Generate singer video on free Kaggle T4
-        run: python -m app.kaggle_echomimic_dispatch --seconds "$VIDEO_SECONDS"
+        run: python -m app.kaggle_echomimic_public_dispatch --seconds "$VIDEO_SECONDS"
       - name: Final master gate
         run: |
           set -euo pipefail
