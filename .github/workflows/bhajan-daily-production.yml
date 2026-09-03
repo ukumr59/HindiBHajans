@@ -1,0 +1,168 @@
+name: Bhajan Aabha — Daily Production
+
+on:
+  schedule:
+    - cron: '30 21 * * *'
+      timezone: 'Asia/Kolkata'
+  workflow_dispatch:
+    inputs:
+      video_seconds:
+        description: 'Master duration (180-300 seconds, divisible by 15)'
+        required: false
+        default: '180'
+        type: string
+      publish:
+        description: 'Publish to YouTube, Facebook and Instagram'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bhajan-daily-production
+  cancel-in-progress: false
+
+env:
+  VIDEO_SECONDS: ${{ inputs.video_seconds || '180' }}
+  BH_PROVIDER_ORDER: ${{ vars.BH_PROVIDER_ORDER || 'MODAL,HF_SPACE,BEAM,KAGGLE' }}
+  BH_PROVIDER_ATTEMPTS: '2'
+  BH_PROVIDER_TIMEOUT_SECONDS: '5400'
+  BH_POLL_SECONDS: '30'
+  BH_MODAL_ENDPOINT: ${{ secrets.BH_MODAL_ENDPOINT }}
+  BH_MODAL_TOKEN: ${{ secrets.BH_MODAL_TOKEN }}
+  BH_HF_SPACE_ENDPOINT: ${{ secrets.BH_HF_SPACE_ENDPOINT }}
+  BH_HF_SPACE_TOKEN: ${{ secrets.BH_HF_SPACE_TOKEN }}
+  BH_BEAM_ENDPOINT: ${{ secrets.BH_BEAM_ENDPOINT }}
+  BH_BEAM_TOKEN: ${{ secrets.BH_BEAM_TOKEN }}
+  BH_KAGGLE_ENDPOINT: ${{ secrets.BH_KAGGLE_ENDPOINT }}
+  BH_KAGGLE_TOKEN: ${{ secrets.BH_KAGGLE_TOKEN }}
+  YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+  YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+  YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+  META_PAGE_ID: ${{ secrets.META_PAGE_ID }}
+  META_PAGE_ACCESS_TOKEN: ${{ secrets.META_PAGE_ACCESS_TOKEN }}
+  META_IG_USER_ID: ${{ secrets.META_IG_USER_ID }}
+  META_IG_ACCESS_TOKEN: ${{ secrets.META_IG_ACCESS_TOKEN }}
+  META_GRAPH_VERSION: ${{ vars.META_GRAPH_VERSION || 'v23.0' }}
+
+jobs:
+  produce-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install media tools
+        run: |
+          set -euo pipefail
+          python -m pip install -q --upgrade pip pillow requests google-api-python-client google-auth-oauthlib
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+
+      - name: Hard identity and configuration gates
+        run: |
+          set -euo pipefail
+          test -s 'assets/uks model image.png'
+          python - <<'PY'
+          import os
+          from PIL import Image
+          p='assets/uks model image.png'
+          with Image.open(p) as im:
+              print('IDENTITY_SOURCE=', p)
+              print('IDENTITY_SIZE=', im.size)
+              assert im.width >= 500 and im.height >= 500
+          seconds=int(os.environ.get('VIDEO_SECONDS','180'))
+          assert 180 <= seconds <= 300 and seconds % 15 == 0
+          print('IDENTITY_POLICY=LOCKED_REFERENCE_NO_FACE_REGENERATION')
+          print('PERFORMANCE_POLICY=SINGER_ACTUALLY_SINGING')
+          print('WARDROBE_POLICY=TRADITIONAL_INDIAN')
+          print('SETTING_POLICY=DEVOTIONAL_TEMPLE_WITH_SPECIFIED_DEITY')
+          print('COST_POLICY=ZERO_COST_ONLY')
+          print('PROVIDER_ORDER=', os.environ.get('BH_PROVIDER_ORDER'))
+          PY
+
+      - name: Run resilient GPU generation
+        run: python -m app.orchestrator --mode daily --seconds "$VIDEO_SECONDS"
+
+      - name: Generate Shorts from approved master (no second GPU run)
+        run: |
+          set -euo pipefail
+          test -s output/master.mp4
+          mkdir -p output/shorts
+          for n in 0 1 2; do
+            start=$((n * 45))
+            ffmpeg -y -v error -ss "$start" -i output/master.mp4 -t 45 \
+              -filter_complex "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,gblur=sigma=20[bg];[0:v]scale=1080:-2:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2[v]" \
+              -map "[v]" -map 0:a:0 -c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p \
+              -c:a aac -b:a 128k -movflags +faststart "output/shorts/short-$((n+1)).mp4"
+          done
+          ls -lh output/shorts
+
+      - name: Final media gate
+        run: |
+          set -euo pipefail
+          for f in output/master.mp4 output/shorts/*.mp4; do
+            test -s "$f"
+            ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of csv=p=0 "$f" | grep -q .
+            ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$f" | grep -q .
+          done
+          echo 'FINAL_MEDIA_GATE=PASS'
+
+      - name: Create public release assets
+        if: ${{ inputs.publish != false }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="bhajan-${GITHUB_RUN_ID}"
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --title "Bhajan Aabha ${TAG}" \
+            --notes "Approved master + derived Shorts. GPU provider is recorded in state/current.json. No paid provider is permitted." \
+            output/master.mp4 output/shorts/*.mp4 state/current.json
+          echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
+
+      - name: Publish YouTube
+        if: ${{ inputs.publish != false }}
+        env:
+          OUTPUT_DIR: output
+          YOUTUBE_PRIVACY_STATUS: public
+        run: |
+          set -euo pipefail
+          python -u -m app.youtube_publisher_seo output/master.mp4
+
+      - name: Publish Facebook + Instagram independently
+        if: ${{ inputs.publish != false }}
+        run: |
+          set -euo pipefail
+          SHORT_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/short-1.mp4"
+          python -u -m app.meta_publisher --video output/shorts/short-1.mp4 --instagram-url "$SHORT_URL"
+
+      - name: Persist production state
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p output
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          p=Path('state/current.json')
+          data=json.loads(p.read_text()) if p.exists() else {}
+          data['workflow_run_id']=os.environ['GITHUB_RUN_ID']
+          data['workflow']='bhajan-daily-production'
+          data['shorts']=3
+          data['publishing']='youtube+facebook+instagram' if os.environ.get('RELEASE_TAG') else 'not_run'
+          p.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+          PY
+          cat state/current.json
+
+      - name: Production summary
+        if: always()
+        run: |
+          echo 'BHAJAN_AABHA_DAILY_PIPELINE_COMPLETE'
+          echo 'MASTER=output/master.mp4'
+          echo 'SHORTS=3 derived locally from approved master'
+          echo "PROVIDERS=$BH_PROVIDER_ORDER"
+          echo 'ZERO_COST_POLICY=ENFORCED_BY_CONFIGURED_PROVIDER_ALLOWLIST'
