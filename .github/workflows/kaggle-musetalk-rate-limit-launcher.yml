@@ -1,0 +1,37 @@
+name: Bhajan Aabha — MuseTalk Smoke Test — Rate-Limit Recovery
+
+on:
+  workflow_dispatch:
+    inputs:
+      smoke_seconds:
+        description: 'Smoke-test duration in seconds (8-15)'
+        required: false
+        default: '10'
+        type: string
+
+permissions:
+  actions: write
+
+jobs:
+  cooldown-and-dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    steps:
+      - name: Mandatory Kaggle cooldown before any SaveKernel request
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'KAGGLE_RATE_LIMIT_RECOVERY: no Kaggle API calls will be made for 30 minutes.'
+          echo 'KAGGLE_RATE_LIMIT_RECOVERY: this prevents another immediate SaveKernel 429.'
+          sleep 1800
+      - name: Dispatch the real MuseTalk smoke test
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh workflow run kaggle-musetalk-smoke-auth.yml \
+            --repo "${{ github.repository }}" \
+            --ref main \
+            -f smoke_seconds="${{ inputs.smoke_seconds || '10' }}"
+          echo 'KAGGLE_RATE_LIMIT_RECOVERY: smoke workflow dispatched after cooldown.'
