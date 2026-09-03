@@ -1,25 +1,22 @@
 name: Bhajan Aabha — Maintenance & Provider Health
-
 on:
   workflow_dispatch:
   schedule:
     - cron: '0 12 * * *'
       timezone: 'Asia/Kolkata'
-
 permissions:
   contents: read
-
 concurrency:
   group: bhajan-maintenance
   cancel-in-progress: true
-
 env:
-  BH_PROVIDER_ORDER: ${{ vars.BH_PROVIDER_ORDER || 'MODAL,HF_SPACE,BEAM,KAGGLE' }}
-  BH_MODAL_ENDPOINT: ${{ secrets.BH_MODAL_ENDPOINT }}
+  BH_PROVIDER_ORDER: ${{ vars.BH_PROVIDER_ORDER || 'SATURN,HF_SPACE' }}
+  BH_SATURN_ENDPOINT: ${{ secrets.BH_SATURN_ENDPOINT }}
+  BH_SATURN_TOKEN: ${{ secrets.BH_SATURN_TOKEN }}
+  BH_SATURN_JOB_ID: ${{ secrets.BH_SATURN_JOB_ID }}
+  BH_SATURN_RESULT_URL: ${{ secrets.BH_SATURN_RESULT_URL }}
   BH_HF_SPACE_ENDPOINT: ${{ secrets.BH_HF_SPACE_ENDPOINT }}
-  BH_BEAM_ENDPOINT: ${{ secrets.BH_BEAM_ENDPOINT }}
-  BH_KAGGLE_ENDPOINT: ${{ secrets.BH_KAGGLE_ENDPOINT }}
-
+  BH_HF_SPACE_TOKEN: ${{ secrets.BH_HF_SPACE_TOKEN }}
 jobs:
   health:
     runs-on: ubuntu-latest
@@ -27,10 +24,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Install validation tools
         run: python -m pip install -q --upgrade pillow
-
       - name: Validate architecture and identity source
         run: |
           set -euo pipefail
@@ -40,27 +35,23 @@ jobs:
           from PIL import Image
           from pathlib import Path
           with Image.open('assets/uks model image.png') as im:
-              print('IDENTITY_SOURCE_OK=', im.size)
-              assert im.width >= 500 and im.height >= 500
-          for p in Path('app').rglob('*.py'):
-              py_compile.compile(str(p), doraise=True)
+              print('IDENTITY_SOURCE_OK=', im.size); assert im.width >= 500 and im.height >= 500
+          for p in Path('app').rglob('*.py'): py_compile.compile(str(p), doraise=True)
           print('PYTHON_COMPILE=PASS')
           PY
-
       - name: Provider configuration health
         run: |
           set -euo pipefail
           python -m app.orchestrator --mode health
           python -m app.provider_router
-          echo 'IMPORTANT: health workflow never starts GPU inference and never spends provider quota.'
-
+          echo 'HEALTH_ONLY=NO_GPU_INFERENCE'
       - name: Architecture summary
         run: |
           echo 'CONTROL_PLANE=GitHub Actions'
-          echo 'GPU=provider-neutral failover router'
-          echo 'RETRIES=2 per provider with bounded backoff'
+          echo 'PRIMARY_GPU=Saturn Cloud free GPU job'
           echo 'FAILOVER=next configured free provider'
+          echo 'RETRIES=2 per provider with bounded backoff'
           echo 'IDENTITY=locked uploaded singer image'
-          echo 'SHORTS=derived from master, no second GPU generation'
-          echo 'PUBLISH=independent YouTube + Facebook + Instagram adapters'
-          echo 'COST=zero-cost provider allowlist only'
+          echo 'SHORTS=derived from master'
+          echo 'PUBLISH=YouTube + Facebook + Instagram'
+          echo 'COST=zero-cost only'
