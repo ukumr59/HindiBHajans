@@ -111,6 +111,17 @@ jobs:
             ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$f" | grep -q .
           done
           echo 'FINAL_MEDIA_GATE=PASS'
+      - name: Upload production files for QA and download
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bhajan-aabha-production-${{ github.run_id }}
+          path: |
+            output/master.mp4
+            output/bhajan_source.mp3
+            output/shorts/*.mp4
+          if-no-files-found: warn
+          retention-days: 7
       - name: Create public release assets
         if: ${{ inputs.publish != false }}
         env: { GH_TOKEN: '${{ github.token }}' }
