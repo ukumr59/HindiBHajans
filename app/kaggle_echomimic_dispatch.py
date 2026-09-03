@@ -11,7 +11,6 @@ import json
 import os
 import shutil
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
@@ -20,9 +19,9 @@ OUT = ROOT / "output"
 KAGGLE_DIR = ROOT / ".kaggle_worker"
 
 
-def run(*args: str, cwd: Path | None = None, check: bool = True) -> subprocess.CompletedProcess[str]:
+def run(*args: str, cwd: Path | None = None, check: bool = True, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     print("RUN:", " ".join(map(str, args)), flush=True)
-    return subprocess.run(list(args), cwd=str(cwd) if cwd else None, text=True, check=check)
+    return subprocess.run(list(args), cwd=str(cwd) if cwd else None, text=True, check=check, env=env)
 
 
 def kaggle_env() -> dict[str, str]:
@@ -35,7 +34,7 @@ def kaggle_env() -> dict[str, str]:
 
 def worker_code() -> str:
     return r'''#!/usr/bin/env python3
-import os, shutil, subprocess, sys, time
+import os, shutil, subprocess, sys
 from pathlib import Path
 
 ROOT = Path('/kaggle/working')
@@ -46,9 +45,9 @@ SEG = ROOT / 'segments'
 OUT = ROOT / 'outputs'
 IMAGE = INPUT / 'singer.png'
 AUDIO = INPUT / 'bhajan.mp3'
-SECONDS = int(os.environ.get('BH_VIDEO_SECONDS', '180'))
+SECONDS = int((INPUT / 'duration.txt').read_text().strip())
 FPS = 25
-FRAMES = 81                 # ~3.24 s; safe on 16 GB T4
+FRAMES = 81                 # 3.24 s; safe on 16 GB T4
 SEG_SECONDS = FRAMES / FPS
 
 
@@ -92,8 +91,6 @@ def main():
         snapshot_download('BadToBest/EchoMimicV3', local_dir=str(flash), allow_patterns=['echomimicv3-flash-pro/*'])
 
     SEG.mkdir(exist_ok=True); OUT.mkdir(exist_ok=True)
-    # Normalize audio once; every generated segment is later muxed against the
-    # original continuous track, avoiding cumulative audio drift.
     norm = INPUT / 'audio16k.wav'
     run('ffmpeg','-y','-v','error','-i',str(AUDIO),'-ac','1','-ar','16000','-c:a','pcm_s16le',str(norm))
 
@@ -107,10 +104,6 @@ def main():
         run('ffmpeg','-y','-v','error','-ss',f'{start:.3f}','-i',str(norm),'-t',f'{remain:.3f}','-ar','16000','-ac','1',str(a))
         od = SEG / f'raw_{i:04d}'
         od.mkdir(exist_ok=True)
-        # Start from the approved singer reference for every segment. This is
-        # deliberate: identity is anchored to the same uploaded pixels and no
-        # face regeneration is allowed. Long-video stitching is handled by the
-        # controller after generation.
         run(sys.executable, str(REPO/'infer_flash.py'),
             '--image_path',str(IMAGE),'--audio_path',str(a),
             '--prompt','A single Indian devotional singer performing a Hindi bhajan in traditional Indian clothing before the specified Hindu deity in a serene temple setting; only the same singer is visible; natural singing mouth movement, subtle expressive head and upper-body motion, stable identity.',
@@ -154,17 +147,18 @@ def dispatch(seconds: int) -> None:
     audio = OUT / "bhajan_source.mp3"
     if not image.exists(): raise RuntimeError(f"Missing singer image: {image}")
     if not audio.exists(): raise RuntimeError(f"Missing generated Hindi bhajan audio: {audio}")
+    if not 180 <= seconds <= 300 or seconds % 15: raise RuntimeError("seconds must be 180-300 and divisible by 15")
 
     shutil.rmtree(KAGGLE_DIR, ignore_errors=True)
     KAGGLE_DIR.mkdir(parents=True)
     shutil.copy2(image, KAGGLE_DIR / "singer.png")
     shutil.copy2(audio, KAGGLE_DIR / "bhajan.mp3")
+    (KAGGLE_DIR / "duration.txt").write_text(str(seconds), encoding="utf-8")
     (KAGGLE_DIR / "worker.py").write_text(worker_code(), encoding="utf-8")
-    username = os.getenv("KAGGLE_USERNAME", "")
+
+    username = os.getenv("KAGGLE_USERNAME", "").strip()
     if not username:
-        # The current CLI can derive the account from the token; metadata still
-        # needs an id, so allow the caller to supply it explicitly.
-        raise RuntimeError("KAGGLE_USERNAME repository variable/secret is required for kernel dispatch")
+        raise RuntimeError("KAGGLE_USERNAME repository secret/variable is required for kernel dispatch")
     meta = {
         "id": f"{username}/hindibhajans-echomimic-v3",
         "title": "HindiBHajans EchoMimic V3 Daily Worker",
@@ -183,31 +177,26 @@ def dispatch(seconds: int) -> None:
     (KAGGLE_DIR / "kernel-metadata.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
     env = kaggle_env()
-    env["BH_VIDEO_SECONDS"] = str(seconds)
-    run("python", "-m", "pip", "install", "-q", "--upgrade", "kaggle", env=env) if False else None
-    run("kaggle", "kernels", "push", "-p", str(KAGGLE_DIR), "--accelerator", "NvidiaTeslaT4", "--timeout", str(11*60*60), cwd=ROOT)
+    run("kaggle", "kernels", "push", "-p", str(KAGGLE_DIR), "--accelerator", "NvidiaTeslaT4", "--timeout", str(11*60*60), cwd=ROOT, env=env)
     kernel = meta["id"]
     deadline = time.time() + 11*60*60
     while time.time() < deadline:
         p = subprocess.run(["kaggle","kernels","status",kernel], text=True, capture_output=True, env=env)
         print(p.stdout or p.stderr, flush=True)
         text=(p.stdout+p.stderr).lower()
-        if any(x in text for x in ("complete", "error", "failed")):
-            if "complete" in text: break
+        if "complete" in text: break
+        if any(x in text for x in ("error", "failed", "cancelled", "canceled")):
             raise RuntimeError("KAGGLE_KERNEL_FAILED: " + (p.stdout or p.stderr))
         time.sleep(30)
     else:
         raise TimeoutError("KAGGLE_KERNEL_TIMEOUT")
 
-    shutil.rmtree(OUT / "kaggle_output", ignore_errors=True)
-    run("kaggle", "kernels", "output", kernel, "-p", str(OUT / "kaggle_output"), "--force", cwd=ROOT)
-    candidate = OUT / "kaggle_output" / "master.mp4"
-    if not candidate.exists():
-        xs = list((OUT / "kaggle_output").rglob("master.mp4"))
-        if xs: candidate=xs[0]
-    if not candidate.exists():
-        raise RuntimeError("KAGGLE_COMPLETED_BUT_MASTER_MP4_MISSING")
-    shutil.copy2(candidate, OUT / "master.mp4")
+    outdir = OUT / "kaggle_output"
+    shutil.rmtree(outdir, ignore_errors=True)
+    run("kaggle", "kernels", "output", kernel, "-p", str(outdir), "--force", cwd=ROOT, env=env)
+    candidates = list(outdir.rglob("master.mp4"))
+    if not candidates: raise RuntimeError("KAGGLE_COMPLETED_BUT_MASTER_MP4_MISSING")
+    shutil.copy2(candidates[0], OUT / "master.mp4")
     print("KAGGLE_ECHOMIMIC_MASTER_READY", flush=True)
 
 
