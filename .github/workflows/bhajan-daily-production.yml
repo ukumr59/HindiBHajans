@@ -64,9 +64,10 @@ jobs:
               assert im.width >= 500 and im.height >= 500
           seconds=int(os.environ.get('VIDEO_SECONDS','180'))
           assert 180 <= seconds <= 300 and seconds % 15 == 0
-          print('MODEL=A CE-Step-v1.5 turbo for audio; EchoMimicV3-Flash for video')
-          print('AUDIO_GPU=Kaggle free NVIDIA T4')
-          print('VIDEO_GPU=Kaggle free NVIDIA T4')
+          print('AUDIO_MODEL=ACE-Step-v1.5-turbo')
+          print('AUDIO_GPU=Kaggle-free-NVIDIA-T4')
+          print('VIDEO_MODEL=EchoMimicV3-Flash')
+          print('VIDEO_GPU=Kaggle-free-NVIDIA-T4')
           print('IDENTITY_POLICY=LOCKED_REFERENCE')
           print('PERFORMANCE_POLICY=SINGER_ACTUALLY_SINGING')
           print('WARDROBE_POLICY=TRADITIONAL_INDIAN')
@@ -75,7 +76,7 @@ jobs:
           print('HF_ZEROGPU=DISABLED')
           PY
       - name: Generate Hindi bhajan audio on free Kaggle T4
-        run: python -m app.generate_bhajan_audio
+        run: python -m app.kaggle_audio_dispatch
       - name: Generate singer video on free Kaggle T4
         run: python -m app.kaggle_echomimic_dispatch --seconds "$VIDEO_SECONDS"
       - name: Final master gate
