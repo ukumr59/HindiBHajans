@@ -17,7 +17,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Rename singer image and update references
+      - name: Rename singer image, update references, and remove this one-time workflow
         shell: bash
         run: |
           set -euo pipefail
@@ -25,27 +25,20 @@ jobs:
           new='assets/singer_image.png'
 
           if [[ ! -f "$old" ]]; then
-            echo "Old singer asset is already absent; nothing to rename."
-            exit 0
+            echo "Old singer asset is already absent."
+            git rm -f .github/workflows/rename-singer-image-once.yml
+          else
+            # Update every textual reference to the old filename before moving the binary.
+            while IFS= read -r -d '' file; do
+              sed -i 's/singer image\.png/singer_image.png/g' "$file"
+            done < <(git grep -Il -z -F 'singer image.png' -- ':!assets/singer image.png' || true)
+
+            git mv "$old" "$new"
+            git rm -f .github/workflows/rename-singer-image-once.yml
           fi
-
-          # Update textual references before moving the binary asset.
-          while IFS= read -r -d '' file; do
-            sed -i 's/singer image\.png/singer_image.png/g' "$file"
-          done < <(git grep -Il -z -F 'singer image.png' -- ':!assets/singer image.png' || true)
-
-          git mv "$old" "$new"
 
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
           git commit -m 'Rename singer image asset to canonical filename'
           git push
-
-      - name: Remove one-time workflow
-        if: ${{ success() }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          # This step is intentionally informational; the rename commit is made above.
-          echo 'Canonical singer asset rename completed.'
