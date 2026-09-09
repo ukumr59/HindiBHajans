@@ -20,7 +20,7 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "output"
 WORK = OUT / "cpu_video_work"
-REFERENCE = ROOT / "assets" / "uks model image.png"
+REFERENCE = ROOT / "assets" / "singer_image.png"
 AUDIO = OUT / "bhajan_source.mp3"
 FINAL = OUT / "master.mp4"
 
