@@ -1,12 +1,6 @@
-"""Generate the Hindi bhajan through the ACE-Step official cloud completion API.
+"""Generate the Hindi bhajan through the ACE-Step OpenRouter-compatible API.
 
-The GitHub runner is only the control plane: validate -> submit one synchronous
-completion request -> decode the returned base64 MP3 -> validate.  No Kaggle,
-Hugging Face ZeroGPU, or Lightning GPU is used for audio generation.
-
-ACE-Step's current cloud interface exposes OpenAI-compatible
-/v1/chat/completions.  The older /release_task endpoint is a native/local API
-and is not the correct endpoint for the hosted cloud service.
+The GitHub runner is only the control plane. No GPU is used here.
 """
 from __future__ import annotations
 
@@ -18,6 +12,7 @@ import requests
 
 BASE = os.getenv("ACESTEP_API_BASE_URL", "https://api.acemusic.ai").rstrip("/")
 API_KEY = os.getenv("ACESTEP_API_KEY", "").strip()
+MODEL = os.getenv("ACESTEP_MODEL", "acemusic/acestep-v1.5-turbo").strip()
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "output"
 OUT.mkdir(parents=True, exist_ok=True)
@@ -27,11 +22,21 @@ def headers() -> dict[str, str]:
     h = {
         "Content-Type": "application/json",
         "Accept": "application/json",
-        "User-Agent": "curl/8.4.0",
+        "User-Agent": "HindiBHajans/1.0",
     }
     if API_KEY:
         h["Authorization"] = f"Bearer {API_KEY}"
     return h
+
+
+def checked_get(url: str, label: str) -> requests.Response:
+    try:
+        r = requests.get(url, headers=headers(), timeout=30)
+    except requests.RequestException as e:
+        raise RuntimeError(f"ACESTEP_{label}_CONNECTION_FAILED: {e}") from e
+    if not r.ok:
+        raise RuntimeError(f"ACESTEP_{label}_ERROR: HTTP {r.status_code}: {r.text[:1200]}")
+    return r
 
 
 def main() -> None:
@@ -47,62 +52,54 @@ def main() -> None:
         raise RuntimeError(f"Unable to load Hindi lyrics/prompt: {e}") from e
 
     print(f"ACESTEP_API_BASE={BASE}", flush=True)
-    health = requests.get(BASE + "/health", headers=headers(), timeout=30)
-    health.raise_for_status()
-    print("ACESTEP_HEALTH=PASS", flush=True)
+    health = checked_get(BASE + "/health", "HEALTH")
+    print(f"ACESTEP_HEALTH=PASS HTTP={health.status_code}", flush=True)
 
-    # The hosted service currently uses the OpenAI-compatible completion API.
-    # Resolve the model id from the service rather than hard-coding a possibly
-    # stale model name.
-    models = requests.get(BASE + "/v1/models", headers=headers(), timeout=30)
-    models.raise_for_status()
-    model_body = models.json()
-    model_items = model_body.get("data", []) if isinstance(model_body, dict) else []
-    model_id = model_items[0].get("id") if model_items and isinstance(model_items[0], dict) else None
-    model_id = model_id or "acemusic/acestep-v15-turbo"
-    print(f"ACESTEP_MODEL={model_id}", flush=True)
+    # Do not make generation depend on model-list discovery. The hosted
+    # OpenRouter-compatible API documents this model id directly. Older code
+    # incorrectly called /v1/models; the OpenRouter API exposes model listing
+    # at /api/v1/models, and model discovery is unnecessary for generation.
+    print(f"ACESTEP_MODEL={MODEL}", flush=True)
 
-    # Tagged mode explicitly separates the music description from the Hindi
-    # lyrics. This is the documented completion-mode format for vocal songs.
+    # Use the documented OpenRouter-compatible request shape: prompt/lyrics
+    # are tagged in the user message and generation controls are top-level.
     content = f"<prompt>{PROMPT}</prompt><lyrics>{LYRICS}</lyrics>"
     payload = {
-        "model": model_id,
+        "model": MODEL,
         "messages": [{"role": "user", "content": content}],
         "stream": False,
-        "modalities": ["audio"],
         "thinking": True,
+        "lyrics": LYRICS,
+        "duration": float(seconds),
+        "bpm": 128,
+        "vocal_language": "hi",
+        "instrumental": False,
         "use_format": False,
         "use_cot_caption": False,
         "use_cot_language": False,
-        "lyrics": LYRICS,
-        "task_type": "text2music",
-        "batch_size": 1,
-        "audio_config": {
-            "duration": float(seconds),
-            "bpm": 128,
-            "format": "mp3",
-            "vocal_language": "hi",
-            "instrumental": False,
-            "key_scale": "C Major",
-            "time_signature": "4/4",
-        },
     }
 
     print("ACESTEP_SUBMITTING=TRUE", flush=True)
-    response = requests.post(
-        BASE + "/v1/chat/completions",
-        headers=headers(),
-        json=payload,
-        timeout=max(900, seconds * 5),
-    )
+    try:
+        response = requests.post(
+            BASE + "/v1/chat/completions",
+            headers=headers(),
+            json=payload,
+            timeout=max(900, seconds * 5),
+        )
+    except requests.RequestException as e:
+        raise RuntimeError(f"ACESTEP_API_CONNECTION_FAILED: {e}") from e
+
     if not response.ok:
-        # Do not print request headers or the API key. The response body is
-        # useful for diagnosing quota/auth/validation failures.
         raise RuntimeError(
             f"ACESTEP_API_ERROR: HTTP {response.status_code}: {response.text[:2000]}"
         )
 
-    body = response.json()
+    try:
+        body = response.json()
+    except ValueError as e:
+        raise RuntimeError(f"ACESTEP_INVALID_JSON_RESPONSE: {response.text[:1000]}") from e
+
     choices = body.get("choices", [])
     if not choices:
         raise RuntimeError(f"ACESTEP_NO_CHOICES: {body}")
