@@ -52,12 +52,12 @@ jobs:
       - name: Hard identity and configuration gates
         run: |
           set -euo pipefail
-          test -s 'assets/uks model image.png'
+          test -s 'assets/singer_image.png'
           test -n "$ACESTEP_API_KEY"
           python - <<'PY'
           import os
           from PIL import Image
-          p='assets/uks model image.png'
+          p='assets/singer_image.png'
           with Image.open(p) as im:
               print('IDENTITY_SOURCE=', p); print('IDENTITY_SIZE=', im.size)
               assert im.width >= 500 and im.height >= 500
