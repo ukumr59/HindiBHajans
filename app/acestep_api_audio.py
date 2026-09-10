@@ -88,12 +88,19 @@ def main() -> None:
     }
 
     print("ACESTEP_SUBMITTING=TRUE", flush=True)
+    # The hosted service can take longer than 30s to initialize the model/LM
+    # before it returns the task id. Keep this timeout separate from polling:
+    # once a task id is returned, /query_result remains a short request.
+    submit_timeout = int(os.getenv("ACESTEP_SUBMIT_TIMEOUT", "240"))
+    if submit_timeout < 60:
+        raise RuntimeError("ACESTEP_SUBMIT_TIMEOUT must be at least 60 seconds")
+    print(f"ACESTEP_SUBMIT_TIMEOUT={submit_timeout}s", flush=True)
     try:
         response = requests.post(
             BASE + "/release_task",
             headers=json_headers(),
             json=payload,
-            timeout=30,
+            timeout=submit_timeout,
         )
     except requests.RequestException as e:
         raise RuntimeError(f"ACESTEP_SUBMIT_CONNECTION_FAILED: {e}") from e
