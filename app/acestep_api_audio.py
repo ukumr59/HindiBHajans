@@ -1,52 +1,24 @@
-"""Generate the Hindi bhajan through ACE-Step's asynchronous hosted API.
+"""Generate the Hindi bhajan through ACE-Step's hosted cloud API.
 
-The GitHub runner is only the control plane. No GPU is used here.
-The synchronous /v1/chat/completions endpoint can exceed the Cloudflare
-request window for long vocal generations, so production uses the native
-/release_task + /query_result workflow instead.
+The official cloud endpoint at https://api.acemusic.ai exposes the
+OpenAI-compatible /v1/chat/completions interface. The native /release_task
++ /query_result API is for ACE-Step server deployments and is not exposed by
+the hosted cloud endpoint (it returns HTTP 404 there).
 """
 from __future__ import annotations
 
-import json
+import base64
 import os
-import time
 from pathlib import Path
-from urllib.parse import urljoin
 
 import requests
 
 BASE = os.getenv("ACESTEP_API_BASE_URL", "https://api.acemusic.ai").rstrip("/")
 API_KEY = os.getenv("ACESTEP_API_KEY", "").strip()
-MODEL = os.getenv("ACESTEP_NATIVE_MODEL", "acestep-v15-turbo").strip()
+MODEL = os.getenv("ACESTEP_CLOUD_MODEL", "acemusic/acestep-v15-turbo").strip()
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "output"
 OUT.mkdir(parents=True, exist_ok=True)
-
-
-def headers() -> dict[str, str]:
-    h = {
-        "Accept": "application/json",
-        "User-Agent": "HindiBHajans/1.0",
-    }
-    if API_KEY:
-        h["Authorization"] = f"Bearer {API_KEY}"
-    return h
-
-
-def json_headers() -> dict[str, str]:
-    h = headers()
-    h["Content-Type"] = "application/json"
-    return h
-
-
-def checked_get(url: str, label: str) -> requests.Response:
-    try:
-        r = requests.get(url, headers=headers(), timeout=30)
-    except requests.RequestException as e:
-        raise RuntimeError(f"ACESTEP_{label}_CONNECTION_FAILED: {e}") from e
-    if not r.ok:
-        raise RuntimeError(f"ACESTEP_{label}_ERROR: HTTP {r.status_code}: {r.text[:1200]}")
-    return r
 
 
 def main() -> None:
@@ -62,147 +34,114 @@ def main() -> None:
         raise RuntimeError(f"Unable to load Hindi lyrics/prompt: {e}") from e
 
     print(f"ACESTEP_API_BASE={BASE}", flush=True)
-    health = checked_get(BASE + "/health", "HEALTH")
+    try:
+        health = requests.get(
+            BASE + "/health",
+            headers={"Accept": "application/json", "User-Agent": "curl/8.4.0"},
+            timeout=30,
+        )
+    except requests.RequestException as e:
+        raise RuntimeError(f"ACESTEP_HEALTH_CONNECTION_FAILED: {e}") from e
+    if not health.ok:
+        raise RuntimeError(f"ACESTEP_HEALTH_ERROR: HTTP {health.status_code}: {health.text[:1000]}")
+
     print(f"ACESTEP_HEALTH=PASS HTTP={health.status_code}", flush=True)
     print(f"ACESTEP_MODEL={MODEL}", flush=True)
-    print("ACESTEP_MODE=ASYNC_NATIVE", flush=True)
+    print("ACESTEP_MODE=CLOUD_COMPLETIONS", flush=True)
 
-    # ACE-Step native API: submit immediately, then poll the task. This avoids
-    # keeping a Cloudflare-proxied HTTP request open for the whole generation.
+    # The hosted acemusic.ai service exposes /v1/chat/completions, not the
+    # local/server /release_task endpoint. Audio is returned as a base64 data
+    # URL in choices[0].message.audio[].audio_url.url.
     payload = {
         "model": MODEL,
-        "prompt": PROMPT,
-        "lyrics": LYRICS,
-        "task_type": "text2music",
-        "audio_duration": float(seconds),
-        "audio_format": "mp3",
-        "vocal_language": "hi",
-        "bpm": 128,
-        "batch_size": 1,
+        "messages": [
+            {
+                "role": "user",
+                "content": f"<prompt>{PROMPT}</prompt><lyrics>{LYRICS}</lyrics>",
+            }
+        ],
+        "stream": False,
         "thinking": True,
         "use_format": False,
         "use_cot_caption": False,
         "use_cot_language": False,
-        "inference_steps": 8,
-        "infer_method": "ode",
+        "audio_config": {
+            "duration": seconds,
+            "bpm": 128,
+            "format": "mp3",
+            "vocal_language": "hi",
+        },
     }
 
-    print("ACESTEP_SUBMITTING=TRUE", flush=True)
-    # The hosted service can take longer than 30s to initialize the model/LM
-    # before it returns the task id. Keep this timeout separate from polling:
-    # once a task id is returned, /query_result remains a short request.
-    submit_timeout = int(os.getenv("ACESTEP_SUBMIT_TIMEOUT", "240"))
-    if submit_timeout < 60:
-        raise RuntimeError("ACESTEP_SUBMIT_TIMEOUT must be at least 60 seconds")
-    print(f"ACESTEP_SUBMIT_TIMEOUT={submit_timeout}s", flush=True)
+    print("ACESTEP_GENERATING=TRUE", flush=True)
+    print(f"ACESTEP_DURATION={seconds}s", flush=True)
+
+    # Cloud generation is synchronous. Give the HTTP client a generous timeout;
+    # the hosted service/proxy may take substantially longer than model health.
+    request_timeout = int(os.getenv("ACESTEP_CLOUD_TIMEOUT", "660"))
+    if request_timeout < 120:
+        raise RuntimeError("ACESTEP_CLOUD_TIMEOUT must be at least 120 seconds")
+    print(f"ACESTEP_CLOUD_TIMEOUT={request_timeout}s", flush=True)
+
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {API_KEY}",
+        # The hosted service has historically handled curl-style UA reliably.
+        "User-Agent": "curl/8.4.0",
+    }
+
     try:
         response = requests.post(
-            BASE + "/release_task",
-            headers=json_headers(),
+            BASE + "/v1/chat/completions",
+            headers=headers,
             json=payload,
-            timeout=submit_timeout,
+            timeout=request_timeout,
         )
+    except requests.Timeout as e:
+        raise RuntimeError(
+            "ACESTEP_CLOUD_TIMEOUT: hosted /v1/chat/completions did not return "
+            f"within {request_timeout}s. This is a provider-side synchronous "
+            "generation limit, not a GitHub Actions timeout."
+        ) from e
     except requests.RequestException as e:
-        raise RuntimeError(f"ACESTEP_SUBMIT_CONNECTION_FAILED: {e}") from e
+        raise RuntimeError(f"ACESTEP_CLOUD_CONNECTION_FAILED: {e}") from e
 
     if not response.ok:
+        body = response.text[:3000]
         raise RuntimeError(
-            f"ACESTEP_SUBMIT_ERROR: HTTP {response.status_code}: {response.text[:2000]}"
+            f"ACESTEP_CLOUD_ERROR: HTTP {response.status_code}: {body}"
         )
 
     try:
-        submitted = response.json()
+        result = response.json()
     except ValueError as e:
-        raise RuntimeError(f"ACESTEP_SUBMIT_INVALID_JSON: {response.text[:1000]}") from e
+        raise RuntimeError(f"ACESTEP_CLOUD_INVALID_JSON: {response.text[:2000]}") from e
 
-    if submitted.get("code") not in (None, 200):
-        raise RuntimeError(f"ACESTEP_SUBMIT_REJECTED: {submitted}")
+    choices = result.get("choices") or []
+    if not choices:
+        raise RuntimeError(f"ACESTEP_CLOUD_NO_CHOICES: {result}")
 
-    data = submitted.get("data") or {}
-    task_id = data.get("task_id") if isinstance(data, dict) else None
-    if not task_id:
-        raise RuntimeError(f"ACESTEP_NO_TASK_ID: {submitted}")
+    message = choices[0].get("message") or {}
+    audio_items = message.get("audio") or []
+    if not audio_items:
+        raise RuntimeError(f"ACESTEP_CLOUD_NO_AUDIO: {result}")
 
-    print(f"ACESTEP_TASK_ID={task_id}", flush=True)
-    print("ACESTEP_TASK_ACCEPTED=TRUE", flush=True)
+    audio_url = ((audio_items[0].get("audio_url") or {}).get("url") or "").strip()
+    if not audio_url.startswith("data:audio/"):
+        raise RuntimeError(f"ACESTEP_CLOUD_INVALID_AUDIO_URL: {audio_url[:500]}")
 
-    # Allow a long-running hosted generation without holding a single request
-    # open. 20 minutes is intentionally below the GitHub job's 720-minute cap.
-    deadline = time.monotonic() + 20 * 60
-    last_status = None
-    result_items = None
+    marker = ";base64,"
+    if marker not in audio_url:
+        raise RuntimeError("ACESTEP_CLOUD_AUDIO_NOT_BASE64")
 
-    while time.monotonic() < deadline:
-        try:
-            q = requests.post(
-                BASE + "/query_result",
-                headers=json_headers(),
-                json={"task_id_list": [task_id]},
-                timeout=30,
-            )
-        except requests.RequestException as e:
-            print(f"ACESTEP_POLL_CONNECTION_RETRY={e}", flush=True)
-            time.sleep(15)
-            continue
-
-        if not q.ok:
-            raise RuntimeError(
-                f"ACESTEP_POLL_ERROR: HTTP {q.status_code}: {q.text[:2000]}"
-            )
-
-        try:
-            status_body = q.json()
-        except ValueError as e:
-            raise RuntimeError(f"ACESTEP_POLL_INVALID_JSON: {q.text[:1000]}") from e
-
-        items = status_body.get("data") or []
-        item = items[0] if isinstance(items, list) and items else {}
-        status = item.get("status", 0)
-        if status != last_status:
-            print(f"ACESTEP_STATUS={status}", flush=True)
-            last_status = status
-
-        if status == 1:
-            raw_result = item.get("result", "[]")
-            try:
-                result_items = json.loads(raw_result) if isinstance(raw_result, str) else raw_result
-            except ValueError as e:
-                raise RuntimeError(f"ACESTEP_RESULT_INVALID_JSON: {raw_result[:2000]}") from e
-            break
-
-        if status == 2:
-            raise RuntimeError(f"ACESTEP_GENERATION_FAILED: {item}")
-
-        time.sleep(10)
-
-    if result_items is None:
-        raise RuntimeError("ACESTEP_GENERATION_TIMEOUT: task did not finish within 20 minutes")
-
-    if not isinstance(result_items, list) or not result_items:
-        raise RuntimeError(f"ACESTEP_EMPTY_RESULT: {result_items}")
-
-    audio_path = result_items[0].get("file", "")
-    if not audio_path:
-        raise RuntimeError(f"ACESTEP_RESULT_HAS_NO_AUDIO_FILE: {result_items[0]}")
-
-    audio_url = urljoin(BASE + "/", audio_path.lstrip("/"))
-    print(f"ACESTEP_DOWNLOADING_AUDIO={audio_url}", flush=True)
     try:
-        audio_response = requests.get(
-            audio_url,
-            headers=headers(),
-            timeout=180,
-        )
-    except requests.RequestException as e:
-        raise RuntimeError(f"ACESTEP_AUDIO_DOWNLOAD_FAILED: {e}") from e
-
-    if not audio_response.ok:
-        raise RuntimeError(
-            f"ACESTEP_AUDIO_DOWNLOAD_ERROR: HTTP {audio_response.status_code}: {audio_response.text[:1200]}"
-        )
+        audio_bytes = base64.b64decode(audio_url.split(marker, 1)[1], validate=True)
+    except Exception as e:
+        raise RuntimeError(f"ACESTEP_CLOUD_AUDIO_DECODE_FAILED: {e}") from e
 
     dest = OUT / "bhajan_source.mp3"
-    dest.write_bytes(audio_response.content)
+    dest.write_bytes(audio_bytes)
     if dest.stat().st_size < 100_000:
         raise RuntimeError(f"ACESTEP_OUTPUT_TOO_SMALL: {dest.stat().st_size} bytes")
 
