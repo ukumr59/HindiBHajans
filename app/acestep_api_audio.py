@@ -15,7 +15,8 @@ import requests
 
 BASE = os.getenv("ACESTEP_API_BASE_URL", "https://api.acemusic.ai").rstrip("/")
 API_KEY = os.getenv("ACESTEP_API_KEY", "").strip()
-MODEL = os.getenv("ACESTEP_CLOUD_MODEL", "acemusic/acestep-v15-turbo").strip()
+# Cloud API model name uses v1.5; the self-hosted native API uses v15.
+MODEL = os.getenv("ACESTEP_CLOUD_MODEL", "acemusic/acestep-v1.5-turbo").strip()
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "output"
 OUT.mkdir(parents=True, exist_ok=True)
