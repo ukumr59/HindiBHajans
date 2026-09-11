@@ -1,9 +1,9 @@
 """Dispatch EchoMimicV3-Flash to a free Kaggle GPU kernel.
 
-This intentionally avoids Kaggle datasets/models APIs: the kernel is pushed with
-only the small input files and downloads the open-source model weights directly
-from Hugging Face. That bypasses the GetDataset 403 path that broke the old
-kagglehub implementation.
+The GitHub runner submits a self-contained worker with the small input files.
+The worker downloads the open-source model weights and generates a real
+audio-driven singer video on Kaggle's free NVIDIA T4 GPU. There is no static
+image/video fallback.
 """
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ IMAGE = INPUT / 'singer.png'
 AUDIO = INPUT / 'bhajan.mp3'
 SECONDS = int((INPUT / 'duration.txt').read_text().strip())
 FPS = 25
-FRAMES = 81                 # 3.24 s; safe on 16 GB T4
+FRAMES = 81
 SEG_SECONDS = FRAMES / FPS
 
 
@@ -143,7 +143,7 @@ def dispatch(seconds: int) -> None:
     if not token:
         raise RuntimeError("KAGGLE_API_TOKEN secret is required. It must have Kaggle kernel write/run permission.")
 
-    image = ROOT / "assets" / "uks model image.png"
+    image = ROOT / "assets" / "singer_image.png"
     audio = OUT / "bhajan_source.mp3"
     if not image.exists(): raise RuntimeError(f"Missing singer image: {image}")
     if not audio.exists(): raise RuntimeError(f"Missing generated Hindi bhajan audio: {audio}")
