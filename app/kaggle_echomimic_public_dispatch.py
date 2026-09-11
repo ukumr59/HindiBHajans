@@ -47,7 +47,7 @@ def main():
     if not token: raise RuntimeError('KAGGLE_API_TOKEN secret is required')
     if not user: raise RuntimeError('KAGGLE_USERNAME secret is required')
     if not 180<=seconds<=300 or seconds%15: raise RuntimeError('seconds must be 180-300 and divisible by 15')
-    image=ROOT/'assets'/'uks model image.png'; audio=OUT/'bhajan_source.mp3'
+    image=ROOT/'assets'/'singer_image.png'; audio=OUT/'bhajan_source.mp3'
     if not image.exists(): raise RuntimeError(f'Missing singer image: {image}')
     if not audio.exists(): raise RuntimeError(f'Missing generated Hindi bhajan audio: {audio}')
     shutil.rmtree(KDIR,ignore_errors=True); KDIR.mkdir(parents=True)
