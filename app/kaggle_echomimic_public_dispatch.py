@@ -1,10 +1,4 @@
-"""EchoMimicV3 Kaggle dispatcher with authenticated output retrieval.
-
-The worker is submitted as a fresh public Kaggle kernel with a unique slug.
-We deliberately do not use a hard-coded/leaderboard slug. Kaggle's output
-endpoint may return 403 to anonymous callers, so the GitHub runner passes the
-Kaggle API token as a Bearer credential. No kernels.get call is required.
-"""
+"""EchoMimicV3 Kaggle dispatcher with robust completion/output retrieval."""
 from __future__ import annotations
 import io, json, os, re, shutil, subprocess, time, zipfile
 from pathlib import Path
@@ -22,23 +16,21 @@ def download_output(user: str, slug: str, version: int | None, dest: Path, token
         f'https://www.kaggle.com/kernels/output/download/{user}/{slug}{suffix}',
     ]
     last=None
-    for url in urls:
-        try:
-            print('PUBLIC_OUTPUT_URL=',url.split('?')[0],flush=True)
-            req=Request(url,headers={
-                'User-Agent':'HindiBHajans/zero-cost-worker',
-                'Authorization':f'Bearer {token}',
-                'Accept':'application/zip, application/octet-stream, */*',
-            })
-            with urlopen(req,timeout=180) as r: data=r.read()
-            if not data.startswith(b'PK'): raise RuntimeError(f'KAGGLE_PUBLIC_OUTPUT_NOT_ZIP: {len(data)} bytes')
-            dest.mkdir(parents=True,exist_ok=True)
-            with zipfile.ZipFile(io.BytesIO(data)) as z: z.extractall(dest)
-            return
-        except HTTPError as e:
-            last=e; print(f'KAGGLE_OUTPUT_DOWNLOAD_HTTP_{e.code}',flush=True)
-            if e.code not in (403,404): raise
-    raise RuntimeError(f'KAGGLE_ECHOMIMIC_OUTPUT_DOWNLOAD_FAILED: {last}')
+    for attempt in range(20):
+        for url in urls:
+            try:
+                print('PUBLIC_OUTPUT_URL=',url.split('?')[0],flush=True)
+                req=Request(url,headers={'User-Agent':'HindiBHajans/zero-cost-worker','Authorization':f'Bearer {token}','Accept':'application/zip, application/octet-stream, */*'})
+                with urlopen(req,timeout=180) as r: data=r.read()
+                if not data.startswith(b'PK'): raise RuntimeError(f'KAGGLE_PUBLIC_OUTPUT_NOT_ZIP: {len(data)} bytes')
+                dest.mkdir(parents=True,exist_ok=True)
+                with zipfile.ZipFile(io.BytesIO(data)) as z: z.extractall(dest)
+                return
+            except HTTPError as e:
+                last=e; print(f'KAGGLE_OUTPUT_DOWNLOAD_HTTP_{e.code}',flush=True)
+                if e.code not in (403,404): raise
+        time.sleep(30)
+    raise RuntimeError(f'KAGGLE_ECHOMIMIC_OUTPUT_DOWNLOAD_FAILED_AFTER_RETRIES: {last}')
 
 def main():
     token=os.getenv('KAGGLE_API_TOKEN') or os.getenv('KAGGLE_API_TOKEN3')
@@ -62,8 +54,17 @@ def main():
     text=(p.stdout or '')+(p.stderr or ''); print(text,flush=True)
     if p.returncode: raise RuntimeError('KAGGLE_ECHOMIMIC_PUSH_FAILED: '+text)
     m=re.search(r'Kernel version (\d+) successfully pushed',text,re.I); version=int(m.group(1)) if m else None
-    wait=max(15*60,seconds+12*60)
-    print(f'KAGGLE_ECHOMIMIC_LAUNCHED={meta["id"]} VERSION={version} WAIT={wait}s',flush=True); time.sleep(wait)
+    kernel=meta['id']; deadline=time.time()+11*60*60
+    while time.time()<deadline:
+        s=subprocess.run(['kaggle','kernels','status',kernel],text=True,capture_output=True,env=env)
+        status=(s.stdout or '')+(s.stderr or ''); print(status,flush=True)
+        low=status.lower()
+        if 'complete' in low: break
+        if any(x in low for x in ('error','failed','cancelled','canceled')):
+            raise RuntimeError('KAGGLE_KERNEL_FAILED: '+status)
+        time.sleep(30)
+    else:
+        raise TimeoutError('KAGGLE_KERNEL_TIMEOUT')
     outdir=OUT/'kaggle_output'; shutil.rmtree(outdir,ignore_errors=True)
     download_output(user,slug,version,outdir,token)
     xs=list(outdir.rglob('master.mp4'))
