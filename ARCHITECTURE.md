@@ -1,38 +1,34 @@
 # HindiBHajans — production architecture
 
-## Only two GitHub Actions workflows
+## Daily production contract
 
-### 1. `Bhajan Aabha — Daily Production`
-
-Runs every day at **21:30 IST** and on manual dispatch.
+The production workflow runs every day at **21:30 IST** and on manual dispatch.
 
 Pipeline:
 
-`approved singer image -> provider router -> real singing master -> hard media gate -> 3 Shorts -> public release -> YouTube + Facebook + Instagram`
+`approved singer image -> ACE-Step audio -> free Kaggle EchoMimicV3 GPU -> hard identity/singing QA -> master -> 3 Shorts -> release -> YouTube + Facebook + Instagram`
 
-GPU selection is provider-neutral. The router retries a provider for transient errors and then fails over to the next configured free provider. Provider jobs can be synchronous or asynchronous.
-
-### 2. `Bhajan Aabha — Maintenance & Provider Health`
-
-Runs at **12:00 IST** and manually. It validates the repository, identity source and provider configuration without starting GPU inference, so it does not burn GPU quota.
+There is **no static-image video fallback**. A technically valid MP4 is not considered a valid production result unless the required person is visibly present and the visual QA gate passes.
 
 ## Production invariants
 
-- ₹0 actual spend: only explicitly configured free/no-charge provider endpoints are allowed.
-- One daily master is the target; provider failure must not require human intervention.
+- ₹0 actual spend: no paid API, paid cloud compute, or automatic billing dependency.
 - Only `assets/uks model image.png` is the singer identity source.
-- No face regeneration or identity replacement.
-- The output must be a real singing performance with synchronized audio/lip movement.
-- Traditional Indian clothing and the correct devotional deity/setting are mandatory worker requirements.
-- Shorts are derived from the approved master; they do not trigger another GPU generation.
-- YouTube, Facebook and Instagram are independent publishing targets; a failure on one does not regenerate the video or invalidate successful uploads on the others.
-- The master is stored as a public GitHub Release asset so downstream platforms can fetch a public media URL without adding a paid object-storage service.
-- Job state and provider events are recorded under `state/`.
+- The singer video must be audio-driven real facial/mouth motion, not a zoom/pan or slideshow substitute.
+- The generated performance prompt requires one singer, traditional Indian clothing, and a Lord Ram devotional setting.
+- No face-replacement fallback is permitted.
+- The visual QA gate samples the final video, detects the reference identity with YuNet + SFace, requires the matched identity across the video, checks face scale, and requires visible lower-face motion.
+- Shorts are derived only after the master passes QA, and each Short is independently QA-gated before publication.
+- Any failed generation, unavailable free GPU, missing credential, identity mismatch, absent face, duplicate matched identity, or failed singing-motion check stops publication.
+- Publishing steps are downstream of all hard QA gates.
+- The master and Shorts are stored as GitHub Release assets so downstream platforms can fetch media without paid object storage.
 
-## Daily reliability model
+## Zero-cost compute policy
 
-A free third-party GPU cannot be mathematically guaranteed to be available every day. Reliability therefore comes from **provider redundancy + bounded retry + checkpointable job state + derived Shorts + persistent published assets**. The architecture never relies on one provider being healthy.
+The video worker is `app/kaggle_echomimic_public_dispatch.py`. It submits an open-source EchoMimicV3-Flash worker to Kaggle with a free NVIDIA GPU, downloads model weights directly from Hugging Face, generates short audio-driven segments, and concatenates them into the master. Kaggle's free GPU quota is finite; the architecture therefore **fails safely when quota or GPU availability is exhausted rather than substituting a lower-quality static video**.
 
-## Provider contract
+The audio stage remains the ACE-Step hosted API configured by repository secrets. Only an explicitly configured no-charge endpoint is allowed.
 
-See `config/provider-contract.md`. A provider accepts the common job JSON and returns either a completed `video_url` or an asynchronous `job_id/status_url`. The application does not contain provider-specific business logic.
+## Safety and monetization posture
+
+The architecture is designed to avoid the previous failure mode and to support original, non-repetitive production. It does not guarantee YPP approval. Photorealistic AI alteration/generation of a real person's appearance must be disclosed to YouTube where required, and the operator must have the necessary rights/permission for the person's likeness and all commercial audio/visual elements.
