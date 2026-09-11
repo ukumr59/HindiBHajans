@@ -88,6 +88,28 @@ subprocess.run([sys.executable, path], check=True)
     )
     push_log = (p.stdout or "") + (p.stderr or "")
     print(push_log, flush=True)
+    if p.returncode:
+        raise RuntimeError("KAGGLE_AUDIO_PUSH_FAILED: " + push_log)
+
+    # A token that can push/execute but cannot read kernels will produce
+    # "Permission 'kernels.get' was denied" here. Never retry that condition:
+    # otherwise GitHub Actions would sit in the loop for up to 11 hours while
+    # repeatedly issuing a request that can never succeed.
+    s = run("kaggle", "kernels", "status", kernel, env=env, capture=True, check=False)
+    status = (s.stdout or "") + (s.stderr or "")
+    print(status, flush=True)
+    low = status.lower()
+    if "permission 'kernels.get' was denied" in low or "permission kernels.get was denied" in low:
+        raise RuntimeError(
+            "KAGGLE_CREDENTIAL_SCOPE_ERROR: the configured Kaggle credential can "
+            "push/execute kernels but does not have kernels.get/read permission. "
+            "Grant kernels.get (or kernels.viewer) to the credential stored in "
+            "KAGGLE_API_TOKEN3/KAGGLE_API_TOKEN before rerunning."
+        )
+    if "permission" in low and "denied" in low:
+        raise RuntimeError("KAGGLE_CREDENTIAL_PERMISSION_ERROR: " + status)
+    if s.returncode and not any(x in low for x in ("queued", "running", "complete", "error", "failed")):
+        raise RuntimeError("KAGGLE_AUDIO_STATUS_COMMAND_FAILED: " + status)
 
     deadline = time.time() + 11 * 60 * 60
     while time.time() < deadline:
@@ -95,6 +117,8 @@ subprocess.run([sys.executable, path], check=True)
         status = (s.stdout or "") + (s.stderr or "")
         print(status, flush=True)
         low = status.lower()
+        if "permission 'kernels.get' was denied" in low or "permission kernels.get was denied" in low:
+            raise RuntimeError("KAGGLE_CREDENTIAL_SCOPE_ERROR: kernels.get/read permission is missing; stopping instead of looping.")
         if "complete" in low:
             print("KAGGLE_AUDIO_STATUS=COMPLETE", flush=True)
             break
