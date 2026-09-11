@@ -1,4 +1,4 @@
-name: Bhajan Aabha — Daily Production (ACE-Step API)
+name: Bhajan Aabha — Daily Production (Real Singer GPU)
 
 on:
   schedule:
@@ -14,7 +14,7 @@ on:
       publish:
         description: 'Publish to YouTube, Facebook and Instagram'
         required: false
-        default: true
+        default: false
         type: boolean
 
 permissions:
@@ -27,6 +27,8 @@ env:
   VIDEO_SECONDS: ${{ inputs.video_seconds || '180' }}
   ACESTEP_API_KEY: ${{ secrets.ACESTEP_API_KEY }}
   ACESTEP_API_BASE_URL: ${{ vars.ACESTEP_API_BASE_URL || 'https://api.acemusic.ai' }}
+  KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+  KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN3 || secrets.KAGGLE_API_TOKEN }}
   YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
   YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
   YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
@@ -46,18 +48,31 @@ jobs:
       - name: Install control-plane tools
         run: |
           set -euo pipefail
-          python -m pip install -q --upgrade pip requests pillow google-api-python-client google-auth-oauthlib
+          python -m pip install -q --upgrade pip requests pillow google-api-python-client google-auth-oauthlib opencv-python-headless numpy
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg
+          python -m pip install -q kaggle
+      - name: Download pinned visual-QA models
+        run: |
+          set -euo pipefail
+          mkdir -p qa_models
+          curl -L --fail --retry 3 -o qa_models/face_detection_yunet_2023mar.onnx \
+            https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx
+          curl -L --fail --retry 3 -o qa_models/face_recognition_sface_2021dec.onnx \
+            https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx
+          test "$(stat -c%s qa_models/face_detection_yunet_2023mar.onnx)" -gt 100000
+          test "$(stat -c%s qa_models/face_recognition_sface_2021dec.onnx)" -gt 10000000
       - name: Hard identity and configuration gates
         run: |
           set -euo pipefail
-          test -s 'assets/singer_image.png'
+          test -s 'assets/uks model image.png'
           test -n "$ACESTEP_API_KEY"
+          test -n "$KAGGLE_USERNAME"
+          test -n "$KAGGLE_API_TOKEN"
           python - <<'PY'
           import os
           from PIL import Image
-          p='assets/singer_image.png'
+          p='assets/uks model image.png'
           with Image.open(p) as im:
               print('IDENTITY_SOURCE=', p); print('IDENTITY_SIZE=', im.size)
               assert im.width >= 500 and im.height >= 500
@@ -65,21 +80,27 @@ jobs:
           assert 180 <= seconds <= 300 and seconds % 15 == 0
           print('AUDIO_MODEL=ACE-Step-v1.5-turbo')
           print('AUDIO_BACKEND=ACE-Step-hosted-API')
-          print('VIDEO_BACKEND=FFMPEG_CPU_IDENTITY_SAFE')
-          print('VIDEO_MODEL=NONE_GPU_REQUIRED')
+          print('VIDEO_BACKEND=KAGGLE_ECHOMIMICV3_FLASH')
+          print('VIDEO_MODEL=EchoMimicV3-Flash')
           print('IDENTITY_POLICY=LOCKED_REFERENCE')
-          print('PERFORMANCE_POLICY=AUDIO_SYNCHRONIZED_VISUAL')
-          print('WARDROBE_POLICY=APPROVED_REFERENCE')
-          print('SETTING_POLICY=APPROVED_REFERENCE')
+          print('PERFORMANCE_POLICY=REAL_AUDIO_DRIVEN_SINGING')
+          print('WARDROBE_POLICY=TRADITIONAL_INDIAN')
+          print('SETTING_POLICY=DEVOTIONAL_RAM_SETTING')
           print('COST_POLICY=ZERO_PAID_COMPUTE')
-          print('KAGGLE=DISABLED')
-          print('HF_ZEROGPU=DISABLED')
-          print('LIGHTNING=DISABLED')
+          print('KAGGLE=ENABLED')
+          print('CPU_STATIC_IMAGE_FALLBACK=FORBIDDEN')
           PY
       - name: Generate Hindi bhajan audio via ACE-Step hosted API
         run: python -m app.acestep_api_audio
-      - name: Generate singer visual on GitHub Actions CPU
-        run: python -m app.cpu_identity_video
+      - name: Generate real singer video on free Kaggle GPU
+        run: python -m app.kaggle_echomimic_public_dispatch --seconds "$VIDEO_SECONDS"
+      - name: HARD visual identity + singing gate
+        run: |
+          set -euo pipefail
+          python -m app.visual_quality_gate output/master.mp4 'assets/uks model image.png' \
+            --yunet qa_models/face_detection_yunet_2023mar.onnx \
+            --sface qa_models/face_recognition_sface_2021dec.onnx \
+            --report output/visual_qa.json
       - name: Final master gate
         run: |
           set -euo pipefail
@@ -102,6 +123,15 @@ jobs:
               -filter_complex "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,gblur=sigma=20[bg];[0:v]scale=1080:-2:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2[v]" \
               -map "[v]" -map 0:a:0 -c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart "output/shorts/short-$((n+1)).mp4"
           done
+      - name: HARD visual gate on every Short
+        run: |
+          set -euo pipefail
+          for f in output/shorts/*.mp4; do
+            python -m app.visual_quality_gate "$f" 'assets/uks model image.png' \
+              --yunet qa_models/face_detection_yunet_2023mar.onnx \
+              --sface qa_models/face_recognition_sface_2021dec.onnx \
+              --report "${f%.mp4}.visual_qa.json"
+          done
       - name: Final media gate
         run: |
           set -euo pipefail
@@ -120,6 +150,8 @@ jobs:
             output/master.mp4
             output/bhajan_source.mp3
             output/shorts/*.mp4
+            output/visual_qa.json
+            output/shorts/*.visual_qa.json
           if-no-files-found: warn
           retention-days: 7
       - name: Create public release assets
@@ -128,7 +160,7 @@ jobs:
         run: |
           set -euo pipefail
           TAG="bhajan-${GITHUB_RUN_ID}"
-          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Bhajan Aabha ${TAG}" --notes "Approved master + derived Shorts. Audio generated by ACE-Step hosted API; video uses deterministic zero-cost CPU identity backend." output/master.mp4 output/shorts/*.mp4
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Bhajan Aabha ${TAG}" --notes "Approved real-singer master + derived Shorts. Audio generated by ACE-Step hosted API; video generated by open-source EchoMimicV3 on free Kaggle GPU; publication is blocked unless visual identity/singing QA passes." output/master.mp4 output/shorts/*.mp4
           echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
       - name: Publish YouTube
         if: ${{ inputs.publish != false }}
@@ -149,7 +181,7 @@ jobs:
           import json, os
           from pathlib import Path
           p=Path('state/current.json'); data=json.loads(p.read_text()) if p.exists() else {}
-          data.update({'workflow_run_id':os.environ['GITHUB_RUN_ID'],'workflow':'bhajan-daily-production','audio_model':'ACE-Step-v1.5-turbo','audio_backend':'ACE-Step-hosted-API','video_backend':'FFMPEG_CPU_IDENTITY_SAFE','shorts':3,'publishing':'youtube+facebook+instagram' if os.environ.get('RELEASE_TAG') else 'not_run'})
+          data.update({'workflow_run_id':os.environ['GITHUB_RUN_ID'],'workflow':'bhajan-daily-production','audio_model':'ACE-Step-v1.5-turbo','audio_backend':'ACE-Step-hosted-API','video_backend':'KAGGLE_ECHOMIMICV3_FLASH','video_model':'EchoMimicV3-Flash','shorts':3,'publishing':'youtube+facebook+instagram' if os.environ.get('RELEASE_TAG') else 'not_run'})
           p.write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding='utf-8')
           PY
           git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
@@ -160,9 +192,9 @@ jobs:
           echo 'BHAJAN_AABHA_DAILY_PIPELINE_COMPLETE'
           echo 'AUDIO_MODEL=ACE-Step-v1.5-turbo'
           echo 'AUDIO_BACKEND=ACE-Step-hosted-API'
-          echo 'VIDEO_BACKEND=FFMPEG_CPU_IDENTITY_SAFE'
+          echo 'VIDEO_BACKEND=KAGGLE_ECHOMIMICV3_FLASH'
+          echo 'VIDEO_MODEL=EchoMimicV3-Flash'
           echo 'SHORTS=3'
           echo 'ZERO_PAID_COMPUTE=TRUE'
-          echo 'KAGGLE=DISABLED'
-          echo 'HF_ZEROGPU=DISABLED'
-          echo 'LIGHTNING=DISABLED'
+          echo 'CPU_STATIC_IMAGE_FALLBACK=FORBIDDEN'
+          echo 'HARD_VISUAL_QA=TRUE'
