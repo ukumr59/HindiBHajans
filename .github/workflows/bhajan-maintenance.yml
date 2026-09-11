@@ -24,14 +24,14 @@ jobs:
       - name: Validate production code and identity source
         run: |
           set -euo pipefail
-          test -s 'assets/uks model image.png'
+          test -s 'assets/singer_image.png'
           test -n "$KAGGLE_USERNAME"
           test -n "$KAGGLE_API_TOKEN"
           python - <<'PY'
           import py_compile
           from PIL import Image
           from pathlib import Path
-          with Image.open('assets/uks model image.png') as im:
+          with Image.open('assets/singer_image.png') as im:
               print('IDENTITY_SOURCE_OK=', im.size); assert im.width >= 500 and im.height >= 500
           for p in Path('app').rglob('*.py'): py_compile.compile(str(p), doraise=True)
           print('PYTHON_COMPILE=PASS')
