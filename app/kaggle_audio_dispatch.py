@@ -1,90 +1,128 @@
-"""Zero-cost Hindi bhajan audio dispatcher: Kaggle free GPU + ACE-Step 1.5.
+"""Zero-cost ACE-Step audio dispatcher using Kaggle free GPU.
 
-Kaggle's kernels.get API is deliberately NOT used here. The control plane is:
-1) push a public Kaggle kernel (write/execute), then
-2) download the kernel output bundle through Kaggle's output-download endpoint.
-
-Important: Kaggle's output-download endpoint can return HTTP 403 even for a
-public kernel when called anonymously. Therefore the GitHub runner supplies
-its Kaggle API token as an Authorization header. We never call kernels.get or
-try to infer a leaderboard slug.
+Control plane: push -> poll kernel status -> retrieve output with the supported
+`kaggle kernels output` command. No undocumented public output-download URLs
+are used.
 """
 from __future__ import annotations
-import io, json, os, re, shutil, subprocess, time, zipfile
-from pathlib import Path
-from urllib.request import Request, urlopen
-from urllib.error import HTTPError
 
-ROOT=Path(__file__).resolve().parents[1]
-OUT=ROOT/'output'; WORK=ROOT/'.kaggle_audio_worker'
-RAW_WORKER='https://raw.githubusercontent.com/ukumr59/HindiBHajans/main/app/kaggle_ace_step_worker.py'
+import json
+import os
+import shutil
+import subprocess
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+OUT = ROOT / "output"
+WORK = ROOT / ".kaggle_audio_worker"
+RAW_WORKER = "https://raw.githubusercontent.com/ukumr59/HindiBHajans/main/app/kaggle_ace_step_worker.py"
+
 
 def run(*args, env=None, check=True, capture=False):
-    print('RUN:', ' '.join(map(str,args)), flush=True)
-    return subprocess.run(list(map(str,args)), text=True, check=check, env=env, capture_output=capture)
+    print("RUN:", " ".join(map(str, args)), flush=True)
+    return subprocess.run(list(map(str, args)), text=True, check=check, env=env, capture_output=capture)
 
-def download_public_output(kernel_id: str, version: int | None, dest: Path, token: str) -> None:
-    user, slug = kernel_id.split('/',1)
-    base=f'https://www.kaggle.com/api/v1/kernels/output/download/{user}/{slug}'
-    urls=[base + (f'?version_number={version}' if version is not None else '')]
-    # Kaggle has also served this route without the /api/v1 prefix on some
-    # deployments. Keep one deterministic fallback, but never use kernels.get.
-    urls.append(f'https://www.kaggle.com/kernels/output/download/{user}/{slug}' + (f'?version_number={version}' if version is not None else ''))
-    last=None
-    for url in urls:
-        try:
-            print('PUBLIC_OUTPUT_URL=',url.split('?')[0],flush=True)
-            req=Request(url,headers={
-                'User-Agent':'HindiBHajans/zero-cost-worker',
-                'Authorization':f'Bearer {token}',
-                'Accept':'application/zip, application/octet-stream, */*',
-            })
-            with urlopen(req,timeout=120) as r:
-                data=r.read()
-            if not data.startswith(b'PK'):
-                raise RuntimeError(f'KAGGLE_PUBLIC_OUTPUT_NOT_ZIP: HTTP response was {len(data)} bytes')
-            dest.mkdir(parents=True,exist_ok=True)
-            with zipfile.ZipFile(io.BytesIO(data)) as z: z.extractall(dest)
-            return
-        except HTTPError as e:
-            last=e
-            print(f'KAGGLE_OUTPUT_DOWNLOAD_HTTP_{e.code}: {url.split("?")[0]}',flush=True)
-            if e.code not in (403,404): raise
-    raise RuntimeError(f'KAGGLE_PUBLIC_OUTPUT_DOWNLOAD_FAILED: {last}. The kernel may be private or the slug/version may be invalid; no kernels.get call is attempted.')
 
 def main():
-    token=os.getenv('KAGGLE_API_TOKEN') or os.getenv('KAGGLE_API_TOKEN3')
-    user=os.getenv('KAGGLE_USERNAME','').strip()
-    if not token: raise RuntimeError('KAGGLE_API_TOKEN secret is required')
-    if not user: raise RuntimeError('KAGGLE_USERNAME secret is required')
-    seconds=int(os.getenv('VIDEO_SECONDS','180'))
-    if not 180<=seconds<=300 or seconds%15: raise RuntimeError('VIDEO_SECONDS must be 180-300 and divisible by 15')
-    WORK.mkdir(parents=True,exist_ok=True); OUT.mkdir(parents=True,exist_ok=True)
-    try:
-        from app.generate_bhajan_audio import LYRICS, PROMPT
-        lyrics, caption = LYRICS, PROMPT
-    except Exception as e: raise RuntimeError(f'Unable to load proven Hindi lyrics/prompt: {e}')
-    request={'duration':seconds,'caption':caption,'lyrics':lyrics,'bpm':128,'keyscale':'C Major','timesignature':'4/4','vocal_language':'hi'}
-    (WORK/'request.json').write_text(json.dumps(request,ensure_ascii=False),encoding='utf-8')
-    bootstrap=f'''#!/usr/bin/env python3\nimport urllib.request,subprocess,sys,shutil\nurl={RAW_WORKER!r}\npath="/kaggle/working/worker.py"\nurllib.request.urlretrieve(url,path)\nshutil.copy2('/kaggle/working/request.json','/kaggle/working/bhajan_request.json')\nsubprocess.run([sys.executable,path],check=True)\n'''
-    (WORK/'kernel.py').write_text(bootstrap,encoding='utf-8')
-    slug=f'hindibhajans-ace-step-{int(time.time())}'
-    meta={'id':f'{user}/{slug}','title':slug,'code_file':'kernel.py','language':'python','kernel_type':'script','is_private':False,'enable_gpu':True,'enable_internet':True,'machine_shape':'NvidiaTeslaT4','dataset_sources':[],'competition_sources':[],'kernel_sources':[],'model_sources':[]}
-    (WORK/'kernel-metadata.json').write_text(json.dumps(meta,indent=2),encoding='utf-8')
-    env=dict(os.environ); env['KAGGLE_API_TOKEN']=token
-    push=run('kaggle','kernels','push','-p',str(WORK),'--accelerator','NvidiaTeslaT4','--timeout',str(11*60*60),env=env,capture=True)
-    pushtext=(push.stdout or '')+(push.stderr or '')
-    print(pushtext,flush=True)
-    m=re.search(r'Kernel version (\d+) successfully pushed',pushtext,re.I)
-    version=int(m.group(1)) if m else None
-    wait_seconds=max(15*60, seconds+12*60)
-    print(f'KAGGLE_AUDIO_LAUNCHED: {meta["id"]}; public output retrieval after {wait_seconds}s; version={version}',flush=True)
-    time.sleep(wait_seconds)
-    dl=OUT/'kaggle_audio_output'; shutil.rmtree(dl,ignore_errors=True)
-    download_public_output(meta['id'],version,dl,token)
-    candidates=list(dl.rglob('bhajan_source.mp3'))
-    if not candidates: raise RuntimeError('KAGGLE_AUDIO_ARTIFACT_MISSING: public Kaggle output bundle was downloaded but bhajan_source.mp3 was not present')
-    shutil.copy2(candidates[0],OUT/'bhajan_source.mp3')
-    print('KAGGLE_AUDIO_READY',OUT/'bhajan_source.mp3',(OUT/'bhajan_source.mp3').stat().st_size,flush=True)
+    token = os.getenv("KAGGLE_API_TOKEN") or os.getenv("KAGGLE_API_TOKEN3")
+    user = os.getenv("KAGGLE_USERNAME", "").strip()
+    seconds = int(os.getenv("VIDEO_SECONDS", "180"))
+    if not token:
+        raise RuntimeError("KAGGLE_API_TOKEN secret is required")
+    if not user:
+        raise RuntimeError("KAGGLE_USERNAME secret is required")
+    if not 180 <= seconds <= 300 or seconds % 15:
+        raise RuntimeError("VIDEO_SECONDS must be 180-300 and divisible by 15")
 
-if __name__=='__main__': main()
+    OUT.mkdir(parents=True, exist_ok=True)
+    shutil.rmtree(WORK, ignore_errors=True)
+    WORK.mkdir(parents=True, exist_ok=True)
+
+    from app.generate_bhajan_audio import LYRICS, PROMPT
+    request = {
+        "duration": seconds,
+        "caption": PROMPT,
+        "lyrics": LYRICS,
+        "bpm": 128,
+        "keyscale": "C Major",
+        "timesignature": "4/4",
+        "vocal_language": "hi",
+    }
+    (WORK / "request.json").write_text(json.dumps(request, ensure_ascii=False), encoding="utf-8")
+    bootstrap = f'''#!/usr/bin/env python3
+import urllib.request, subprocess, sys, shutil
+url={RAW_WORKER!r}
+path="/kaggle/working/worker.py"
+urllib.request.urlretrieve(url, path)
+shutil.copy2('/kaggle/working/request.json', '/kaggle/working/bhajan_request.json')
+subprocess.run([sys.executable, path], check=True)
+'''
+    (WORK / "kernel.py").write_text(bootstrap, encoding="utf-8")
+
+    slug = f"hindibhajans-ace-step-{int(time.time())}"
+    kernel = f"{user}/{slug}"
+    meta = {
+        "id": kernel,
+        "title": slug,
+        "code_file": "kernel.py",
+        "language": "python",
+        "kernel_type": "script",
+        "is_private": False,
+        "enable_gpu": True,
+        "enable_internet": True,
+        "machine_shape": "NvidiaTeslaT4",
+        "dataset_sources": [],
+        "competition_sources": [],
+        "kernel_sources": [],
+        "model_sources": [],
+    }
+    (WORK / "kernel-metadata.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+    env = dict(os.environ)
+    env["KAGGLE_API_TOKEN"] = token
+    p = run(
+        "kaggle", "kernels", "push", "-p", str(WORK),
+        "--accelerator", "NvidiaTeslaT4", "--timeout", str(11 * 60 * 60),
+        env=env, capture=True,
+    )
+    push_log = (p.stdout or "") + (p.stderr or "")
+    print(push_log, flush=True)
+
+    deadline = time.time() + 11 * 60 * 60
+    while time.time() < deadline:
+        s = run("kaggle", "kernels", "status", kernel, env=env, capture=True, check=False)
+        status = (s.stdout or "") + (s.stderr or "")
+        print(status, flush=True)
+        low = status.lower()
+        if "complete" in low:
+            print("KAGGLE_AUDIO_STATUS=COMPLETE", flush=True)
+            break
+        if any(x in low for x in ("error", "failed", "cancelled", "canceled")):
+            raise RuntimeError("KAGGLE_AUDIO_KERNEL_FAILED: " + status)
+        time.sleep(30)
+    else:
+        raise TimeoutError("KAGGLE_AUDIO_KERNEL_TIMEOUT")
+
+    outdir = OUT / "kaggle_audio_output"
+    shutil.rmtree(outdir, ignore_errors=True)
+    outdir.mkdir(parents=True)
+    p = run(
+        "kaggle", "kernels", "output", kernel,
+        "-p", str(outdir), "--force",
+        env=env, capture=True,
+    )
+    output_log = (p.stdout or "") + (p.stderr or "")
+    print(output_log, flush=True)
+    if p.returncode:
+        raise RuntimeError("KAGGLE_AUDIO_OUTPUT_COMMAND_FAILED: " + output_log)
+
+    candidates = list(outdir.rglob("bhajan_source.mp3"))
+    if not candidates:
+        raise RuntimeError("KAGGLE_AUDIO_ARTIFACT_MISSING: completed kernel did not return bhajan_source.mp3")
+    shutil.copy2(candidates[0], OUT / "bhajan_source.mp3")
+    print("KAGGLE_AUDIO_READY", OUT / "bhajan_source.mp3", (OUT / "bhajan_source.mp3").stat().st_size, flush=True)
+
+
+if __name__ == "__main__":
+    main()
