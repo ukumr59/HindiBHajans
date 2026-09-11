@@ -65,14 +65,14 @@ jobs:
       - name: Hard identity and configuration gates
         run: |
           set -euo pipefail
-          test -s 'assets/uks model image.png'
+          test -s 'assets/singer_image.png'
           test -n "$ACESTEP_API_KEY"
           test -n "$KAGGLE_USERNAME"
           test -n "$KAGGLE_API_TOKEN"
           python - <<'PY'
           import os
           from PIL import Image
-          p='assets/uks model image.png'
+          p='assets/singer_image.png'
           with Image.open(p) as im:
               print('IDENTITY_SOURCE=', p); print('IDENTITY_SIZE=', im.size)
               assert im.width >= 500 and im.height >= 500
@@ -97,7 +97,7 @@ jobs:
       - name: HARD visual identity + singing gate
         run: |
           set -euo pipefail
-          python -m app.visual_quality_gate output/master.mp4 'assets/uks model image.png' \
+          python -m app.visual_quality_gate output/master.mp4 'assets/singer_image.png' \
             --yunet qa_models/face_detection_yunet_2023mar.onnx \
             --sface qa_models/face_recognition_sface_2021dec.onnx \
             --report output/visual_qa.json
@@ -127,7 +127,7 @@ jobs:
         run: |
           set -euo pipefail
           for f in output/shorts/*.mp4; do
-            python -m app.visual_quality_gate "$f" 'assets/uks model image.png' \
+            python -m app.visual_quality_gate "$f" 'assets/singer_image.png' \
               --yunet qa_models/face_detection_yunet_2023mar.onnx \
               --sface qa_models/face_recognition_sface_2021dec.onnx \
               --report "${f%.mp4}.visual_qa.json"
