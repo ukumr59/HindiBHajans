@@ -1,0 +1,33 @@
+name: Modal Smoke Preflight
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MODAL_ENVIRONMENT: main
+  MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+  MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Modal
+        run: python -m pip install --upgrade modal
+      - name: Verify Modal app imports without GPU
+        run: |
+          set -euo pipefail
+          test -n "$MODAL_TOKEN_ID"
+          test -n "$MODAL_TOKEN_SECRET"
+          modal token info
+          modal environment list --json
+          python -m py_compile app/modal_echomimic_worker.py
+          echo MODAL_PREFLIGHT=PASS
