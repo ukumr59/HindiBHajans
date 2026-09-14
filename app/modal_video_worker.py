@@ -16,13 +16,28 @@ def first(p):
 def generate(image_bytes:bytes,audio_bytes:bytes,seconds:int=180)->bytes:
  if seconds<180 or seconds>300 or seconds%15: raise ValueError("seconds must be 180-300 and divisible by 15")
  r=Path(tempfile.mkdtemp(prefix="bhajan-video-")); ref=r/"singer.png"; audio=r/"bhajan.mp3"; ref.write_bytes(image_bytes); audio.write_bytes(audio_bytes)
- repo=r/"echomimic_v3"; run("git","clone","--depth","1","https://github.com/antgroup/echomimic_v3.git",repo); run("python","-m","pip","install","-q","-r",repo/"requirements.txt")
+ repo=r/"echomimic_v3"; run("git","clone","--depth","1","https://github.com/antgroup/echomimic_v3.git",repo); run("python","-m","pip","install","-q","-r",repo/"requirements.txt"); run("python","-m","pip","install","-q","transformers==4.48.3","diffusers==0.32.2")
  # T4-safe memory profile: offload before CUDA placement, then use smaller 65-frame/512x512 chunks.
  infer=repo/"infer_flash.py"; src=infer.read_text(); old='pipeline.to(device=device)'; count=src.count(old)
  if count != 2: raise RuntimeError(f"ECHOMIMIC_MEMORY_LAYOUT_CHANGED: expected 2 pipeline.to calls, found {count}")
- src=src.replace(old,'pipeline.enable_sequential_cpu_offload()',2); compile(src,str(infer),"exec"); infer.write_text(src)
+ src=src.replace(old,'pipeline.enable_sequential_cpu_offload()',2)
+ # Force the Wav2Vec path to return all hidden states even if the installed Transformers config defaults differ.
+ call_old='output_hidden_states=True)'; call_new='output_hidden_states=True, return_dict=True)'; call_count=src.count(call_old)
+ if call_count != 1: raise RuntimeError(f"ECHOMIMIC_WAV2VEC_CALL_LAYOUT_CHANGED: expected 1 audio encoder call, found {call_count}")
+ src=src.replace(call_old,call_new,1)
+ compile(src,str(infer),"exec"); infer.write_text(src)
+ wavsrc=repo/"src/wav2vec2.py"; w=wavsrc.read_text()
+ marker='self.config.output_attentions = False\n\n        output_hidden_states = ('
+ if marker not in w: raise RuntimeError("ECHOMIMIC_WAV2VEC_SOURCE_LAYOUT_CHANGED")
+ w=w.replace(marker,'self.config.output_attentions = False\n        self.config.output_hidden_states = True\n        self.config.return_dict = True\n\n        output_hidden_states = (',1)
+ marker2='self.config.output_attentions = True\n\n        output_hidden_states = ('
+ if marker2 not in w: raise RuntimeError("ECHOMIMIC_WAV2VEC_ENCODE_LAYOUT_CHANGED")
+ w=w.replace(marker2,'self.config.output_attentions = True\n        self.config.output_hidden_states = True\n        self.config.return_dict = True\n\n        output_hidden_states = (',1)
+ compile(w,str(wavsrc),"exec"); wavsrc.write_text(w)
  print("ECHOMIMIC_T4_MEMORY_PATCH=PASS sequential_cpu_offload",flush=True)
  print("ECHOMIMIC_T4_PROFILE=PASS frames=65 sample=512x512",flush=True)
+ print("ECHOMIMIC_RUNTIME_PIN=PASS transformers=4.48.3 diffusers=0.32.2",flush=True)
+ print("ECHOMIMIC_WAV2VEC_HIDDEN_STATES_PATCH=PASS",flush=True)
  from huggingface_hub import snapshot_download
  base=Path(MD)/"Wan2.1-Fun-V1.1-1.3B-InP"; wav=Path(MD)/"chinese-wav2vec2-base"; flash=Path(MD)/"echomimicv3-flash-pro"
  snapshot_download("alibaba-pai/Wan2.1-Fun-V1.1-1.3B-InP",local_dir=base); snapshot_download("TencentGameMate/chinese-wav2vec2-base",local_dir=wav); snapshot_download("BadToBest/EchoMimicV3",local_dir=flash,allow_patterns=["echomimicv3-flash-pro/*"]); VOL.commit()
