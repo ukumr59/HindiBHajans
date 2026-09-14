@@ -25,6 +25,12 @@ def generate(image_bytes:bytes,audio_bytes:bytes,seconds:int=180)->bytes:
  call_old='output_hidden_states=True)'; call_new='output_hidden_states=True, return_dict=True)'; call_count=src.count(call_old)
  if call_count != 1: raise RuntimeError(f"ECHOMIMIC_WAV2VEC_CALL_LAYOUT_CHANGED: expected 1 audio encoder call, found {call_count}")
  src=src.replace(call_old,call_new,1)
+ # The base Wan checkpoint intentionally lacks EchoMimic audio-injection parameters. The Flash checkpoint
+ # must supply them. Fail immediately if the Flash checkpoint does not fully load into the transformer.
+ load_old='m, u = transformer.load_state_dict(state_dict, strict=False)\nprint(f"missing keys: {len(m)}, unexpected keys: {len(u)}")'
+ load_new='m, u = transformer.load_state_dict(state_dict, strict=False)\nprint(f"ECHOMIMIC_FLASH_CHECKPOINT_LOAD: missing={len(m)} unexpected={len(u)}", flush=True)\nif m or u:\n    raise RuntimeError(f"ECHOMIMIC_FLASH_CHECKPOINT_INCOMPLETE: missing={len(m)} unexpected={len(u)}")'
+ if load_old not in src: raise RuntimeError("ECHOMIMIC_CHECKPOINT_LOAD_LAYOUT_CHANGED")
+ src=src.replace(load_old,load_new,1)
  compile(src,str(infer),"exec"); infer.write_text(src)
  wavsrc=repo/"src/wav2vec2.py"; w=wavsrc.read_text()
  marker='self.config.output_attentions = False\n\n        output_hidden_states = ('
@@ -38,6 +44,7 @@ def generate(image_bytes:bytes,audio_bytes:bytes,seconds:int=180)->bytes:
  print("ECHOMIMIC_T4_PROFILE=PASS frames=65 sample=512x512",flush=True)
  print("ECHOMIMIC_RUNTIME_PIN=PASS transformers=4.48.3 diffusers=0.32.2",flush=True)
  print("ECHOMIMIC_WAV2VEC_HIDDEN_STATES_PATCH=PASS",flush=True)
+ print("ECHOMIMIC_CHECKPOINT_COMPLETENESS_GUARD=PASS",flush=True)
  from huggingface_hub import snapshot_download
  base=Path(MD)/"Wan2.1-Fun-V1.1-1.3B-InP"; wav=Path(MD)/"chinese-wav2vec2-base"; flash=Path(MD)/"echomimicv3-flash-pro"
  snapshot_download("alibaba-pai/Wan2.1-Fun-V1.1-1.3B-InP",local_dir=base); snapshot_download("TencentGameMate/chinese-wav2vec2-base",local_dir=wav); snapshot_download("BadToBest/EchoMimicV3",local_dir=flash,allow_patterns=["echomimicv3-flash-pro/*"]); VOL.commit()
