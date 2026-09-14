@@ -1,5 +1,5 @@
 {
-  "workflow_run_id": "34767950143",
+  "workflow_run_id": "34805077459",
   "workflow": "bhajan-daily-production",
   "model": "EchoMimicV3-Flash",
   "gpu_provider": "Kaggle-free-T4",
@@ -9,6 +9,6 @@
   "audio_gpu_provider": "Kaggle-free-T4",
   "video_model": "EchoMimicV3-Flash",
   "video_gpu_provider": "Kaggle-free-T4",
-  "audio_backend": "KAGGLE_FREE_GPU",
-  "video_backend": "KAGGLE_ECHOMIMICV3_FLASH"
+  "audio_backend": "MODAL_FREE_T4",
+  "video_backend": "MODAL_FREE_T4_ECHOMIMICV3_FLASH"
 }
