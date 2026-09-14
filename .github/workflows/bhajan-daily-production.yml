@@ -40,6 +40,26 @@ jobs:
     timeout-minutes: 720
     steps:
       - uses: actions/checkout@v4
+      - name: CPU-only production worker integrity gate
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          python -m py_compile app/modal_audio_worker.py app/modal_video_worker.py app/visual_quality_gate.py
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('app/modal_video_worker.py')
+          s=p.read_text()
+          checks={
+            'sequential_cpu_offload': 'pipeline.enable_sequential_cpu_offload()' in s,
+            '65_frame_chunks': 'frames=65' in s and '"--video_length",frames' in s,
+            '512x512_profile': '"--sample_size","512","512"' in s,
+            'float16_echomimic': '"--weight_dtype","float16"' in s,
+          }
+          assert all(checks.values()), checks
+          print('PRODUCTION_WORKER_INTEGRITY=PASS')
+          for k,v in checks.items(): print(f'{k}={v}')
+          print(f'PRODUCTION_COMMIT={Path(".git/HEAD").read_text().strip()}')
+          PY
       - name: Install production tools
         run: |
           set -euo pipefail
