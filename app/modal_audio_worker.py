@@ -4,10 +4,7 @@ from pathlib import Path
 import modal
 
 app = modal.App("hindibhajans-audio")
-image = (
-    modal.Image.debian_slim(python_version="3.11")
-    .apt_install("git", "ffmpeg", "libsndfile1")
-)
+image = modal.Image.debian_slim(python_version="3.11").apt_install("git", "ffmpeg", "libsndfile1")
 
 LYRICS = """[Intro]
 श्री राम... श्री राम... जय जय राम...
@@ -48,6 +45,40 @@ def run(cmd, **kwargs):
     subprocess.run([str(x) for x in cmd], check=True, **kwargs)
 
 
+def patch_pre_ampere_dtype(repo: Path) -> None:
+    """Patch ACE-Step's actual pre-Ampere dtype selection before importing it."""
+    target = repo / "acestep/core/generation/handler/init_service_orchestrator.py"
+    text = target.read_text()
+    old = """        if gpu_config.cuda_supports_bfloat16():
+            self.dtype = torch.bfloat16
+        else:
+            self.dtype = torch.float16
+            logger.info(
+                \"[initialize_service] Pre-Ampere CUDA detected: \"
+                \"using float16 instead of bfloat16.\"
+            )
+"""
+    new = """        if gpu_config.cuda_supports_bfloat16():
+            self.dtype = torch.bfloat16
+        else:
+            # Tesla T4/Turing vocal generation is numerically unstable in FP16.
+            # Use FP32 for the DiT on pre-Ampere CUDA.
+            self.dtype = torch.float32
+            logger.info(
+                \"[initialize_service] Pre-Ampere CUDA detected: \"
+                \"using float32 for vocal-generation stability.\"
+            )
+"""
+    if old not in text:
+        raise RuntimeError("ACE_STEP_SOURCE_LAYOUT_CHANGED: dtype fallback block not found; refusing GPU generation")
+    target.write_text(text.replace(old, new, 1))
+    check = target.read_text()
+    if "self.dtype = torch.float32" not in check:
+        raise RuntimeError("ACE_STEP_T4_DTYPE_PATCH_FAILED")
+    run(["python", "-m", "py_compile", target])
+    print("ACE_STEP_T4_SOURCE_DTYPE_PATCH=PASS", flush=True)
+
+
 @app.function(image=image, gpu="T4", timeout=3600)
 def generate(seconds: int = 180) -> bytes:
     if seconds < 180 or seconds > 300 or seconds % 15:
@@ -56,13 +87,8 @@ def generate(seconds: int = 180) -> bytes:
     work = Path(tempfile.mkdtemp(prefix="bhajan-audio-"))
     repo = work / "ACE-Step-1.5"
     run(["git", "clone", "--depth", "1", "https://github.com/ACE-Step/ACE-Step-1.5.git", repo])
+    patch_pre_ampere_dtype(repo)
 
-    # ACE-Step 1.5 now declares nano-vllm as a local uv source. Plain pip
-    # cannot resolve that dependency and fails with "No matching distribution
-    # found for nano-vllm". We use the project's requirements for the Linux
-    # CUDA build, but deliberately omit flash-attn/triton because this worker
-    # uses the supported PyTorch ("pt") 5Hz-LM backend and does not need the
-    # nano-vLLM stack.
     requirements = repo / "modal-runtime-requirements.txt"
     lines = (repo / "requirements.txt").read_text().splitlines()
     filtered = []
@@ -73,21 +99,11 @@ def generate(seconds: int = 180) -> bytes:
         filtered.append(line)
     requirements.write_text("\n".join(filtered) + "\n")
     run(["python", "-m", "pip", "install", "-q", "-r", requirements])
-    # Install the ACE-Step package itself without dependency resolution; the
-    # dependency set above is already installed and nano-vllm is intentionally
-    # not required for backend="pt".
     run(["python", "-m", "pip", "install", "-q", "--no-deps", "-e", repo])
 
     os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
     os.environ["ACESTEP_SAVE_MEMORY"] = "1"
-    # Tesla T4 is Turing (compute capability 7.5), so it has no native BF16.
-    # ACE-Step's normal pre-Ampere path selects FP16, but vocal/lyrics
-    # conditioning can overflow there and produce NaN latents. The upstream
-    # error explicitly recommends FP32 for this case. Set the documented
-    # override and also enforce it on the loaded DiT because some ACE-Step
-    # revisions did not actually consume the environment variable.
     os.environ["ACESTEP_DTYPE"] = "float32"
-
     import sys
     sys.path.insert(0, str(repo))
     import torch
@@ -100,9 +116,9 @@ def generate(seconds: int = 180) -> bytes:
         raise RuntimeError("MODAL_AUDIO_NO_CUDA")
 
     capability = torch.cuda.get_device_capability(0)
+    print(f"ACE_STEP_GPU={torch.cuda.get_device_name(0)} COMPUTE_CAPABILITY={capability}", flush=True)
     if capability[0] < 8:
-        print(f"ACE_STEP_GPU={torch.cuda.get_device_name(0)} COMPUTE_CAPABILITY={capability}", flush=True)
-        print("ACE_STEP_DTYPE_POLICY=T4_FLOAT32_FOR_VOCAL_STABILITY", flush=True)
+        print("ACE_STEP_DTYPE_POLICY=T4_FLOAT32_SOURCE_PATCH", flush=True)
 
     dit = AceStepHandler()
     dit.initialize_service(
@@ -112,17 +128,12 @@ def generate(seconds: int = 180) -> bytes:
         offload_to_cpu=True,
     )
 
-    # ACE-Step revisions prior to the dtype-override fix can still leave the
-    # DiT at float16 even when ACESTEP_DTYPE=float32 is exported. Explicitly
-    # promote the DiT on Turing GPUs before the first vocal diffusion pass.
     if capability[0] < 8:
-        dit.dtype = torch.float32
-        if getattr(dit, "model", None) is not None:
-            dit.model.to(dtype=torch.float32)
         actual_dtype = next(dit.model.parameters()).dtype if getattr(dit, "model", None) is not None else None
         print(f"ACE_STEP_DIT_DTYPE={actual_dtype}", flush=True)
         if actual_dtype != torch.float32:
             raise RuntimeError(f"MODAL_AUDIO_DTYPE_POLICY_FAILED: expected float32 DiT, got {actual_dtype}")
+        print("ACE_STEP_T4_DTYPE_ASSERT=PASS", flush=True)
 
     llm = LLMHandler()
     llm.initialize(
@@ -133,35 +144,17 @@ def generate(seconds: int = 180) -> bytes:
     )
 
     params = GenerationParams(
-        task_type="text2music",
-        caption=PROMPT,
-        lyrics=LYRICS,
-        bpm=128,
-        keyscale="C Major",
-        timesignature="4/4",
-        vocal_language="hi",
-        duration=float(seconds),
-        thinking=False,
-        use_cot_metas=False,
-        use_cot_caption=False,
-        use_cot_language=False,
-        use_constrained_decoding=True,
-        inference_steps=8,
-        guidance_scale=1.0,
-        seed=-1,
-        shift=3.0,
-        infer_method="ode",
-        sampler_mode="euler",
-        dcw_enabled=True,
-        dcw_mode="double",
-        dcw_scaler=0.05,
-        dcw_high_scaler=0.02,
-        dcw_wavelet="haar",
+        task_type="text2music", caption=PROMPT, lyrics=LYRICS, bpm=128,
+        keyscale="C Major", timesignature="4/4", vocal_language="hi",
+        duration=float(seconds), thinking=False, use_cot_metas=False,
+        use_cot_caption=False, use_cot_language=False,
+        use_constrained_decoding=True, inference_steps=8, guidance_scale=1.0,
+        seed=-1, shift=3.0, infer_method="ode", sampler_mode="euler",
+        dcw_enabled=True, dcw_mode="double", dcw_scaler=0.05,
+        dcw_high_scaler=0.02, dcw_wavelet="haar",
     )
     result = generate_music(
-        dit_handler=dit,
-        llm_handler=llm,
-        params=params,
+        dit_handler=dit, llm_handler=llm, params=params,
         config=GenerationConfig(batch_size=1, use_random_seed=True, audio_format="wav"),
         save_dir=str(work / "out"),
     )
@@ -170,11 +163,9 @@ def generate(seconds: int = 180) -> bytes:
 
     source = Path(result.audios[0]["path"])
     out = work / "bhajan_source.mp3"
-    run([
-        "ffmpeg", "-y", "-v", "error", "-i", source,
-        "-af", "loudnorm=I=-9:TP=-1.0:LRA=7",
-        "-ar", "48000", "-ac", "2", "-c:a", "libmp3lame", "-b:a", "320k", out,
-    ])
+    run(["ffmpeg", "-y", "-v", "error", "-i", source,
+         "-af", "loudnorm=I=-9:TP=-1.0:LRA=7", "-ar", "48000", "-ac", "2",
+         "-c:a", "libmp3lame", "-b:a", "320k", out])
     return out.read_bytes()
 
 
