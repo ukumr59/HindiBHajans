@@ -1,0 +1,174 @@
+name: Bhajan Aabha — Daily Production (Real Singer GPU)
+
+on:
+  schedule:
+    - cron: '30 22 * * *'
+      timezone: 'Asia/Kolkata'
+  workflow_dispatch:
+    inputs:
+      video_seconds:
+        description: 'Master duration (180-300 seconds, divisible by 15)'
+        required: false
+        default: '180'
+        type: string
+      publish:
+        description: 'Publish to YouTube, Facebook and Instagram'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+concurrency:
+  group: bhajan-daily-production
+  cancel-in-progress: false
+
+env:
+  VIDEO_SECONDS: ${{ inputs.video_seconds || '180' }}
+  MODAL_ENVIRONMENT: main
+  MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+  MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+  YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+  YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+  YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+  META_PAGE_ID: ${{ secrets.META_PAGE_ID }}
+  META_PAGE_ACCESS_TOKEN: ${{ secrets.META_PAGE_ACCESS_TOKEN }}
+  META_IG_USER_ID: ${{ secrets.META_IG_USER_ID }}
+  META_IG_ACCESS_TOKEN: ${{ secrets.META_IG_ACCESS_TOKEN }}
+  META_GRAPH_VERSION: ${{ vars.META_GRAPH_VERSION || 'v23.0' }}
+
+jobs:
+  produce-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 720
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install production tools
+        run: |
+          set -euo pipefail
+          python -m pip install -q --upgrade pip
+          python -m pip install -q modal requests pillow google-api-python-client google-auth-oauthlib opencv-python-headless numpy
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+      - name: Download pinned visual-QA models
+        run: |
+          set -euo pipefail
+          mkdir -p qa_models
+          curl -L --fail --retry 3 -o qa_models/face_detection_yunet_2023mar.onnx https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx
+          curl -L --fail --retry 3 -o qa_models/face_recognition_sface_2021dec.onnx https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx
+          test "$(stat -c%s qa_models/face_detection_yunet_2023mar.onnx)" -gt 100000
+          test "$(stat -c%s qa_models/face_recognition_sface_2021dec.onnx)" -gt 10000000
+      - name: Hard identity and zero-cost gates
+        run: |
+          set -euo pipefail
+          test -s assets/singer_image.png
+          test -n "$MODAL_TOKEN_ID"
+          test -n "$MODAL_TOKEN_SECRET"
+          modal token info
+          python - <<'PY'
+          import os
+          from PIL import Image
+          with Image.open('assets/singer_image.png') as im:
+              assert im.width >= 500 and im.height >= 500
+              print('IDENTITY_SOURCE=assets/singer_image.png', 'IDENTITY_SIZE=', im.size)
+          s=int(os.environ.get('VIDEO_SECONDS','180'))
+          assert 180 <= s <= 300 and s % 15 == 0
+          print('AUDIO_MODEL=ACE-Step-v1.5-turbo')
+          print('VIDEO_MODEL=EchoMimicV3-Flash')
+          print('GPU_BACKEND=MODAL_FREE_CREDIT')
+          print('IDENTITY_POLICY=LOCKED_REFERENCE')
+          print('PERFORMANCE_POLICY=REAL_AUDIO_DRIVEN_SINGING')
+          print('CPU_STATIC_IMAGE_FALLBACK=FORBIDDEN')
+          print('HOSTED_SYNCHRONOUS_AUDIO_API=DISABLED')
+          print('KAGGLE=DISABLED')
+          print('HUGGINGFACE_ZEROGPU=DISABLED')
+          print('PAID_FALLBACK=FORBIDDEN')
+          PY
+      - name: Generate Hindi bhajan audio on Modal GPU
+        run: modal run app/modal_audio_worker.py --seconds "$VIDEO_SECONDS"
+      - name: Generate real singer video on Modal GPU
+        run: modal run app/modal_video_worker.py --seconds "$VIDEO_SECONDS"
+      - name: HARD visual identity + singing gate
+        run: |
+          set -euo pipefail
+          python -m app.visual_quality_gate output/master.mp4 assets/singer_image.png --yunet qa_models/face_detection_yunet_2023mar.onnx --sface qa_models/face_recognition_sface_2021dec.onnx --report output/visual_qa.json
+      - name: Final master gate
+        run: |
+          set -euo pipefail
+          test -s output/master.mp4
+          ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of csv=p=0 output/master.mp4 | grep -q .
+          ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 output/master.mp4 | grep -q .
+          DUR=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 output/master.mp4)
+          python - <<PY
+          d=float('$DUR'); target=int('$VIDEO_SECONDS'); assert d >= target*0.95, (d,target); print(f'MASTER_GATE=PASS duration={d:.2f}s')
+          PY
+      - name: Generate Shorts from approved master
+        run: |
+          set -euo pipefail
+          rm -rf output/shorts; mkdir -p output/shorts
+          for n in 0 1 2; do
+            start=$((n * 45))
+            ffmpeg -y -v error -ss "$start" -i output/master.mp4 -t 45 -filter_complex "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,gblur=sigma=20[bg];[0:v]scale=1080:-2:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2[v]" -map "[v]" -map 0:a:0 -c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart "output/shorts/short-$((n+1)).mp4"
+          done
+      - name: HARD visual gate on every Short
+        run: |
+          set -euo pipefail
+          for f in output/shorts/*.mp4; do python -m app.visual_quality_gate "$f" assets/singer_image.png --yunet qa_models/face_detection_yunet_2023mar.onnx --sface qa_models/face_recognition_sface_2021dec.onnx --report "${f%.mp4}.visual_qa.json"; done
+      - name: Final media gate
+        run: |
+          set -euo pipefail
+          for f in output/master.mp4 output/shorts/*.mp4; do test -s "$f"; ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of csv=p=0 "$f" | grep -q .; ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$f" | grep -q .; done
+          echo FINAL_MEDIA_GATE=PASS
+      - name: Upload production files for QA and download
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bhajan-aabha-production-${{ github.run_id }}
+          path: |
+            output/master.mp4
+            output/bhajan_source.mp3
+            output/shorts/*.mp4
+            output/visual_qa.json
+            output/shorts/*.visual_qa.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Create public release assets
+        if: ${{ inputs.publish != false }}
+        env: { GH_TOKEN: '${{ github.token }}' }
+        run: |
+          set -euo pipefail
+          TAG="bhajan-${GITHUB_RUN_ID}"
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Bhajan Aabha ${TAG}" --notes "Approved real-singer master + derived Shorts. Audio/video generated on Modal; publication is blocked unless visual identity/singing QA passes." output/master.mp4 output/shorts/*.mp4
+          echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
+      - name: Publish YouTube
+        if: ${{ inputs.publish != false }}
+        env: { OUTPUT_DIR: output, YOUTUBE_PRIVACY_STATUS: public }
+        run: python -u -m app.youtube_publisher_seo output/master.mp4
+      - name: Publish Facebook + Instagram independently
+        if: ${{ inputs.publish != false }}
+        run: |
+          set -euo pipefail
+          SHORT_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/short-1.mp4"
+          python -u -m app.meta_publisher --video output/shorts/short-1.mp4 --instagram-url "$SHORT_URL"
+      - name: Persist production state
+        if: always()
+        run: |
+          mkdir -p state
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          p=Path('state/current.json'); d=json.loads(p.read_text()) if p.exists() else {}
+          d.update({'workflow_run_id':os.environ['GITHUB_RUN_ID'],'workflow':'bhajan-daily-production','audio_model':'ACE-Step-v1.5-turbo','audio_backend':'MODAL_L4','video_backend':'MODAL_L4_ECHOMIMICV3_FLASH','video_model':'EchoMimicV3-Flash','shorts':3,'publishing':'youtube+facebook+instagram' if os.environ.get('RELEASE_TAG') else 'not_run'})
+          p.write_text(json.dumps(d,ensure_ascii=False,indent=2))
+          PY
+          git config user.name github-actions[bot]; git config user.email 41898282+github-actions[bot]@users.noreply.github.com; git add state/current.json; git diff --cached --quiet || git commit -m 'Record latest Bhajan Aabha production state'; git push
+      - name: Production summary
+        if: always()
+        run: |
+          echo BHAJAN_AABHA_DAILY_PIPELINE_COMPLETE
+          echo AUDIO_BACKEND=MODAL_L4
+          echo VIDEO_BACKEND=MODAL_L4_ECHOMIMICV3_FLASH
+          echo SHORTS=3
+          echo ZERO_PAID_FALLBACK=TRUE
+          echo CPU_STATIC_IMAGE_FALLBACK=FORBIDDEN
+          echo HARD_VISUAL_QA=TRUE
