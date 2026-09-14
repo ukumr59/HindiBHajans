@@ -54,11 +54,13 @@ jobs:
             '65_frame_chunks': 'frames=65' in s and '"--video_length",frames' in s,
             '512x512_profile': '"--sample_size","512","512"' in s,
             'float16_echomimic': '"--weight_dtype","float16"' in s,
+            'transformers_pin': 'transformers==4.48.3' in s,
+            'diffusers_pin': 'diffusers==0.32.2' in s,
+            'wav2vec_patch': 'ECHOMIMIC_WAV2VEC_HIDDEN_STATES_PATCH=PASS' in s,
           }
           assert all(checks.values()), checks
           print('PRODUCTION_WORKER_INTEGRITY=PASS')
           for k,v in checks.items(): print(f'{k}={v}')
-          print(f'PRODUCTION_COMMIT={Path(".git/HEAD").read_text().strip()}')
           PY
       - name: Install production tools
         run: |
@@ -117,6 +119,8 @@ jobs:
           assert 'enable_sequential_cpu_offload()' in worker, 'PRODUCTION_WORKER_MEMORY_PATCH_MISSING'
           assert 'frames=65' in worker and '"--video_length",frames' in worker, 'PRODUCTION_WORKER_CHUNK_PROFILE_MISSING'
           assert '"--sample_size","512","512"' in worker, 'PRODUCTION_WORKER_RESOLUTION_PROFILE_MISSING'
+          assert 'transformers==4.48.3' in worker and 'diffusers==0.32.2' in worker, 'PRODUCTION_WORKER_RUNTIME_PIN_MISSING'
+          assert 'output_hidden_states=True, return_dict=True' in worker, 'PRODUCTION_WORKER_WAV2VEC_PATCH_MISSING'
           p=Path('/tmp/echomimic_v3_preflight/infer_flash.py')
           text=p.read_text(); old='pipeline.to(device=device)'; count=text.count(old)
           assert count == 2, f'ECHOMIMIC_MEMORY_LAYOUT_CHANGED: expected 2 pipeline.to calls, found {count}'
@@ -126,6 +130,8 @@ jobs:
           expected='echomimicv3-flash-pro/diffusion_pytorch_model.safetensors'; assert expected in paths, f'ECHOMIMIC_FLASH_CHECKPOINT_LAYOUT_CHANGED: {expected}'
           print('ECHOMIMIC_MEMORY_PREFLIGHT=PASS sequential_cpu_offload')
           print('ECHOMIMIC_T4_PROFILE_PREFLIGHT=PASS frames=65 sample=512x512')
+          print('ECHOMIMIC_RUNTIME_PREFLIGHT=PASS transformers=4.48.3 diffusers=0.32.2')
+          print('ECHOMIMIC_WAV2VEC_PREFLIGHT=PASS')
           print('ECHOMIMIC_FLASH_CHECKPOINT_PREFLIGHT=PASS')
           PY
       - name: Generate Hindi bhajan audio on Modal free T4
