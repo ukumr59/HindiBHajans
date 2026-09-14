@@ -68,6 +68,23 @@ jobs:
           s=int(os.environ.get('VIDEO_SECONDS','180')); assert 180 <= s <= 300 and s % 15 == 0
           print('AUDIO_MODEL=ACE-Step-v1.5-turbo'); print('VIDEO_MODEL=EchoMimicV3-Flash'); print('GPU_BACKEND=MODAL_FREE_T4'); print('IDENTITY_POLICY=LOCKED_REFERENCE'); print('PERFORMANCE_POLICY=REAL_AUDIO_DRIVEN_SINGING'); print('CPU_STATIC_IMAGE_FALLBACK=FORBIDDEN'); print('KAGGLE=DISABLED'); print('HUGGINGFACE_ZEROGPU=DISABLED'); print('PAID_FALLBACK=FORBIDDEN')
           PY
+      - name: CPU-only ACE-Step T4 source compatibility preflight
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/ACE-Step-1.5
+          git clone --depth 1 https://github.com/ACE-Step/ACE-Step-1.5.git /tmp/ACE-Step-1.5
+          python - <<'PY'
+          import re
+          from pathlib import Path
+          p=Path('/tmp/ACE-Step-1.5/acestep/core/generation/handler/init_service_orchestrator.py')
+          text=p.read_text()
+          pattern=re.compile(r'(if\s+gpu_config\.cuda_supports_bfloat16\(\):\s*self\.dtype\s*=\s*torch\.bfloat16\s*else:\s*)self\.dtype\s*=\s*torch\.float16', re.MULTILINE)
+          patched,count=pattern.subn(r'\1self.dtype = torch.float32',text,count=1)
+          assert count == 1, 'ACE_STEP_SOURCE_LAYOUT_CHANGED: T4 dtype fallback not patchable'
+          compile(patched,str(p),'exec')
+          assert 'self.dtype = torch.float32' in patched
+          print('ACE_STEP_T4_SOURCE_PREFLIGHT=PASS')
+          PY
       - name: Generate Hindi bhajan audio on Modal free T4
         run: modal run app/modal_audio_worker.py --seconds "$VIDEO_SECONDS"
       - name: Generate real singer video on Modal free T4
@@ -129,5 +146,4 @@ jobs:
           from pathlib import Path
           p=Path('state/current.json'); d=json.loads(p.read_text()) if p.exists() else {}
           d.update({'workflow_run_id':os.environ['GITHUB_RUN_ID'],'workflow':'bhajan-daily-production','audio_model':'ACE-Step-v1.5-turbo','audio_backend':'MODAL_FREE_T4','video_backend':'MODAL_FREE_T4_ECHOMIMICV3_FLASH','video_model':'EchoMimicV3-Flash','shorts':3,'publishing':'youtube+facebook+instagram' if os.environ.get('RELEASE_TAG') else 'not_run'}); p.write_text(json.dumps(d,ensure_ascii=False,indent=2))
-          PY
           git config user.name github-actions[bot]; git config user.email 41898282+github-actions[bot]@users.noreply.github.com; git add state/current.json; git diff --cached --quiet || git commit -m 'Record latest Bhajan Aabha production state'; git push
