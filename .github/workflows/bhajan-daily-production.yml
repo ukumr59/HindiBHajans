@@ -93,20 +93,19 @@ jobs:
           python - <<'PY'
           import requests
           from pathlib import Path
+          worker=Path('app/modal_video_worker.py').read_text()
+          assert 'enable_sequential_cpu_offload()' in worker, 'PRODUCTION_WORKER_MEMORY_PATCH_MISSING'
+          assert 'frames=65' in worker and '"--video_length",frames' in worker, 'PRODUCTION_WORKER_CHUNK_PROFILE_MISSING'
+          assert '"--sample_size","512","512"' in worker, 'PRODUCTION_WORKER_RESOLUTION_PROFILE_MISSING'
           p=Path('/tmp/echomimic_v3_preflight/infer_flash.py')
-          text=p.read_text()
-          old='pipeline.to(device=device)'
-          count=text.count(old)
+          text=p.read_text(); old='pipeline.to(device=device)'; count=text.count(old)
           assert count == 2, f'ECHOMIMIC_MEMORY_LAYOUT_CHANGED: expected 2 pipeline.to calls, found {count}'
-          patched=text.replace(old,'pipeline.enable_sequential_cpu_offload()',2)
-          compile(patched,str(p),'exec')
-          assert 'pipeline.enable_sequential_cpu_offload()' in patched
+          patched=text.replace(old,'pipeline.enable_sequential_cpu_offload()',2); compile(patched,str(p),'exec')
           url='https://huggingface.co/api/models/BadToBest/EchoMimicV3/tree/main/echomimicv3-flash-pro?recursive=false'
-          r=requests.get(url,timeout=30); r.raise_for_status()
-          entries=r.json(); paths={x.get('path') for x in entries if x.get('type')=='file'}
-          expected='echomimicv3-flash-pro/diffusion_pytorch_model.safetensors'
-          assert expected in paths, f'ECHOMIMIC_FLASH_CHECKPOINT_LAYOUT_CHANGED: {expected}'
+          r=requests.get(url,timeout=30); r.raise_for_status(); entries=r.json(); paths={x.get('path') for x in entries if x.get('type')=='file'}
+          expected='echomimicv3-flash-pro/diffusion_pytorch_model.safetensors'; assert expected in paths, f'ECHOMIMIC_FLASH_CHECKPOINT_LAYOUT_CHANGED: {expected}'
           print('ECHOMIMIC_MEMORY_PREFLIGHT=PASS sequential_cpu_offload')
+          print('ECHOMIMIC_T4_PROFILE_PREFLIGHT=PASS frames=65 sample=512x512')
           print('ECHOMIMIC_FLASH_CHECKPOINT_PREFLIGHT=PASS')
           PY
       - name: Generate Hindi bhajan audio on Modal free T4
