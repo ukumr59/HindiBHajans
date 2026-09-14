@@ -85,6 +85,19 @@ jobs:
           assert 'self.dtype = torch.float32' in patched
           print('ACE_STEP_T4_SOURCE_PREFLIGHT=PASS')
           PY
+      - name: CPU-only EchoMimicV3 Flash checkpoint preflight
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import requests
+          url='https://huggingface.co/api/models/BadToBest/EchoMimicV3/tree/main/echomimicv3-flash-pro?recursive=false'
+          r=requests.get(url,timeout=30); r.raise_for_status()
+          entries=r.json()
+          paths={x.get('path') for x in entries if x.get('type')=='file'}
+          expected='echomimicv3-flash-pro/diffusion_pytorch_model.safetensors'
+          assert expected in paths, f'ECHOMIMIC_FLASH_CHECKPOINT_LAYOUT_CHANGED: {expected}'
+          print('ECHOMIMIC_FLASH_CHECKPOINT_PREFLIGHT=PASS')
+          PY
       - name: Generate Hindi bhajan audio on Modal free T4
         run: modal run app/modal_audio_worker.py --seconds "$VIDEO_SECONDS"
       - name: Generate real singer video on Modal free T4
@@ -97,12 +110,14 @@ jobs:
           test -s output/master.mp4
           ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of csv=p=0 output/master.mp4 | grep -q .
           ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 output/master.mp4 | grep -q .
-          DUR=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 output/master.mp4); python - <<PY
+          DUR=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 output/master.mp4)
+          python - <<PY
           d=float('$DUR'); target=int('$VIDEO_SECONDS'); assert d >= target*0.95, (d,target); print(f'MASTER_GATE=PASS duration={d:.2f}s')
           PY
       - name: Generate Shorts from approved master
         run: |
-          set -euo pipefail; rm -rf output/shorts; mkdir -p output/shorts
+          set -euo pipefail
+          rm -rf output/shorts; mkdir -p output/shorts
           for n in 0 1 2; do start=$((n*45)); ffmpeg -y -v error -ss "$start" -i output/master.mp4 -t 45 -filter_complex "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,gblur=sigma=20[bg];[0:v]scale=1080:-2:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2[v]" -map "[v]" -map 0:a:0 -c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart "output/shorts/short-$((n+1)).mp4"; done
       - name: HARD visual gate on every Short
         run: |
@@ -129,7 +144,10 @@ jobs:
         if: ${{ inputs.publish != false }}
         env: { GH_TOKEN: '${{ github.token }}' }
         run: |
-          set -euo pipefail; TAG="bhajan-${GITHUB_RUN_ID}"; gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Bhajan Aabha ${TAG}" --notes "Approved real-singer master + Shorts. Modal free T4 only; visual QA is mandatory." output/master.mp4 output/shorts/*.mp4; echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
+          set -euo pipefail
+          TAG="bhajan-${GITHUB_RUN_ID}"
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Bhajan Aabha ${TAG}" --notes "Approved real-singer master + Shorts. Modal free T4 only; visual QA is mandatory." output/master.mp4 output/shorts/*.mp4
+          echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
       - name: Publish YouTube
         if: ${{ inputs.publish != false }}
         env: { OUTPUT_DIR: output, YOUTUBE_PRIVACY_STATUS: public }
@@ -137,13 +155,24 @@ jobs:
       - name: Publish Facebook + Instagram independently
         if: ${{ inputs.publish != false }}
         run: |
-          set -euo pipefail; SHORT_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/short-1.mp4"; python -u -m app.meta_publisher --video output/shorts/short-1.mp4 --instagram-url "$SHORT_URL"
+          set -euo pipefail
+          SHORT_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/short-1.mp4"
+          python -u -m app.meta_publisher --video output/shorts/short-1.mp4 --instagram-url "$SHORT_URL"
       - name: Persist production state
         if: always()
         run: |
-          mkdir -p state; python - <<'PY'
+          set -euo pipefail
+          mkdir -p state
+          python - <<'PY'
           import json,os
           from pathlib import Path
-          p=Path('state/current.json'); d=json.loads(p.read_text()) if p.exists() else {}
-          d.update({'workflow_run_id':os.environ['GITHUB_RUN_ID'],'workflow':'bhajan-daily-production','audio_model':'ACE-Step-v1.5-turbo','audio_backend':'MODAL_FREE_T4','video_backend':'MODAL_FREE_T4_ECHOMIMICV3_FLASH','video_model':'EchoMimicV3-Flash','shorts':3,'publishing':'youtube+facebook+instagram' if os.environ.get('RELEASE_TAG') else 'not_run'}); p.write_text(json.dumps(d,ensure_ascii=False,indent=2))
-          git config user.name github-actions[bot]; git config user.email 41898282+github-actions[bot]@users.noreply.github.com; git add state/current.json; git diff --cached --quiet || git commit -m 'Record latest Bhajan Aabha production state'; git push
+          p=Path('state/current.json')
+          d=json.loads(p.read_text()) if p.exists() else {}
+          d.update({'workflow_run_id':os.environ['GITHUB_RUN_ID'],'workflow':'bhajan-daily-production','audio_model':'ACE-Step-v1.5-turbo','audio_backend':'MODAL_FREE_T4','video_backend':'MODAL_FREE_T4_ECHOMIMICV3_FLASH','video_model':'EchoMimicV3-Flash','shorts':3,'publishing':'youtube+facebook+instagram' if os.environ.get('RELEASE_TAG') else 'not_run'})
+          p.write_text(json.dumps(d,ensure_ascii=False,indent=2))
+          PY
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add state/current.json
+          git diff --cached --quiet || git commit -m 'Record latest Bhajan Aabha production state'
+          git push
