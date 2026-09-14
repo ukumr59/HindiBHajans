@@ -57,6 +57,7 @@ jobs:
             'transformers_pin': 'transformers==4.48.3' in s,
             'diffusers_pin': 'diffusers==0.32.2' in s,
             'wav2vec_patch': 'ECHOMIMIC_WAV2VEC_HIDDEN_STATES_PATCH=PASS' in s,
+            'checkpoint_completeness_guard': 'ECHOMIMIC_FLASH_CHECKPOINT_INCOMPLETE' in s and 'strict=False' in s,
           }
           assert all(checks.values()), checks
           print('PRODUCTION_WORKER_INTEGRITY=PASS')
@@ -121,6 +122,7 @@ jobs:
           assert '"--sample_size","512","512"' in worker, 'PRODUCTION_WORKER_RESOLUTION_PROFILE_MISSING'
           assert 'transformers==4.48.3' in worker and 'diffusers==0.32.2' in worker, 'PRODUCTION_WORKER_RUNTIME_PIN_MISSING'
           assert 'output_hidden_states=True, return_dict=True' in worker, 'PRODUCTION_WORKER_WAV2VEC_PATCH_MISSING'
+          assert 'ECHOMIMIC_FLASH_CHECKPOINT_INCOMPLETE' in worker, 'PRODUCTION_WORKER_CHECKPOINT_GUARD_MISSING'
           p=Path('/tmp/echomimic_v3_preflight/infer_flash.py')
           text=p.read_text(); old='pipeline.to(device=device)'; count=text.count(old)
           assert count == 2, f'ECHOMIMIC_MEMORY_LAYOUT_CHANGED: expected 2 pipeline.to calls, found {count}'
@@ -132,6 +134,7 @@ jobs:
           print('ECHOMIMIC_T4_PROFILE_PREFLIGHT=PASS frames=65 sample=512x512')
           print('ECHOMIMIC_RUNTIME_PREFLIGHT=PASS transformers=4.48.3 diffusers=0.32.2')
           print('ECHOMIMIC_WAV2VEC_PREFLIGHT=PASS')
+          print('ECHOMIMIC_CHECKPOINT_GUARD_PREFLIGHT=PASS')
           print('ECHOMIMIC_FLASH_CHECKPOINT_PREFLIGHT=PASS')
           PY
       - name: Generate Hindi bhajan audio on Modal free T4
