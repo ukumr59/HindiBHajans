@@ -1,5 +1,5 @@
 from __future__ import annotations
-import os, subprocess, tempfile
+import os, re, subprocess, tempfile
 from pathlib import Path
 import modal
 
@@ -49,29 +49,18 @@ def patch_pre_ampere_dtype(repo: Path) -> None:
     """Patch ACE-Step's actual pre-Ampere dtype selection before importing it."""
     target = repo / "acestep/core/generation/handler/init_service_orchestrator.py"
     text = target.read_text()
-    old = """        if gpu_config.cuda_supports_bfloat16():
-            self.dtype = torch.bfloat16
-        else:
-            self.dtype = torch.float16
-            logger.info(
-                \"[initialize_service] Pre-Ampere CUDA detected: \"
-                \"using float16 instead of bfloat16.\"
-            )
-"""
-    new = """        if gpu_config.cuda_supports_bfloat16():
-            self.dtype = torch.bfloat16
-        else:
-            # Tesla T4/Turing vocal generation is numerically unstable in FP16.
-            # Use FP32 for the DiT on pre-Ampere CUDA.
-            self.dtype = torch.float32
-            logger.info(
-                \"[initialize_service] Pre-Ampere CUDA detected: \"
-                \"using float32 for vocal-generation stability.\"
-            )
-"""
-    if old not in text:
-        raise RuntimeError("ACE_STEP_SOURCE_LAYOUT_CHANGED: dtype fallback block not found; refusing GPU generation")
-    target.write_text(text.replace(old, new, 1))
+    pattern = re.compile(
+        r"(if\s+gpu_config\.cuda_supports_bfloat16\(\):\s*"
+        r"self\.dtype\s*=\s*torch\.bfloat16\s*"
+        r"else:\s*)self\.dtype\s*=\s*torch\.float16",
+        re.MULTILINE,
+    )
+    patched, count = pattern.subn(r"\1self.dtype = torch.float32", text, count=1)
+    if count != 1:
+        raise RuntimeError(
+            "ACE_STEP_SOURCE_LAYOUT_CHANGED: could not locate pre-Ampere dtype fallback; refusing GPU generation"
+        )
+    target.write_text(patched)
     check = target.read_text()
     if "self.dtype = torch.float32" not in check:
         raise RuntimeError("ACE_STEP_T4_DTYPE_PATCH_FAILED")
