@@ -12,7 +12,7 @@ def first(p):
  x=sorted(Path(p).rglob("*.mp4"),key=lambda q:q.stat().st_mtime,reverse=True)
  if not x: raise RuntimeError("ECHOMIMIC_RETURNED_NO_MP4")
  return x[0]
-@app.function(image=image,gpu="L4",timeout=7200,volumes={MD:VOL},env={"HF_HOME":f"{MD}/hf"})
+@app.function(image=image,gpu="T4",timeout=7200,volumes={MD:VOL},env={"HF_HOME":f"{MD}/hf"})
 def generate(image_bytes:bytes,audio_bytes:bytes,seconds:int=180)->bytes:
  if seconds<180 or seconds>300 or seconds%15: raise ValueError("seconds must be 180-300 and divisible by 15")
  r=Path(tempfile.mkdtemp(prefix="bhajan-video-")); ref=r/"singer.png"; audio=r/"bhajan.mp3"; ref.write_bytes(image_bytes); audio.write_bytes(audio_bytes)
