@@ -85,17 +85,28 @@ jobs:
           assert 'self.dtype = torch.float32' in patched
           print('ACE_STEP_T4_SOURCE_PREFLIGHT=PASS')
           PY
-      - name: CPU-only EchoMimicV3 Flash checkpoint preflight
+      - name: CPU-only EchoMimicV3 Flash compatibility preflight
         run: |
           set -euo pipefail
+          rm -rf /tmp/echomimic_v3_preflight
+          git clone --depth 1 https://github.com/antgroup/echomimic_v3.git /tmp/echomimic_v3_preflight
           python - <<'PY'
           import requests
+          from pathlib import Path
+          p=Path('/tmp/echomimic_v3_preflight/infer_flash.py')
+          text=p.read_text()
+          old='pipeline.to(device=device)'
+          count=text.count(old)
+          assert count == 2, f'ECHOMIMIC_MEMORY_LAYOUT_CHANGED: expected 2 pipeline.to calls, found {count}'
+          patched=text.replace(old,'pipeline.enable_sequential_cpu_offload()',2)
+          compile(patched,str(p),'exec')
+          assert 'pipeline.enable_sequential_cpu_offload()' in patched
           url='https://huggingface.co/api/models/BadToBest/EchoMimicV3/tree/main/echomimicv3-flash-pro?recursive=false'
           r=requests.get(url,timeout=30); r.raise_for_status()
-          entries=r.json()
-          paths={x.get('path') for x in entries if x.get('type')=='file'}
+          entries=r.json(); paths={x.get('path') for x in entries if x.get('type')=='file'}
           expected='echomimicv3-flash-pro/diffusion_pytorch_model.safetensors'
           assert expected in paths, f'ECHOMIMIC_FLASH_CHECKPOINT_LAYOUT_CHANGED: {expected}'
+          print('ECHOMIMIC_MEMORY_PREFLIGHT=PASS sequential_cpu_offload')
           print('ECHOMIMIC_FLASH_CHECKPOINT_PREFLIGHT=PASS')
           PY
       - name: Generate Hindi bhajan audio on Modal free T4
