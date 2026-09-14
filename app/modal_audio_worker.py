@@ -80,6 +80,14 @@ def generate(seconds: int = 180) -> bytes:
 
     os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
     os.environ["ACESTEP_SAVE_MEMORY"] = "1"
+    # Tesla T4 is Turing (compute capability 7.5), so it has no native BF16.
+    # ACE-Step's normal pre-Ampere path selects FP16, but vocal/lyrics
+    # conditioning can overflow there and produce NaN latents. The upstream
+    # error explicitly recommends FP32 for this case. Set the documented
+    # override and also enforce it on the loaded DiT because some ACE-Step
+    # revisions did not actually consume the environment variable.
+    os.environ["ACESTEP_DTYPE"] = "float32"
+
     import sys
     sys.path.insert(0, str(repo))
     import torch
@@ -91,6 +99,11 @@ def generate(seconds: int = 180) -> bytes:
     if not torch.cuda.is_available():
         raise RuntimeError("MODAL_AUDIO_NO_CUDA")
 
+    capability = torch.cuda.get_device_capability(0)
+    if capability[0] < 8:
+        print(f"ACE_STEP_GPU={torch.cuda.get_device_name(0)} COMPUTE_CAPABILITY={capability}", flush=True)
+        print("ACE_STEP_DTYPE_POLICY=T4_FLOAT32_FOR_VOCAL_STABILITY", flush=True)
+
     dit = AceStepHandler()
     dit.initialize_service(
         project_root=str(repo),
@@ -98,6 +111,19 @@ def generate(seconds: int = 180) -> bytes:
         device="cuda",
         offload_to_cpu=True,
     )
+
+    # ACE-Step revisions prior to the dtype-override fix can still leave the
+    # DiT at float16 even when ACESTEP_DTYPE=float32 is exported. Explicitly
+    # promote the DiT on Turing GPUs before the first vocal diffusion pass.
+    if capability[0] < 8:
+        dit.dtype = torch.float32
+        if getattr(dit, "model", None) is not None:
+            dit.model.to(dtype=torch.float32)
+        actual_dtype = next(dit.model.parameters()).dtype if getattr(dit, "model", None) is not None else None
+        print(f"ACE_STEP_DIT_DTYPE={actual_dtype}", flush=True)
+        if actual_dtype != torch.float32:
+            raise RuntimeError(f"MODAL_AUDIO_DTYPE_POLICY_FAILED: expected float32 DiT, got {actual_dtype}")
+
     llm = LLMHandler()
     llm.initialize(
         checkpoint_dir=str(repo / "checkpoints"),
