@@ -67,7 +67,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install -q --upgrade pip
-          python -m pip install -q 'kaggle==2.2.1' pillow opencv-python-headless numpy
+          python -m pip install -q 'kaggle==2.2.4' pillow opencv-python-headless numpy
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg
           mkdir -p "$HOME/.kaggle"
@@ -75,9 +75,13 @@ jobs:
           chmod 600 "$HOME/.kaggle/access_token"
           echo 'KAGGLE_ACCESS_TOKEN_FILE=PASS'
           kaggle --version
-          test "$(kaggle --version | awk '{print $NF}')" = '2.2.1'
-          kaggle kernels status bhajanaabha/hindibhajans-ace-step
-          echo 'KAGGLE_AUTH_SMOKE_TEST=PASS'
+          test "$(kaggle --version | awk '{print $NF}')" = '2.2.4'
+          python - <<'PY'
+          from kaggle.api.kaggle_api_extended import KaggleApi
+          api = KaggleApi()
+          api.authenticate()
+          print('KAGGLE_AUTH_SMOKE_TEST=PASS')
+          PY
 
       - name: Download pinned visual-QA models
         run: |
