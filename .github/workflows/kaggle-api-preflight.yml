@@ -29,7 +29,7 @@ jobs:
           cat > /tmp/kaggle-preflight/kernel-metadata.json <<'JSON'
           {
             "id": "bhajanaabha/hindibhajans-api-preflight",
-            "title": "HindiBHajans Kaggle API Preflight",
+            "title": "HindiBHajans API Preflight",
             "code_file": "script.py",
             "language": "python",
             "kernel_type": "script",
@@ -53,40 +53,14 @@ jobs:
           set -euo pipefail
           kaggle kernels push -p /tmp/kaggle-preflight
 
-      - name: Resolve the actual private kernel slug
-        id: resolve-kernel
-        env:
-          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN3 || secrets.KAGGLE_API_TOKEN }}
-        run: |
-          set -euo pipefail
-          echo "Searching only the authenticated user's kernels for the preflight kernel."
-          kaggle kernels list --mine --search "HindiBHajans Kaggle API Preflight" --format json > /tmp/kernels.json
-          cat /tmp/kernels.json
-          python - <<'PY'
-          import json, os, sys
-          data = json.load(open('/tmp/kernels.json', encoding='utf-8'))
-          rows = data.get('kernels', data if isinstance(data, list) else [])
-          matches = [r for r in rows if r.get('title') == 'HindiBHajans Kaggle API Preflight']
-          if not matches:
-              print('Could not resolve the newly pushed private kernel by title.', file=sys.stderr)
-              sys.exit(1)
-          kernel = matches[0].get('ref') or matches[0].get('id')
-          if not kernel:
-              print('Kaggle list response did not contain a kernel ref/id.', file=sys.stderr)
-              sys.exit(1)
-          print(f'KAGGLE_KERNEL={kernel}')
-          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
-              f.write(f'kernel={kernel}\n')
-          PY
-
       - name: Wait for completion
         env:
           KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN3 || secrets.KAGGLE_API_TOKEN }}
         run: |
           set -euo pipefail
-          kernel="${{ steps.resolve-kernel.outputs.kernel }}"
+          kernel="bhajanaabha/hindibhajans-api-preflight"
           for i in $(seq 1 30); do
-            echo "--- status check $i/30 for $kernel ---"
+            echo "--- status check $i/30 ---"
             status="$(kaggle kernels status "$kernel" 2>&1 || true)"
             echo "$status"
             if echo "$status" | grep -Eiq 'complete|success|error|failed|cancel'; then
@@ -105,7 +79,7 @@ jobs:
           KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN3 || secrets.KAGGLE_API_TOKEN }}
         run: |
           set -euo pipefail
-          kaggle kernels files "${{ steps.resolve-kernel.outputs.kernel }}"
+          kaggle kernels files "bhajanaabha/hindibhajans-api-preflight"
 
       - name: Download and verify output
         env:
@@ -114,7 +88,7 @@ jobs:
           set -euo pipefail
           rm -rf /tmp/kaggle-output
           mkdir -p /tmp/kaggle-output
-          kaggle kernels output "${{ steps.resolve-kernel.outputs.kernel }}" -p /tmp/kaggle-output --file-pattern '^preflight-ok\\.txt$' --force
+          kaggle kernels output "bhajanaabha/hindibhajans-api-preflight" -p /tmp/kaggle-output --file-pattern '^preflight-ok\\.txt$' --force
           test -f /tmp/kaggle-output/preflight-ok.txt
           grep -Fxq 'KAGGLE_API_PREFLIGHT_OK' /tmp/kaggle-output/preflight-ok.txt
           echo "KAGGLE_API_PREFLIGHT=PASS"
