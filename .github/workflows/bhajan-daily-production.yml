@@ -39,28 +39,21 @@ jobs:
       - name: Production integrity gate
         run: |
           set -euo pipefail
-          python -m py_compile app/kaggle_ace_step_dispatch.py app/kaggle_echomimic_dispatch.py app/visual_quality_gate.py
+          python -m py_compile app/kaggle_ace_step_dispatch.py app/kaggle_echomimic_dispatch.py app/kaggle_echomimic_dispatch2.py app/visual_quality_gate.py
           test -s assets/singer_image.png
           test -n "$KAGGLE_API_TOKEN"
           python - <<'PY'
           import os, struct
           p='assets/singer_image.png'
           with open(p,'rb') as f:
-              assert f.read(8) == b'\x89PNG\r\n\x1a\n', 'singer image is not a PNG'
+              assert f.read(8) == b'\x89PNG\r\n\x1a\n'
               length=struct.unpack('>I', f.read(4))[0]
-              assert f.read(4) == b'IHDR' and length >= 8, 'invalid PNG header'
+              assert f.read(4) == b'IHDR' and length >= 8
               width,height=struct.unpack('>II', f.read(8))
               assert width >= 500 and height >= 500, (width,height)
               print(f'SINGER_IMAGE=PASS {width}x{height}')
-          s=int(os.environ['VIDEO_SECONDS'])
-          assert 180 <= s <= 300 and s % 15 == 0
-          print('BACKEND=KAGGLE_FREE_T4')
-          print('AUDIO_MODEL=ACE-Step-v1.5-turbo')
-          print('VIDEO_MODEL=EchoMimicV3-Flash')
-          print('IDENTITY_POLICY=LOCKED_REFERENCE')
-          print('REAL_SINGING_REQUIRED=TRUE')
-          print('STATIC_FALLBACK=FORBIDDEN')
-          print('PAID_FALLBACK=FORBIDDEN')
+          s=int(os.environ['VIDEO_SECONDS']); assert 180 <= s <= 300 and s % 15 == 0
+          print('BACKEND=KAGGLE_FREE_T4'); print('AUDIO_MODEL=ACE-Step-v1.5-turbo'); print('VIDEO_MODEL=EchoMimicV3-Flash'); print('IDENTITY_POLICY=LOCKED_REFERENCE'); print('REAL_SINGING_REQUIRED=TRUE'); print('STATIC_FALLBACK=FORBIDDEN'); print('PAID_FALLBACK=FORBIDDEN')
           PY
 
       - name: Install production tools
@@ -78,9 +71,7 @@ jobs:
           test "$(kaggle --version | awk '{print $NF}')" = '2.2.4'
           python - <<'PY'
           from kaggle.api.kaggle_api_extended import KaggleApi
-          api = KaggleApi()
-          api.authenticate()
-          print('KAGGLE_AUTH_SMOKE_TEST=PASS')
+          api=KaggleApi(); api.authenticate(); print('KAGGLE_AUTH_SMOKE_TEST=PASS')
           PY
 
       - name: Download pinned visual-QA models
@@ -106,7 +97,7 @@ jobs:
           PY
 
       - name: Generate real singer video on Kaggle free T4
-        run: python -u -m app.kaggle_echomimic_dispatch --seconds "$VIDEO_SECONDS"
+        run: python -u -m app.kaggle_echomimic_dispatch2 --seconds "$VIDEO_SECONDS"
 
       - name: HARD visual identity + singing gate
         run: python -m app.visual_quality_gate output/master.mp4 assets/singer_image.png --yunet qa_models/face_detection_yunet_2023mar.onnx --sface qa_models/face_recognition_sface_2021dec.onnx --report output/visual_qa.json
@@ -128,9 +119,7 @@ jobs:
           rm -rf output/shorts; mkdir -p output/shorts
           for n in 0 1 2; do
             start=$((n*45))
-            ffmpeg -y -v error -ss "$start" -i output/master.mp4 -t 45 \
-              -filter_complex "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,gblur=sigma=20[bg];[0:v]scale=1080:-2:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2[v]" \
-              -map "[v]" -map 0:a:0 -c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart "output/shorts/short-$((n+1)).mp4"
+            ffmpeg -y -v error -ss "$start" -i output/master.mp4 -t 45 -filter_complex "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,gblur=sigma=20[bg];[0:v]scale=1080:-2:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2[v]" -map "[v]" -map 0:a:0 -c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart "output/shorts/short-$((n+1)).mp4"
           done
 
       - name: HARD visual gate on every Short
@@ -195,8 +184,7 @@ jobs:
           python - <<'PY'
           import json,os
           from pathlib import Path
-          p=Path('state/current.json')
-          d=json.loads(p.read_text()) if p.exists() else {}
+          p=Path('state/current.json'); d=json.loads(p.read_text()) if p.exists() else {}
           d.update({'workflow_run_id':os.environ['GITHUB_RUN_ID'],'workflow':'bhajan-daily-production','audio_model':'ACE-Step-v1.5-turbo','audio_backend':'KAGGLE_FREE_T4','video_backend':'KAGGLE_FREE_T4_ECHOMIMICV3_FLASH','video_model':'EchoMimicV3-Flash','shorts':3,'publishing':'youtube+facebook+instagram' if os.environ.get('RELEASE_TAG') else 'not_run'})
           p.write_text(json.dumps(d,ensure_ascii=False,indent=2))
           PY
