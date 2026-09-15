@@ -10,16 +10,15 @@ jobs:
   kaggle-api-preflight:
     runs-on: ubuntu-latest
     steps:
-      - name: Install pinned Kaggle CLI
-        run: python -m pip install --upgrade "kaggle==2.2.4"
+      - name: Install current Kaggle CLI
+        run: python -m pip install --upgrade "kaggle>=2.2.4"
 
       - name: Check quota without starting a GPU job
         env:
           KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN3 || secrets.KAGGLE_API_TOKEN }}
         run: |
           set -euo pipefail
-          echo "=== Kaggle quota ==="
-          kaggle quota || true
+          kaggle quota
 
       - name: Prepare CPU-only preflight kernel
         run: |
@@ -42,15 +41,10 @@ jobs:
           JSON
           cat > /tmp/kaggle-preflight/script.py <<'PY'
           from pathlib import Path
-          import os
-
           out = Path('/kaggle/working/preflight-ok.txt')
           out.write_text('KAGGLE_API_PREFLIGHT_OK\n', encoding='utf-8')
-          print('CWD=', os.getcwd())
-          print('OUTPUT=', out)
-          print('OUTPUT_EXISTS=', out.exists())
-          print('OUTPUT_SIZE=', out.stat().st_size if out.exists() else -1)
-          print('WORKING_FILES=', sorted(p.name for p in Path('/kaggle/working').iterdir()))
+          print(f'WROTE={out} EXISTS={out.exists()} SIZE={out.stat().st_size}')
+          print('WORKING_FILES=', [p.name for p in Path('/kaggle/working').iterdir()])
           PY
 
       - name: Push and execute CPU-only kernel
@@ -81,21 +75,21 @@ jobs:
           echo "Timed out waiting for CPU-only kernel."
           exit 1
 
-      - name: List output files before download
+      - name: List output files
         env:
           KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN3 || secrets.KAGGLE_API_TOKEN }}
         run: |
           set -euo pipefail
-          kaggle kernels files "bhajanaabha/hindibhajans-api-preflight" --page-size 200
+          kaggle kernels files "bhajanaabha/hindibhajans-api-preflight" --page-size 100 --format table
 
-      - name: Download and verify output
+      - name: Download all output and verify marker
         env:
           KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN3 || secrets.KAGGLE_API_TOKEN }}
         run: |
           set -euo pipefail
           rm -rf /tmp/kaggle-output
           mkdir -p /tmp/kaggle-output
-          kaggle kernels output "bhajanaabha/hindibhajans-api-preflight" -p /tmp/kaggle-output --file-pattern '^preflight-ok\\.txt$' --force
+          kaggle kernels output "bhajanaabha/hindibhajans-api-preflight" -p /tmp/kaggle-output --force
           echo "=== downloaded files ==="
           find /tmp/kaggle-output -maxdepth 2 -type f -printf '%p %s bytes\n' | sort
           test -f /tmp/kaggle-output/preflight-ok.txt
