@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path('/kaggle/working')
+INPUT_ROOT = Path('/kaggle/input')
 SECONDS_FILE = 'duration.txt'
 
 
@@ -15,7 +16,7 @@ def run(*args: object) -> None:
 
 
 def find_input(name: str) -> Path:
-    roots = [Path('/kaggle/input'), ROOT]
+    roots = [INPUT_ROOT, ROOT]
     matches: list[Path] = []
     for root in roots:
         if root.exists():
@@ -25,11 +26,38 @@ def find_input(name: str) -> Path:
     return min(matches, key=lambda p: len(p.parts))
 
 
+def find_dir(name: str) -> Path:
+    matches: list[Path] = []
+    for root in (INPUT_ROOT, ROOT):
+        if root.exists():
+            matches.extend(p for p in root.rglob(name) if p.is_dir())
+    if not matches:
+        raise RuntimeError(f'KAGGLE_INPUT_DIR_MISSING: {name}')
+    return min(matches, key=lambda p: len(p.parts))
+
+
 def newest_mp4(directory: Path) -> Path:
     files = sorted(directory.rglob('*.mp4'), key=lambda p: p.stat().st_mtime, reverse=True)
     if not files:
         raise RuntimeError(f'NO_MP4_GENERATED: {directory}')
     return files[0]
+
+
+def disk_report(label: str) -> None:
+    p = shutil.disk_usage(ROOT)
+    print('DISK', label, f'free_gb={p.free / 1024**3:.2f}', f'total_gb={p.total / 1024**3:.2f}', flush=True)
+
+
+def link_tree(src: Path, dst: Path, names: list[str]) -> None:
+    dst.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        source = src / name
+        target = dst / name
+        if not source.exists():
+            raise RuntimeError(f'WAN_BASE_COMPONENT_MISSING: {source}')
+        if target.exists() or target.is_symlink():
+            target.unlink()
+        target.symlink_to(source, target_is_directory=source.is_dir())
 
 
 def main() -> None:
@@ -57,12 +85,6 @@ def main() -> None:
     outputs = ROOT / 'outputs'
     run('git', 'clone', '--depth', '1', 'https://github.com/antgroup/echomimic_v3.git', str(repo))
 
-    # EchoMimicV3 Flash inference does not import TensorFlow or retina-face,
-    # but the upstream requirements pin tensorflow==2.15.0 and retina-face.
-    # Kaggle's current Python 3.12 image cannot install that TensorFlow 2.15
-    # wheel. Install the Flash runtime requirements while deliberately omitting
-    # those two unused packages; this follows the project's own infer_flash.py
-    # import surface rather than changing the model/runtime code.
     runtime_requirements = ROOT / 'echomimic_v3_flash_requirements.txt'
     lines = (repo / 'requirements.txt').read_text().splitlines()
     excluded = {'tensorflow', 'tensorflow-gpu', 'tensorflow-cpu', 'retina-face', 'retina_face'}
@@ -77,20 +99,55 @@ def main() -> None:
             continue
         kept.append(line)
     runtime_requirements.write_text('\n'.join(kept) + '\n')
-    run(sys.executable, '-m', 'pip', 'install', '-q', '-r', str(runtime_requirements))
-    run(sys.executable, '-m', 'pip', 'install', '-q', 'huggingface_hub', 'pyloudnorm')
+    run(sys.executable, '-m', 'pip', 'install', '--no-cache-dir', '-q', '-r', str(runtime_requirements))
+    run(sys.executable, '-m', 'pip', 'install', '--no-cache-dir', '-q', 'huggingface_hub', 'pyloudnorm')
+    run(sys.executable, '-m', 'pip', 'cache', 'purge')
+    disk_report('after_runtime_install')
+
+    # The full Wan2.1-Fun-V1.1-1.3B-InP Hub repository is ~19.8 GB. Kaggle's
+    # writable disk is only about 20 GB, so downloading it into /kaggle/working
+    # leaves no room for the Flash transformer or wav2vec model. The kernel
+    # metadata attaches a public Kaggle Model containing the Wan base components
+    # under /kaggle/input; input/model mounts are read-only and do not consume
+    # the writable working volume. Build a tiny writable symlink tree pointing
+    # at those mounted components.
+    source_base = find_dir('Wan2.1-T2V-1.3B')
+    print('WAN_BASE_INPUT', source_base, flush=True)
+    runtime_base = models / 'Wan2.1-Fun-V1.1-1.3B-InP'
+    link_tree(source_base, runtime_base, ['vae', 'text_encoder', 'tokenizer', 'image_encoder'])
 
     from huggingface_hub import snapshot_download
-    models.mkdir(exist_ok=True)
-    base = models / 'Wan2.1-Fun-V1.1-1.3B-InP'
     wav = models / 'chinese-wav2vec2-base'
     flash = models / 'echomimicv3-flash-pro'
-    if not base.exists():
-        snapshot_download('alibaba-pai/Wan2.1-Fun-V1.1-1.3B-InP', local_dir=str(base))
+
+    # Use the compact 380 MB PyTorch wav2vec file; the repository's optional
+    # 1.14 GB fairseq checkpoint is not used by infer_flash.py.
     if not wav.exists():
-        snapshot_download('TencentGameMate/chinese-wav2vec2-base', local_dir=str(wav))
+        snapshot_download(
+            'TencentGameMate/chinese-wav2vec2-base',
+            local_dir=str(wav),
+            allow_patterns=['config.json', 'preprocessor_config.json', 'pytorch_model.bin'],
+        )
+    disk_report('after_wav2vec')
+
     if not flash.exists():
-        snapshot_download('BadToBest/EchoMimicV3', local_dir=str(flash), allow_patterns=['echomimicv3-flash-pro/*'])
+        snapshot_download(
+            'BadToBest/EchoMimicV3',
+            local_dir=str(flash),
+            allow_patterns=['echomimicv3-flash-pro/config.json', 'echomimicv3-flash-pro/diffusion_pytorch_model.safetensors'],
+        )
+    flash_root = flash / 'echomimicv3-flash-pro'
+    if not (flash_root / 'config.json').exists() or not (flash_root / 'diffusion_pytorch_model.safetensors').exists():
+        raise RuntimeError('FLASH_MODEL_INCOMPLETE')
+
+    # infer_flash.py first constructs its WanTransformer from model_name/transformer
+    # and then replaces the weights with --transformer_path. The Flash checkpoint
+    # supplies the compatible transformer config, so expose it as a symlink too.
+    transformer_link = runtime_base / 'transformer'
+    if transformer_link.exists() or transformer_link.is_symlink():
+        transformer_link.unlink()
+    transformer_link.symlink_to(flash_root, target_is_directory=True)
+    disk_report('models_ready')
 
     segments.mkdir(exist_ok=True)
     outputs.mkdir(exist_ok=True)
@@ -118,9 +175,9 @@ def main() -> None:
             '--prompt', 'A single Indian devotional singer performing a Hindi bhajan in traditional Indian clothing before the specified Hindu deity in a serene temple setting; only the same singer is visible; natural singing mouth movement, subtle expressive head and upper-body motion, stable identity.',
             '--num_inference_steps', '8',
             '--config_path', str(repo / 'config/config.yaml'),
-            '--model_name', str(base),
+            '--model_name', str(runtime_base),
             '--ckpt_idx', '50000',
-            '--transformer_path', str(flash / 'echomimicv3-flash-pro/transformer/diffusion_pytorch_model.safetensors'),
+            '--transformer_path', str(flash_root / 'diffusion_pytorch_model.safetensors'),
             '--save_path', str(raw_dir),
             '--wav2vec_model_dir', str(wav),
             '--sampler_name', 'Flow_Unipc',
