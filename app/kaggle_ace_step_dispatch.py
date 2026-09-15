@@ -61,7 +61,7 @@ def run(*args: str, cwd: Path | None = None, env: dict[str, str] | None = None) 
 
 def worker_code(seconds: int) -> str:
     return r'''from pathlib import Path
-import os, re, subprocess, sys, tempfile
+import os, re, shutil, subprocess, sys, tempfile
 
 ROOT = Path('/kaggle/working')
 OUT = ROOT / 'outputs'
@@ -143,7 +143,21 @@ def main():
     out = OUT / 'bhajan_source.mp3'
     run('ffmpeg','-y','-v','error','-i',str(src),'-af','loudnorm=I=-9:TP=-1.0:LRA=7','-ar','48000','-ac','2','-c:a','libmp3lame','-b:a','320k',str(out))
     if out.stat().st_size < 100000: raise RuntimeError('ACE_STEP_AUDIO_TOO_SMALL')
-    print('KAGGLE_ACE_STEP_AUDIO_READY=', out, flush=True)
+
+    # IMPORTANT: Kaggle packages the entire /kaggle/working tree as kernel output.
+    # Keep only the final MP3 so `kaggle kernels output` never tries to download
+    # the multi-GB ACE-Step repo/checkpoints again.
+    final = ROOT / 'bhajan_source.mp3'
+    shutil.copy2(out, final)
+    size = final.stat().st_size
+    print('KAGGLE_ACE_STEP_AUDIO_READY=', final, 'SIZE=', size, flush=True)
+
+    # Remove the model, checkpoints and temporary generation tree before the
+    # kernel terminates. The final artifact above is deliberately left in place.
+    shutil.rmtree(REPO, ignore_errors=True)
+    shutil.rmtree(OUT, ignore_errors=True)
+    shutil.rmtree(work, ignore_errors=True)
+    print('KAGGLE_ACE_STEP_OUTPUT_CLEANED=PASS', flush=True)
 
 if __name__ == '__main__': main()
 '''
@@ -181,10 +195,19 @@ def dispatch(seconds: int) -> None:
             raise RuntimeError('KAGGLE_ACE_STEP_KERNEL_FAILED')
         time.sleep(30)
     else: raise TimeoutError('KAGGLE_ACE_STEP_KERNEL_TIMEOUT')
+
     outdir=OUT/'kaggle_audio_output'; shutil.rmtree(outdir,ignore_errors=True)
-    run('kaggle','kernels','output',KAGGLE_KERNEL,'-p',str(outdir),'--force',cwd=ROOT,env=env)
+    output_cmd=['kaggle','kernels','output',KAGGLE_KERNEL,'-p',str(outdir),'--force']
+    print('RUN:', ' '.join(output_cmd), flush=True)
+    # The CLI may report a non-zero status after partially downloading an
+    # output set. Do not discard a valid final MP3 merely because another
+    # server-side output entry failed.
+    op=subprocess.run(output_cmd,cwd=ROOT,env=env,text=True,capture_output=True)
+    print(op.stdout,flush=True)
+    if op.stderr: print(op.stderr,flush=True)
     candidates=list(outdir.rglob('bhajan_source.mp3'))
-    if not candidates: raise RuntimeError('KAGGLE_ACE_STEP_OUTPUT_MISSING')
+    if not candidates:
+        raise RuntimeError(f'KAGGLE_ACE_STEP_OUTPUT_MISSING:output_rc={op.returncode}')
     shutil.copy2(candidates[0],OUT/'bhajan_source.mp3')
     print('KAGGLE_ACE_STEP_MASTER_AUDIO_READY',flush=True)
 
