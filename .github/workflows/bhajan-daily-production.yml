@@ -43,10 +43,15 @@ jobs:
           test -s assets/singer_image.png
           test -n "$KAGGLE_API_TOKEN"
           python - <<'PY'
-          import os
-          from PIL import Image
-          with Image.open('assets/singer_image.png') as im:
-              assert im.width >= 500 and im.height >= 500
+          import os, struct
+          p='assets/singer_image.png'
+          with open(p,'rb') as f:
+              assert f.read(8) == b'\x89PNG\r\n\x1a\n', 'singer image is not a PNG'
+              length=struct.unpack('>I', f.read(4))[0]
+              assert f.read(4) == b'IHDR' and length >= 8, 'invalid PNG header'
+              width,height=struct.unpack('>II', f.read(8))
+              assert width >= 500 and height >= 500, (width,height)
+              print(f'SINGER_IMAGE=PASS {width}x{height}')
           s=int(os.environ['VIDEO_SECONDS'])
           assert 180 <= s <= 300 and s % 15 == 0
           print('BACKEND=KAGGLE_FREE_T4')
