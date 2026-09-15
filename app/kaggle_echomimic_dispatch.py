@@ -131,8 +131,17 @@ def main():
     run('ffmpeg','-y','-v','error','-i',str(visual),'-i',str(AUDIO),'-map','0:v:0','-map','1:a:0','-t',str(SECONDS),'-c:v','copy','-c:a','aac','-b:a','192k','-ar','48000','-movflags','+faststart',str(final))
     if not final.exists() or final.stat().st_size < 500_000:
         raise RuntimeError('MASTER_NOT_CREATED')
+
+    # Keep only the final artifact in Kaggle's output workspace. Without this,
+    # `kaggle kernels output` may attempt to download the multi-GB model tree.
+    packaged = ROOT / 'master.mp4'
+    shutil.copy2(final, packaged)
+    shutil.rmtree(REPO, ignore_errors=True)
+    shutil.rmtree(MODELS, ignore_errors=True)
+    shutil.rmtree(SEG, ignore_errors=True)
+    shutil.rmtree(OUT, ignore_errors=True)
     print('BHAJAN_KAGGLE_WORKER_OK', flush=True)
-    print('OUTPUT=', final, flush=True)
+    print('OUTPUT=', packaged, flush=True)
 
 if __name__ == '__main__': main()
 '''
@@ -161,7 +170,6 @@ def dispatch(seconds: int) -> None:
         raise RuntimeError("KAGGLE_USERNAME repository secret/variable is required for kernel dispatch")
     slug = "hindibhajans-echomimic-v3"
     kernel = f"{username}/{slug}"
-    # Kaggle requires the title to resolve to the same slug as the kernel id.
     meta = {
         "id": kernel,
         "title": slug,
@@ -188,16 +196,28 @@ def dispatch(seconds: int) -> None:
         text=(p.stdout+p.stderr).lower()
         if "complete" in text: break
         if any(x in text for x in ("error", "failed", "cancelled", "canceled")):
+            # Always fetch the actual Kaggle worker log before failing the GitHub job.
+            # The status API only tells us ERROR; the log contains the real exception.
+            log = subprocess.run(["kaggle","kernels","logs",kernel], text=True, capture_output=True, env=env)
+            print("===== KAGGLE ECHOMIMIC WORKER LOG =====", flush=True)
+            print(log.stdout or log.stderr, flush=True)
             raise RuntimeError("KAGGLE_KERNEL_FAILED: " + (p.stdout or p.stderr))
         time.sleep(30)
     else:
+        log = subprocess.run(["kaggle","kernels","logs",kernel], text=True, capture_output=True, env=env)
+        print("===== KAGGLE ECHOMIMIC WORKER LOG (TIMEOUT) =====", flush=True)
+        print(log.stdout or log.stderr, flush=True)
         raise TimeoutError("KAGGLE_KERNEL_TIMEOUT")
 
     outdir = OUT / "kaggle_output"
     shutil.rmtree(outdir, ignore_errors=True)
-    run("kaggle", "kernels", "output", kernel, "-p", str(outdir), "--force", cwd=ROOT, env=env)
+    result = subprocess.run(["kaggle", "kernels", "output", kernel, "-p", str(outdir), "--force"], text=True, capture_output=True, env=env)
+    print(result.stdout or result.stderr, flush=True)
     candidates = list(outdir.rglob("master.mp4"))
-    if not candidates: raise RuntimeError("KAGGLE_COMPLETED_BUT_MASTER_MP4_MISSING")
+    if not candidates:
+        # Some Kaggle CLI versions return non-zero while still downloading the
+        # requested artifact; only fail if the final MP4 is genuinely absent.
+        raise RuntimeError("KAGGLE_COMPLETED_BUT_MASTER_MP4_MISSING")
     shutil.copy2(candidates[0], OUT / "master.mp4")
     print("KAGGLE_ECHOMIMIC_MASTER_READY", flush=True)
 
