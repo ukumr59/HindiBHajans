@@ -13,6 +13,7 @@ KDIR = ROOT / '.kaggle_worker'
 DDIR = ROOT / '.kaggle_dataset'
 KERNEL = 'bhajanaabha/hindibhajans-echomimic-v3'
 INPUT_DATASET = 'bhajanaabha/hindibhajans-echomimic-inputs'
+WAN_BASE_MODEL = 'mahbubahmedturza/wan-ai-new/Other/default/1'
 WORKER_SOURCE = ROOT / 'app' / 'kaggle_echomimic_worker.py'
 
 
@@ -82,11 +83,6 @@ def main(seconds: int) -> None:
     env = dict(os.environ)
     env['KAGGLE_API_TOKEN'] = token
 
-    # Kaggle kernel source folders are code packages; arbitrary files placed
-    # beside worker.py are not reliably mounted as /kaggle/input. Publish the
-    # two generated media files + duration as a private Kaggle Dataset instead,
-    # then attach that dataset to the kernel. This keeps the worker tiny and
-    # gives Kaggle an explicit, supported data-source mount.
     publish_input_dataset(env, image, audio, seconds)
 
     shutil.rmtree(KDIR, ignore_errors=True)
@@ -105,11 +101,12 @@ def main(seconds: int) -> None:
         'dataset_sources': [INPUT_DATASET],
         'competition_sources': [],
         'kernel_sources': [],
-        'model_sources': [],
+        # Public Kaggle model: ~16.66 GB of Wan2.1 T2V-1.3B base components.
+        # Mounting it as an input keeps it off the ~20 GB writable disk.
+        'model_sources': [WAN_BASE_MODEL],
     }
     (KDIR / 'kernel-metadata.json').write_text(json.dumps(metadata, indent=2))
 
-    # Local gate: the exact source that will be sent to Kaggle must compile.
     run(['python', '-m', 'py_compile', str(KDIR / 'worker.py')], env=env)
     worker_bytes = (KDIR / 'worker.py').stat().st_size
     print('KAGGLE_WORKER_PACKAGE', f'worker_bytes={worker_bytes}', flush=True)
