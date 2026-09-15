@@ -159,9 +159,12 @@ def dispatch(seconds: int) -> None:
     username = os.getenv("KAGGLE_USERNAME", "").strip()
     if not username:
         raise RuntimeError("KAGGLE_USERNAME repository secret/variable is required for kernel dispatch")
+    slug = "hindibhajans-echomimic-v3"
+    kernel = f"{username}/{slug}"
+    # Kaggle requires the title to resolve to the same slug as the kernel id.
     meta = {
-        "id": f"{username}/hindibhajans-echomimic-v3",
-        "title": "HindiBHajans EchoMimic V3 Daily Worker",
+        "id": kernel,
+        "title": slug,
         "code_file": "worker.py",
         "language": "python",
         "kernel_type": "script",
@@ -178,7 +181,6 @@ def dispatch(seconds: int) -> None:
 
     env = kaggle_env()
     run("kaggle", "kernels", "push", "-p", str(KAGGLE_DIR), "--accelerator", "NvidiaTeslaT4", "--timeout", str(11*60*60), cwd=ROOT, env=env)
-    kernel = meta["id"]
     deadline = time.time() + 11*60*60
     while time.time() < deadline:
         p = subprocess.run(["kaggle","kernels","status",kernel], text=True, capture_output=True, env=env)
