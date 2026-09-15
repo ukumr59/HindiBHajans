@@ -1,0 +1,95 @@
+name: Kaggle API Preflight
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  kaggle-api-preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install pinned Kaggle CLI
+        run: python -m pip install --upgrade "kaggle==2.2.4"
+
+      - name: Check quota without starting a GPU job
+        env:
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN3 || secrets.KAGGLE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "=== Kaggle quota ==="
+          kaggle quota || true
+
+      - name: Prepare CPU-only preflight kernel
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/kaggle-preflight
+          mkdir -p /tmp/kaggle-preflight
+          cat > /tmp/kaggle-preflight/kernel-metadata.json <<'JSON'
+          {
+            "id": "bhajanaabha/hindibhajans-api-preflight",
+            "title": "HindiBHajans Kaggle API Preflight",
+            "code_file": "script.py",
+            "language": "python",
+            "kernel_type": "script",
+            "is_private": true,
+            "enable_gpu": false,
+            "enable_internet": false,
+            "dataset_sources": [],
+            "kernel_sources": [],
+            "competition_sources": []
+          }
+          JSON
+          cat > /tmp/kaggle-preflight/script.py <<'PY'
+          from pathlib import Path
+          Path("preflight-ok.txt").write_text("KAGGLE_API_PREFLIGHT_OK\n", encoding="utf-8")
+          print("KAGGLE_API_PREFLIGHT_OK")
+          PY
+
+      - name: Push and execute CPU-only kernel
+        env:
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN3 || secrets.KAGGLE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          kaggle kernels push -p /tmp/kaggle-preflight
+
+      - name: Wait for completion
+        env:
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN3 || secrets.KAGGLE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          kernel="bhajanaabha/hindibhajans-api-preflight"
+          for i in $(seq 1 30); do
+            echo "--- status check $i/30 ---"
+            status="$(kaggle kernels status "$kernel" 2>&1 || true)"
+            echo "$status"
+            if echo "$status" | grep -Eiq 'complete|success|error|failed|cancel'; then
+              if echo "$status" | grep -Eiq 'complete|success'; then
+                exit 0
+              fi
+              exit 1
+            fi
+            sleep 20
+          done
+          echo "Timed out waiting for CPU-only kernel."
+          exit 1
+
+      - name: List output files before download
+        env:
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN3 || secrets.KAGGLE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          kaggle kernels files bhajanaabha/hindibhajans-api-preflight
+
+      - name: Download and verify output
+        env:
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN3 || secrets.KAGGLE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/kaggle-output
+          mkdir -p /tmp/kaggle-output
+          kaggle kernels output bhajanaabha/hindibhajans-api-preflight -p /tmp/kaggle-output --file-pattern '^preflight-ok\\.txt$' --force
+          test -f /tmp/kaggle-output/preflight-ok.txt
+          grep -Fxq 'KAGGLE_API_PREFLIGHT_OK' /tmp/kaggle-output/preflight-ok.txt
+          echo "KAGGLE_API_PREFLIGHT=PASS"
