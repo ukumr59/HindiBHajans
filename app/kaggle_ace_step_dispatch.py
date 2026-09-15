@@ -60,14 +60,14 @@ def run(*args: str, cwd: Path | None = None, env: dict[str, str] | None = None) 
     subprocess.run(list(args), cwd=str(cwd) if cwd else None, env=env, check=True)
 
 
-def worker_code() -> str:
+def worker_code(seconds: int) -> str:
     return r'''from pathlib import Path
 import os, re, subprocess, sys, tempfile
 
 ROOT = Path('/kaggle/working')
 OUT = ROOT / 'outputs'
 REPO = ROOT / 'ACE-Step-1.5'
-SECONDS = int((ROOT / 'duration.txt').read_text().strip())
+SECONDS = ''' + str(seconds) + r'''
 LYRICS = r''' + repr(LYRICS) + r'''
 PROMPT = r''' + repr(PROMPT) + r'''
 
@@ -154,8 +154,7 @@ def dispatch(seconds: int) -> None:
     if not token: raise RuntimeError('KAGGLE_API_TOKEN secret is required')
     if not 180 <= seconds <= 300 or seconds % 15: raise RuntimeError('seconds must be 180-300 and divisible by 15')
     shutil.rmtree(KDIR, ignore_errors=True); KDIR.mkdir(parents=True)
-    (KDIR/'worker.py').write_text(worker_code(), encoding='utf-8')
-    (KDIR/'duration.txt').write_text(str(seconds), encoding='utf-8')
+    (KDIR/'worker.py').write_text(worker_code(seconds), encoding='utf-8')
     (KDIR/'kernel-metadata.json').write_text(json.dumps({'id':KAGGLE_KERNEL,'title':'hindibhajans-ace-step','code_file':'worker.py','language':'python','kernel_type':'script','is_private':True,'enable_gpu':True,'enable_internet':True,'machine_shape':'NvidiaTeslaT4','dataset_sources':[],'competition_sources':[],'kernel_sources':[],'model_sources':[]},indent=2),encoding='utf-8')
     env=dict(os.environ); env['KAGGLE_API_TOKEN']=token; env['ACE_STEP_COMMIT']=ACE_STEP_COMMIT
     run('kaggle','kernels','push','-p',str(KDIR),'--accelerator','NvidiaTeslaT4','--timeout',str(11*60*60),cwd=ROOT,env=env)
@@ -167,20 +166,9 @@ def dispatch(seconds: int) -> None:
         t=(p.stdout+p.stderr).lower()
         if 'complete' in t: break
         if any(x in t for x in ('error','failed','cancelled','canceled')):
-            # The status command only reports ERROR and hides the actual Kaggle
-            # exception. Pull the kernel logs before failing so GitHub Actions
-            # contains the real root cause instead of only KAGGLE_*_FAILED.
             print('KAGGLE_ACE_STEP_FETCHING_ERROR_LOGS=START', flush=True)
             lp=subprocess.run(['kaggle','kernels','logs',KAGGLE_KERNEL],capture_output=True,text=True,env=env)
             print(lp.stdout or lp.stderr,flush=True)
-            if lp.returncode != 0:
-                outdir=OUT/'kaggle_audio_error_output'; shutil.rmtree(outdir,ignore_errors=True)
-                op=subprocess.run(['kaggle','kernels','output',KAGGLE_KERNEL,'-p',str(outdir),'--force'],capture_output=True,text=True,env=env)
-                print(op.stdout or op.stderr,flush=True)
-                for f in sorted(outdir.rglob('*')):
-                    if f.is_file() and f.stat().st_size < 2_000_000:
-                        try: print(f'--- {f} ---\n{f.read_text(errors="replace")}',flush=True)
-                        except Exception: pass
             print('KAGGLE_ACE_STEP_FETCHING_ERROR_LOGS=END', flush=True)
             raise RuntimeError('KAGGLE_ACE_STEP_KERNEL_FAILED')
         time.sleep(30)
