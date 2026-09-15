@@ -2,7 +2,7 @@
 
 The GitHub runner submits a self-contained worker with the small input files.
 The worker downloads the open-source model weights and generates a real
-audio-driven singer video on Kaggle's free NVIDIA T4 GPU. There is no static
+audio-driven singer video on Kaggle’s free NVIDIA T4 GPU. There is no static
 image/video fallback.
 """
 from __future__ import annotations
@@ -65,6 +65,9 @@ def first_mp4(folder):
 
 def main():
     print('BHAJAN_KAGGLE_WORKER_START', flush=True)
+    print(f'INPUT_CHECK image={IMAGE.exists()} audio={AUDIO.exists()} duration={INPUT / "duration.txt"}', flush=True)
+    if not IMAGE.exists() or not AUDIO.exists() or not (INPUT / 'duration.txt').exists():
+        raise RuntimeError(f'KAGGLE_INPUT_PACKAGE_INCOMPLETE: {sorted(str(p.relative_to(ROOT)) for p in ROOT.rglob("*") if p.is_file())[:50]}')
     run('nvidia-smi')
     import torch
     print('TORCH=', torch.__version__, 'CUDA=', torch.version.cuda, flush=True)
@@ -131,17 +134,8 @@ def main():
     run('ffmpeg','-y','-v','error','-i',str(visual),'-i',str(AUDIO),'-map','0:v:0','-map','1:a:0','-t',str(SECONDS),'-c:v','copy','-c:a','aac','-b:a','192k','-ar','48000','-movflags','+faststart',str(final))
     if not final.exists() or final.stat().st_size < 500_000:
         raise RuntimeError('MASTER_NOT_CREATED')
-
-    # Keep only the final artifact in Kaggle's output workspace. Without this,
-    # `kaggle kernels output` may attempt to download the multi-GB model tree.
-    packaged = ROOT / 'master.mp4'
-    shutil.copy2(final, packaged)
-    shutil.rmtree(REPO, ignore_errors=True)
-    shutil.rmtree(MODELS, ignore_errors=True)
-    shutil.rmtree(SEG, ignore_errors=True)
-    shutil.rmtree(OUT, ignore_errors=True)
     print('BHAJAN_KAGGLE_WORKER_OK', flush=True)
-    print('OUTPUT=', packaged, flush=True)
+    print('OUTPUT=', final, flush=True)
 
 if __name__ == '__main__': main()
 '''
@@ -160,9 +154,11 @@ def dispatch(seconds: int) -> None:
 
     shutil.rmtree(KAGGLE_DIR, ignore_errors=True)
     KAGGLE_DIR.mkdir(parents=True)
-    shutil.copy2(image, KAGGLE_DIR / "singer.png")
-    shutil.copy2(audio, KAGGLE_DIR / "bhajan.mp3")
-    (KAGGLE_DIR / "duration.txt").write_text(str(seconds), encoding="utf-8")
+    input_dir = KAGGLE_DIR / "input"
+    input_dir.mkdir(parents=True)
+    shutil.copy2(image, input_dir / "singer.png")
+    shutil.copy2(audio, input_dir / "bhajan.mp3")
+    (input_dir / "duration.txt").write_text(str(seconds), encoding="utf-8")
     (KAGGLE_DIR / "worker.py").write_text(worker_code(), encoding="utf-8")
 
     username = os.getenv("KAGGLE_USERNAME", "").strip()
@@ -196,28 +192,16 @@ def dispatch(seconds: int) -> None:
         text=(p.stdout+p.stderr).lower()
         if "complete" in text: break
         if any(x in text for x in ("error", "failed", "cancelled", "canceled")):
-            # Always fetch the actual Kaggle worker log before failing the GitHub job.
-            # The status API only tells us ERROR; the log contains the real exception.
-            log = subprocess.run(["kaggle","kernels","logs",kernel], text=True, capture_output=True, env=env)
-            print("===== KAGGLE ECHOMIMIC WORKER LOG =====", flush=True)
-            print(log.stdout or log.stderr, flush=True)
             raise RuntimeError("KAGGLE_KERNEL_FAILED: " + (p.stdout or p.stderr))
         time.sleep(30)
     else:
-        log = subprocess.run(["kaggle","kernels","logs",kernel], text=True, capture_output=True, env=env)
-        print("===== KAGGLE ECHOMIMIC WORKER LOG (TIMEOUT) =====", flush=True)
-        print(log.stdout or log.stderr, flush=True)
         raise TimeoutError("KAGGLE_KERNEL_TIMEOUT")
 
     outdir = OUT / "kaggle_output"
     shutil.rmtree(outdir, ignore_errors=True)
-    result = subprocess.run(["kaggle", "kernels", "output", kernel, "-p", str(outdir), "--force"], text=True, capture_output=True, env=env)
-    print(result.stdout or result.stderr, flush=True)
+    run("kaggle", "kernels", "output", kernel, "-p", str(outdir), "--force", cwd=ROOT, env=env)
     candidates = list(outdir.rglob("master.mp4"))
-    if not candidates:
-        # Some Kaggle CLI versions return non-zero while still downloading the
-        # requested artifact; only fail if the final MP4 is genuinely absent.
-        raise RuntimeError("KAGGLE_COMPLETED_BUT_MASTER_MP4_MISSING")
+    if not candidates: raise RuntimeError("KAGGLE_COMPLETED_BUT_MASTER_MP4_MISSING")
     shutil.copy2(candidates[0], OUT / "master.mp4")
     print("KAGGLE_ECHOMIMIC_MASTER_READY", flush=True)
 
