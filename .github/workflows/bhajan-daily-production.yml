@@ -67,7 +67,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install -q --upgrade pip
-          python -m pip install -q kaggle pillow opencv-python-headless numpy
+          python -m pip install -q 'kaggle==1.7.4.2' pillow opencv-python-headless numpy
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg
           kaggle --version
