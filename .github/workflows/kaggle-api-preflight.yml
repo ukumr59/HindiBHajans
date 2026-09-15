@@ -42,8 +42,15 @@ jobs:
           JSON
           cat > /tmp/kaggle-preflight/script.py <<'PY'
           from pathlib import Path
-          Path("preflight-ok.txt").write_text("KAGGLE_API_PREFLIGHT_OK\n", encoding="utf-8")
-          print("KAGGLE_API_PREFLIGHT_OK")
+          import os
+
+          out = Path('/kaggle/working/preflight-ok.txt')
+          out.write_text('KAGGLE_API_PREFLIGHT_OK\n', encoding='utf-8')
+          print('CWD=', os.getcwd())
+          print('OUTPUT=', out)
+          print('OUTPUT_EXISTS=', out.exists())
+          print('OUTPUT_SIZE=', out.stat().st_size if out.exists() else -1)
+          print('WORKING_FILES=', sorted(p.name for p in Path('/kaggle/working').iterdir()))
           PY
 
       - name: Push and execute CPU-only kernel
@@ -79,7 +86,7 @@ jobs:
           KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN3 || secrets.KAGGLE_API_TOKEN }}
         run: |
           set -euo pipefail
-          kaggle kernels files "bhajanaabha/hindibhajans-api-preflight"
+          kaggle kernels files "bhajanaabha/hindibhajans-api-preflight" --page-size 200
 
       - name: Download and verify output
         env:
@@ -89,6 +96,8 @@ jobs:
           rm -rf /tmp/kaggle-output
           mkdir -p /tmp/kaggle-output
           kaggle kernels output "bhajanaabha/hindibhajans-api-preflight" -p /tmp/kaggle-output --file-pattern '^preflight-ok\\.txt$' --force
+          echo "=== downloaded files ==="
+          find /tmp/kaggle-output -maxdepth 2 -type f -printf '%p %s bytes\n' | sort
           test -f /tmp/kaggle-output/preflight-ok.txt
           grep -Fxq 'KAGGLE_API_PREFLIGHT_OK' /tmp/kaggle-output/preflight-ok.txt
           echo "KAGGLE_API_PREFLIGHT=PASS"
