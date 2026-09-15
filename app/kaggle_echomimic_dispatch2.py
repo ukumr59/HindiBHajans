@@ -48,13 +48,13 @@ def main():
     for i in range(n):
         start=i*SEG_SECONDS; remain=max(.1,min(SEG_SECONDS,SECONDS-start))
         if remain<.5: break
-        a=SEG/f'audio_{i:04d}.wav'; run('ffmpeg','-y','-v','error','-ss',f'{start:.3f}','-i',str(norm),'-t',f'{remain:.3f}','-ar','16000','-ac','1',str(a))
-        od=SEG/f'raw_{i:04d}'; od.mkdir(exist_ok=True)
+        a=SEG/('audio_{:04d}.wav'.format(i)); run('ffmpeg','-y','-v','error','-ss',str(round(start,3)),'-i',str(norm),'-t',str(round(remain,3)),'-ar','16000','-ac','1',str(a))
+        od=SEG/('raw_{:04d}'.format(i)); od.mkdir(exist_ok=True)
         run(sys.executable,str(REPO/'infer_flash.py'),'--image_path',str(image),'--audio_path',str(a),'--prompt','A single Indian devotional singer performing a Hindi bhajan in traditional Indian clothing before the specified Hindu deity in a serene temple setting; only the same singer is visible; natural singing mouth movement, subtle expressive head and upper-body motion, stable identity.','--num_inference_steps','8','--config_path',str(REPO/'config/config.yaml'),'--model_name',str(base),'--ckpt_idx','50000','--transformer_path',str(flash/'echomimicv3-flash-pro/transformer/diffusion_pytorch_model.safetensors'),'--save_path',str(od),'--wav2vec_model_dir',str(wav),'--sampler_name','Flow_Unipc','--video_length',str(FRAMES),'--guidance_scale','5.0','--audio_guidance_scale','2.5','--audio_scale','1.0','--neg_scale','1.0','--neg_steps','0','--seed',str(4300+i),'--enable_teacache','--teacache_threshold','0.1','--num_skip_start_steps','5','--weight_dtype','float16','--sample_size','768','768','--fps',str(FPS),'--negative_prompt','blurry, distorted face, identity drift, extra person, duplicate person, malformed hands, fused fingers, deformed mouth, jitter, flicker, camera cut, text, watermark')
-        raw=mp4(od); silent=SEG/f'video_{i:04d}.mp4'; run('ffmpeg','-y','-v','error','-i',str(raw),'-an','-c:v','libx264','-preset','veryfast','-crf','20','-pix_fmt','yuv420p',str(silent))
+        raw=mp4(od); silent=SEG/('video_{:04d}.mp4'.format(i)); run('ffmpeg','-y','-v','error','-i',str(raw),'-an','-c:v','libx264','-preset','veryfast','-crf','20','-pix_fmt','yuv420p',str(silent))
     files=sorted(SEG.glob('video_*.mp4'))
     if not files: raise RuntimeError('NO_SEGMENTS_GENERATED')
-    concat=SEG/'concat.txt'; concat.write_text(''.join(f"file \'{p.resolve()}\'\\n" for p in files))
+    concat=SEG/'concat.txt'; concat.write_text(''.join("file '{}'\\n".format(p.resolve()) for p in files))
     visual=OUT/'visual.mp4'; run('ffmpeg','-y','-v','error','-f','concat','-safe','0','-i',str(concat),'-c','copy',str(visual))
     final=OUT/'master.mp4'; run('ffmpeg','-y','-v','error','-i',str(visual),'-i',str(audio),'-map','0:v:0','-map','1:a:0','-t',str(SECONDS),'-c:v','copy','-c:a','aac','-b:a','192k','-ar','48000','-movflags','+faststart',str(final))
     if not final.exists() or final.stat().st_size<500000: raise RuntimeError('MASTER_NOT_CREATED')
