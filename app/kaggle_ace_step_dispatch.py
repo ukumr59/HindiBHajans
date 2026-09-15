@@ -18,7 +18,6 @@ OUT = ROOT / "output"
 KDIR = ROOT / ".kaggle_audio_worker"
 KAGGLE_KERNEL = "bhajanaabha/hindibhajans-ace-step"
 ACE_STEP_COMMIT = "ca1e85fe9430179831e6bc6be790c332190a3866"
-ACE_STEP_REPO = "https://github.com/ACE-Step/ACE-Step-1.5.git"
 
 LYRICS = """[Intro]
 श्री राम... श्री राम... जय जय राम...
@@ -68,6 +67,7 @@ ROOT = Path('/kaggle/working')
 OUT = ROOT / 'outputs'
 REPO = ROOT / 'ACE-Step-1.5'
 SECONDS = ''' + str(seconds) + r'''
+ACE_STEP_COMMIT = ''' + repr(ACE_STEP_COMMIT) + r'''
 LYRICS = r''' + repr(LYRICS) + r'''
 PROMPT = r''' + repr(PROMPT) + r'''
 
@@ -107,8 +107,8 @@ def main():
     run(sys.executable, '-m', 'pip', 'install', '-q', '--upgrade', 'pip')
     run('git', 'init', str(REPO))
     run('git', '-C', str(REPO), 'remote', 'add', 'origin', 'https://github.com/ACE-Step/ACE-Step-1.5.git')
-    run('git', '-C', str(REPO), 'fetch', '--depth', '1', 'origin', os.environ['ACE_STEP_COMMIT'])
-    run('git', '-C', str(REPO), 'checkout', '--detach', os.environ['ACE_STEP_COMMIT'])
+    run('git', '-C', str(REPO), 'fetch', '--depth', '1', 'origin', ACE_STEP_COMMIT)
+    run('git', '-C', str(REPO), 'checkout', '--detach', ACE_STEP_COMMIT)
     patch_dtype()
     req = REPO / 'runtime-requirements.txt'
     lines = (REPO / 'requirements.txt').read_text().splitlines()
@@ -156,7 +156,7 @@ def dispatch(seconds: int) -> None:
     shutil.rmtree(KDIR, ignore_errors=True); KDIR.mkdir(parents=True)
     (KDIR/'worker.py').write_text(worker_code(seconds), encoding='utf-8')
     (KDIR/'kernel-metadata.json').write_text(json.dumps({'id':KAGGLE_KERNEL,'title':'hindibhajans-ace-step','code_file':'worker.py','language':'python','kernel_type':'script','is_private':True,'enable_gpu':True,'enable_internet':True,'machine_shape':'NvidiaTeslaT4','dataset_sources':[],'competition_sources':[],'kernel_sources':[],'model_sources':[]},indent=2),encoding='utf-8')
-    env=dict(os.environ); env['KAGGLE_API_TOKEN']=token; env['ACE_STEP_COMMIT']=ACE_STEP_COMMIT
+    env=dict(os.environ); env['KAGGLE_API_TOKEN']=token
     run('kaggle','kernels','push','-p',str(KDIR),'--accelerator','NvidiaTeslaT4','--timeout',str(11*60*60),cwd=ROOT,env=env)
     deadline=time.time()+11*60*60
     while time.time()<deadline:
@@ -169,6 +169,14 @@ def dispatch(seconds: int) -> None:
             print('KAGGLE_ACE_STEP_FETCHING_ERROR_LOGS=START', flush=True)
             lp=subprocess.run(['kaggle','kernels','logs',KAGGLE_KERNEL],capture_output=True,text=True,env=env)
             print(lp.stdout or lp.stderr,flush=True)
+            if lp.returncode != 0:
+                outdir=OUT/'kaggle_audio_error_output'; shutil.rmtree(outdir,ignore_errors=True)
+                op=subprocess.run(['kaggle','kernels','output',KAGGLE_KERNEL,'-p',str(outdir),'--force'],capture_output=True,text=True,env=env)
+                print(op.stdout or op.stderr,flush=True)
+                for f in sorted(outdir.rglob('*')):
+                    if f.is_file() and f.stat().st_size < 2_000_000:
+                        try: print(f'--- {f} ---\n{f.read_text(errors="replace")}',flush=True)
+                        except Exception: pass
             print('KAGGLE_ACE_STEP_FETCHING_ERROR_LOGS=END', flush=True)
             raise RuntimeError('KAGGLE_ACE_STEP_KERNEL_FAILED')
         time.sleep(30)
