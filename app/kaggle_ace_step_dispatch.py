@@ -78,8 +78,20 @@ def run(*args):
 def patch_dtype():
     target = REPO / 'acestep/core/generation/handler/init_service_orchestrator.py'
     text = target.read_text()
-    pattern = re.compile(r'(if\s+gpu_config\.cuda_supports_bfloat16\(\):\s*self\.dtype\s*=\s*torch\.bfloat16\s*else:\s*)self\.dtype\s*=\s*torch\.float16', re.MULTILINE)
-    patched, count = pattern.subn(r'\1self.dtype = torch.float32', text, count=1)
+    # ACE-Step changed this CUDA dtype block after the original dispatcher was
+    # written. Keep the T4-safe float32 policy, but match the current layout.
+    pattern = re.compile(
+        r'(            elif resolved_device == "cuda":\n)'
+        r'(.*?)'
+        r'(\n            else:\n                self\.dtype = torch\.bfloat16 if resolved_device == "xpu" else torch\.float32)',
+        re.S,
+    )
+    patched, count = pattern.subn(
+        r'\1                # Force float32 for the T4 CUDA path; bfloat16 is not supported by T4.\n'
+        r'                self.dtype = torch.float32\3',
+        text,
+        count=1,
+    )
     if count != 1:
         raise RuntimeError('ACE_STEP_SOURCE_LAYOUT_CHANGED')
     target.write_text(patched)
