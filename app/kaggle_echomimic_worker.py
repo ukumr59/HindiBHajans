@@ -15,8 +15,6 @@ def run(*args: object) -> None:
 
 
 def find_input(name: str) -> Path:
-    # Kaggle kernel uploads may be exposed under /kaggle/input; depending on
-    # the runtime/package layout they may also be copied under /kaggle/working.
     roots = [Path('/kaggle/input'), ROOT]
     matches: list[Path] = []
     for root in roots:
@@ -24,7 +22,6 @@ def find_input(name: str) -> Path:
             matches.extend(p for p in root.rglob(name) if p.is_file())
     if not matches:
         raise RuntimeError(f'KAGGLE_INPUT_FILE_MISSING: {name}')
-    # Prefer the shallowest match so stale nested copies cannot win.
     return min(matches, key=lambda p: len(p.parts))
 
 
@@ -59,8 +56,29 @@ def main() -> None:
     segments = ROOT / 'segments'
     outputs = ROOT / 'outputs'
     run('git', 'clone', '--depth', '1', 'https://github.com/antgroup/echomimic_v3.git', str(repo))
-    run(sys.executable, '-m', 'pip', 'install', '-q', '-r', str(repo / 'requirements.txt'))
-    run(sys.executable, '-m', 'pip', 'install', '-q', 'huggingface_hub')
+
+    # EchoMimicV3 Flash inference does not import TensorFlow or retina-face,
+    # but the upstream requirements pin tensorflow==2.15.0 and retina-face.
+    # Kaggle's current Python 3.12 image cannot install that TensorFlow 2.15
+    # wheel. Install the Flash runtime requirements while deliberately omitting
+    # those two unused packages; this follows the project's own infer_flash.py
+    # import surface rather than changing the model/runtime code.
+    runtime_requirements = ROOT / 'echomimic_v3_flash_requirements.txt'
+    lines = (repo / 'requirements.txt').read_text().splitlines()
+    excluded = {'tensorflow', 'tensorflow-gpu', 'tensorflow-cpu', 'retina-face', 'retina_face'}
+    kept = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith('#'):
+            kept.append(line)
+            continue
+        package = stripped.split('=', 1)[0].split('<', 1)[0].split('>', 1)[0].split('!', 1)[0].strip().lower()
+        if package in excluded:
+            continue
+        kept.append(line)
+    runtime_requirements.write_text('\n'.join(kept) + '\n')
+    run(sys.executable, '-m', 'pip', 'install', '-q', '-r', str(runtime_requirements))
+    run(sys.executable, '-m', 'pip', 'install', '-q', 'huggingface_hub', 'pyloudnorm')
 
     from huggingface_hub import snapshot_download
     models.mkdir(exist_ok=True)
