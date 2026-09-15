@@ -1,12 +1,14 @@
 """Dispatch EchoMimicV3-Flash to a free Kaggle GPU kernel.
 
-The GitHub runner submits a self-contained worker with the small input files.
-The worker downloads the open-source model weights and generates a real
-audio-driven singer video on Kaggle’s free NVIDIA T4 GPU. There is no static
-image/video fallback.
+The GitHub runner submits a self-contained worker. The worker carries the
+small singer image and generated bhajan audio inside its Python source, so
+Kaggle cannot lose a separately uploaded input file. The worker downloads the
+open-source model weights and generates a real audio-driven singer video on
+Kaggle's free NVIDIA T4 GPU. There is no static image/video fallback.
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import shutil
@@ -32,9 +34,9 @@ def kaggle_env() -> dict[str, str]:
     return env
 
 
-def worker_code() -> str:
-    return r'''#!/usr/bin/env python3
-import os, shutil, subprocess, sys
+def worker_code(seconds: int, image_b64: str, audio_b64: str) -> str:
+    return f'''#!/usr/bin/env python3
+import base64, os, shutil, subprocess, sys
 from pathlib import Path
 
 ROOT = Path('/kaggle/working')
@@ -45,7 +47,9 @@ SEG = ROOT / 'segments'
 OUT = ROOT / 'outputs'
 IMAGE = INPUT / 'singer.png'
 AUDIO = INPUT / 'bhajan.mp3'
-SECONDS = int((INPUT / 'duration.txt').read_text().strip())
+SECONDS = {int(seconds)}
+IMAGE_B64 = {image_b64!r}
+AUDIO_B64 = {audio_b64!r}
 FPS = 25
 FRAMES = 81
 SEG_SECONDS = FRAMES / FPS
@@ -59,15 +63,18 @@ def run(*args, cwd=None):
 def first_mp4(folder):
     xs = sorted(Path(folder).rglob('*.mp4'), key=lambda p: p.stat().st_mtime, reverse=True)
     if not xs:
-        raise RuntimeError(f'No MP4 generated under {folder}')
+        raise RuntimeError(f'No MP4 generated under {{folder}}')
     return xs[0]
 
 
 def main():
     print('BHAJAN_KAGGLE_WORKER_START', flush=True)
-    print(f'INPUT_CHECK image={IMAGE.exists()} audio={AUDIO.exists()} duration={INPUT / "duration.txt"}', flush=True)
-    if not IMAGE.exists() or not AUDIO.exists() or not (INPUT / 'duration.txt').exists():
-        raise RuntimeError(f'KAGGLE_INPUT_PACKAGE_INCOMPLETE: {sorted(str(p.relative_to(ROOT)) for p in ROOT.rglob("*") if p.is_file())[:50]}')
+    INPUT.mkdir(parents=True, exist_ok=True)
+    IMAGE.write_bytes(base64.b64decode(IMAGE_B64))
+    AUDIO.write_bytes(base64.b64decode(AUDIO_B64))
+    print(f'INPUT_READY image_bytes={{IMAGE.stat().st_size}} audio_bytes={{AUDIO.stat().st_size}} seconds={{SECONDS}}', flush=True)
+    if not IMAGE.exists() or not AUDIO.exists():
+        raise RuntimeError('KAGGLE_INPUT_PACKAGE_INCOMPLETE')
     run('nvidia-smi')
     import torch
     print('TORCH=', torch.__version__, 'CUDA=', torch.version.cuda, flush=True)
@@ -98,14 +105,14 @@ def main():
     run('ffmpeg','-y','-v','error','-i',str(AUDIO),'-ac','1','-ar','16000','-c:a','pcm_s16le',str(norm))
 
     n = int((SECONDS + SEG_SECONDS - 1) // SEG_SECONDS)
-    print(f'SEGMENTS={n} SEG_SECONDS={SEG_SECONDS:.3f}', flush=True)
+    print(f'SEGMENTS={{n}} SEG_SECONDS={{SEG_SECONDS:.3f}}', flush=True)
     for i in range(n):
         start = i * SEG_SECONDS
         remain = max(0.1, min(SEG_SECONDS, SECONDS - start))
         if remain < 0.5: break
-        a = SEG / f'audio_{i:04d}.wav'
-        run('ffmpeg','-y','-v','error','-ss',f'{start:.3f}','-i',str(norm),'-t',f'{remain:.3f}','-ar','16000','-ac','1',str(a))
-        od = SEG / f'raw_{i:04d}'
+        a = SEG / f'audio_{{i:04d}}.wav'
+        run('ffmpeg','-y','-v','error','-ss',f'{{start:.3f}}','-i',str(norm),'-t',f'{{remain:.3f}}','-ar','16000','-ac','1',str(a))
+        od = SEG / f'raw_{{i:04d}}'
         od.mkdir(exist_ok=True)
         run(sys.executable, str(REPO/'infer_flash.py'),
             '--image_path',str(IMAGE),'--audio_path',str(a),
@@ -121,92 +128,112 @@ def main():
             '--weight_dtype','float16','--sample_size','768','768','--fps',str(FPS),
             '--negative_prompt','blurry, distorted face, identity drift, extra person, duplicate person, malformed hands, fused fingers, deformed mouth, jitter, flicker, camera cut, text, watermark')
         raw = first_mp4(od)
-        silent = SEG / f'video_{i:04d}.mp4'
+        silent = SEG / f'video_{{i:04d}}.mp4'
         run('ffmpeg','-y','-v','error','-i',str(raw),'-an','-c:v','libx264','-preset','veryfast','-crf','20','-pix_fmt','yuv420p',str(silent))
 
     concat = SEG / 'concat.txt'
     files = sorted(SEG.glob('video_*.mp4'))
     if not files: raise RuntimeError('NO_SEGMENTS_GENERATED')
-    concat.write_text(''.join(f"file '{p.resolve()}'\n" for p in files))
+    concat.write_text(''.join(f"file '{{p.resolve()}}'\\n" for p in files))
     visual = OUT / 'visual.mp4'
     run('ffmpeg','-y','-v','error','-f','concat','-safe','0','-i',str(concat),'-c','copy',str(visual))
     final = OUT / 'master.mp4'
     run('ffmpeg','-y','-v','error','-i',str(visual),'-i',str(AUDIO),'-map','0:v:0','-map','1:a:0','-t',str(SECONDS),'-c:v','copy','-c:a','aac','-b:a','192k','-ar','48000','-movflags','+faststart',str(final))
     if not final.exists() or final.stat().st_size < 500_000:
         raise RuntimeError('MASTER_NOT_CREATED')
+
+    packaged = ROOT / 'master.mp4'
+    shutil.copy2(final, packaged)
+    shutil.rmtree(REPO, ignore_errors=True)
+    shutil.rmtree(MODELS, ignore_errors=True)
+    shutil.rmtree(SEG, ignore_errors=True)
+    shutil.rmtree(OUT, ignore_errors=True)
     print('BHAJAN_KAGGLE_WORKER_OK', flush=True)
-    print('OUTPUT=', final, flush=True)
+    print('OUTPUT=', packaged, flush=True)
 
 if __name__ == '__main__': main()
 '''
 
 
-def dispatch(seconds: int) -> None:
-    token = os.getenv("KAGGLE_API_TOKEN") or os.getenv("KAGGLE_API_TOKEN3")
-    if not token:
-        raise RuntimeError("KAGGLE_API_TOKEN secret is required. It must have Kaggle kernel write/run permission.")
+def diagnostic_log(kernel: str, env: dict[str, str]) -> None:
+    print('===== KAGGLE ECHOMIMIC WORKER LOG =====', flush=True)
+    try:
+        p = subprocess.run(['kaggle','kernels','logs',kernel], text=True, capture_output=True, env=env, timeout=45)
+        print(p.stdout or p.stderr or '(Kaggle returned no log text)', flush=True)
+    except Exception as exc:
+        print('KAGGLE_LOG_COMMAND_FAILED=', repr(exc), flush=True)
 
-    image = ROOT / "assets" / "singer_image.png"
-    audio = OUT / "bhajan_source.mp3"
-    if not image.exists(): raise RuntimeError(f"Missing singer image: {image}")
-    if not audio.exists(): raise RuntimeError(f"Missing generated Hindi bhajan audio: {audio}")
-    if not 180 <= seconds <= 300 or seconds % 15: raise RuntimeError("seconds must be 180-300 and divisible by 15")
+
+def dispatch(seconds: int) -> None:
+    token = os.getenv('KAGGLE_API_TOKEN') or os.getenv('KAGGLE_API_TOKEN3')
+    if not token:
+        raise RuntimeError('KAGGLE_API_TOKEN secret is required. It must have Kaggle kernel write/run permission.')
+
+    image = ROOT / 'assets' / 'singer_image.png'
+    audio = OUT / 'bhajan_source.mp3'
+    if not image.exists(): raise RuntimeError(f'Missing singer image: {image}')
+    if not audio.exists(): raise RuntimeError(f'Missing generated Hindi bhajan audio: {audio}')
+    if not 180 <= seconds <= 300 or seconds % 15: raise RuntimeError('seconds must be 180-300 and divisible by 15')
+
+    image_b64 = base64.b64encode(image.read_bytes()).decode('ascii')
+    audio_b64 = base64.b64encode(audio.read_bytes()).decode('ascii')
+    print(f'KAGGLE_WORKER_PAYLOAD image_bytes={image.stat().st_size} audio_bytes={audio.stat().st_size}', flush=True)
 
     shutil.rmtree(KAGGLE_DIR, ignore_errors=True)
     KAGGLE_DIR.mkdir(parents=True)
-    input_dir = KAGGLE_DIR / "input"
-    input_dir.mkdir(parents=True)
-    shutil.copy2(image, input_dir / "singer.png")
-    shutil.copy2(audio, input_dir / "bhajan.mp3")
-    (input_dir / "duration.txt").write_text(str(seconds), encoding="utf-8")
-    (KAGGLE_DIR / "worker.py").write_text(worker_code(), encoding="utf-8")
+    (KAGGLE_DIR / 'worker.py').write_text(worker_code(seconds, image_b64, audio_b64), encoding='utf-8')
 
-    username = os.getenv("KAGGLE_USERNAME", "").strip()
+    username = os.getenv('KAGGLE_USERNAME', '').strip()
     if not username:
-        raise RuntimeError("KAGGLE_USERNAME repository secret/variable is required for kernel dispatch")
-    slug = "hindibhajans-echomimic-v3"
-    kernel = f"{username}/{slug}"
+        raise RuntimeError('KAGGLE_USERNAME repository secret/variable is required for kernel dispatch')
+    slug = 'hindibhajans-echomimic-v3'
+    kernel = f'{username}/{slug}'
     meta = {
-        "id": kernel,
-        "title": slug,
-        "code_file": "worker.py",
-        "language": "python",
-        "kernel_type": "script",
-        "is_private": True,
-        "enable_gpu": True,
-        "enable_internet": True,
-        "machine_shape": "NvidiaTeslaT4",
-        "dataset_sources": [],
-        "competition_sources": [],
-        "kernel_sources": [],
-        "model_sources": [],
+        'id': kernel,
+        'title': slug,
+        'code_file': 'worker.py',
+        'language': 'python',
+        'kernel_type': 'script',
+        'is_private': True,
+        'enable_gpu': True,
+        'enable_internet': True,
+        'machine_shape': 'NvidiaTeslaT4',
+        'dataset_sources': [],
+        'competition_sources': [],
+        'kernel_sources': [],
+        'model_sources': [],
     }
-    (KAGGLE_DIR / "kernel-metadata.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    (KAGGLE_DIR / 'kernel-metadata.json').write_text(json.dumps(meta, indent=2), encoding='utf-8')
 
     env = kaggle_env()
-    run("kaggle", "kernels", "push", "-p", str(KAGGLE_DIR), "--accelerator", "NvidiaTeslaT4", "--timeout", str(11*60*60), cwd=ROOT, env=env)
+    run('kaggle','kernels','push','-p',str(KAGGLE_DIR),'--accelerator','NvidiaTeslaT4','--timeout',str(11*60*60),cwd=ROOT,env=env)
     deadline = time.time() + 11*60*60
     while time.time() < deadline:
-        p = subprocess.run(["kaggle","kernels","status",kernel], text=True, capture_output=True, env=env)
+        p = subprocess.run(['kaggle','kernels','status',kernel],text=True,capture_output=True,env=env)
         print(p.stdout or p.stderr, flush=True)
         text=(p.stdout+p.stderr).lower()
-        if "complete" in text: break
-        if any(x in text for x in ("error", "failed", "cancelled", "canceled")):
-            raise RuntimeError("KAGGLE_KERNEL_FAILED: " + (p.stdout or p.stderr))
+        if 'complete' in text: break
+        if any(x in text for x in ('error','failed','cancelled','canceled')):
+            diagnostic_log(kernel, env)
+            raise RuntimeError('KAGGLE_KERNEL_FAILED: ' + (p.stdout or p.stderr))
         time.sleep(30)
     else:
-        raise TimeoutError("KAGGLE_KERNEL_TIMEOUT")
+        diagnostic_log(kernel, env)
+        raise TimeoutError('KAGGLE_KERNEL_TIMEOUT')
 
-    outdir = OUT / "kaggle_output"
+    outdir = OUT / 'kaggle_output'
     shutil.rmtree(outdir, ignore_errors=True)
-    run("kaggle", "kernels", "output", kernel, "-p", str(outdir), "--force", cwd=ROOT, env=env)
-    candidates = list(outdir.rglob("master.mp4"))
-    if not candidates: raise RuntimeError("KAGGLE_COMPLETED_BUT_MASTER_MP4_MISSING")
-    shutil.copy2(candidates[0], OUT / "master.mp4")
-    print("KAGGLE_ECHOMIMIC_MASTER_READY", flush=True)
+    result = subprocess.run(['kaggle','kernels','output',kernel,'-p',str(outdir),'--force'],text=True,capture_output=True,env=env)
+    print(result.stdout or result.stderr, flush=True)
+    candidates = list(outdir.rglob('master.mp4'))
+    if not candidates:
+        diagnostic_log(kernel, env)
+        raise RuntimeError('KAGGLE_COMPLETED_BUT_MASTER_MP4_MISSING')
+    shutil.copy2(candidates[0], OUT / 'master.mp4')
+    print('KAGGLE_ECHOMIMIC_MASTER_READY', flush=True)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     import argparse
     ap=argparse.ArgumentParser(); ap.add_argument('--seconds',type=int,default=180)
     a=ap.parse_args(); dispatch(a.seconds)
