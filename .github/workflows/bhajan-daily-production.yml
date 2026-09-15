@@ -27,6 +27,7 @@ concurrency:
 env:
   VIDEO_SECONDS: ${{ inputs.video_seconds || '180' }}
   KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN3 || secrets.KAGGLE_API_TOKEN }}
+  KAGGLE_USERNAME: bhajanaabha
 
 jobs:
   produce-publish:
