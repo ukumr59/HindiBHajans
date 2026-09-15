@@ -17,6 +17,8 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "output"
 KDIR = ROOT / ".kaggle_audio_worker"
 KAGGLE_KERNEL = "bhajanaabha/hindibhajans-ace-step"
+ACE_STEP_COMMIT = "ca1e85fe9430179831e6bc6be790c332190a3866"
+ACE_STEP_REPO = "https://github.com/ACE-Step/ACE-Step-1.5.git"
 
 LYRICS = """[Intro]
 श्री राम... श्री राम... जय जय राम...
@@ -76,33 +78,37 @@ def run(*args):
 
 
 def patch_dtype():
-    target = REPO / 'acestep/core/generation/handler/init_service_orchestrator.py'
-    text = target.read_text()
-    # ACE-Step changed this CUDA dtype block after the original dispatcher was
-    # written. Keep the T4-safe float32 policy, but match the current layout.
-    pattern = re.compile(
-        r'(            elif resolved_device == "cuda":\n)'
-        r'(.*?)'
-        r'(\n            else:\n                self\.dtype = torch\.bfloat16 if resolved_device == "xpu" else torch\.float32)',
-        re.S,
-    )
-    patched, count = pattern.subn(
-        r'\1                # Force float32 for the T4 CUDA path; bfloat16 is not supported by T4.\n'
-        r'                self.dtype = torch.float32\3',
-        text,
-        count=1,
-    )
-    if count != 1:
-        raise RuntimeError('ACE_STEP_SOURCE_LAYOUT_CHANGED')
-    target.write_text(patched)
-    compile(patched, str(target), 'exec')
-    print('ACE_STEP_T4_SOURCE_DTYPE_PATCH=PASS', flush=True)
+    candidates = [REPO / 'acestep/core/generation/handler/init_service_orchestrator.py']
+    candidates.extend(sorted(REPO.glob('acestep/core/generation/handler/init_service*.py')))
+    seen = set()
+    for target in candidates:
+        target = target.resolve()
+        if target in seen or not target.exists():
+            continue
+        seen.add(target)
+        text = target.read_text()
+        if 'gpu_config.cuda_supports_bfloat16()' not in text or 'self.dtype = torch.float16' not in text:
+            continue
+        count = text.count('self.dtype = torch.float16')
+        if count != 1:
+            raise RuntimeError(f'ACE_STEP_SOURCE_LAYOUT_CHANGED:{target}:float16_count={count}')
+        patched = text.replace('self.dtype = torch.float16', 'self.dtype = torch.float32', 1)
+        patched = patched.replace('using float16 instead of bfloat16', 'using float32 instead of bfloat16', 1)
+        target.write_text(patched)
+        compile(patched, str(target), 'exec')
+        print('ACE_STEP_T4_SOURCE_DTYPE_PATCH=PASS', target, flush=True)
+        return
+    paths = [str(p.relative_to(REPO)) for p in sorted(REPO.glob('acestep/core/generation/handler/init_service*.py'))]
+    raise RuntimeError('ACE_STEP_SOURCE_LAYOUT_CHANGED: no CUDA dtype block found; files=' + ','.join(paths))
 
 
 def main():
     run('nvidia-smi')
     run(sys.executable, '-m', 'pip', 'install', '-q', '--upgrade', 'pip')
-    run('git', 'clone', '--depth', '1', 'https://github.com/ACE-Step/ACE-Step-1.5.git', str(REPO))
+    run('git', 'init', str(REPO))
+    run('git', '-C', str(REPO), 'remote', 'add', 'origin', 'https://github.com/ACE-Step/ACE-Step-1.5.git')
+    run('git', '-C', str(REPO), 'fetch', '--depth', '1', 'origin', os.environ['ACE_STEP_COMMIT'])
+    run('git', '-C', str(REPO), 'checkout', '--detach', os.environ['ACE_STEP_COMMIT'])
     patch_dtype()
     req = REPO / 'runtime-requirements.txt'
     lines = (REPO / 'requirements.txt').read_text().splitlines()
@@ -150,16 +156,33 @@ def dispatch(seconds: int) -> None:
     shutil.rmtree(KDIR, ignore_errors=True); KDIR.mkdir(parents=True)
     (KDIR/'worker.py').write_text(worker_code(), encoding='utf-8')
     (KDIR/'duration.txt').write_text(str(seconds), encoding='utf-8')
-    meta = {'id':KAGGLE_KERNEL,'title':'hindibhajans-ace-step','code_file':'worker.py','language':'python','kernel_type':'script','is_private':True,'enable_gpu':True,'enable_internet':True,'machine_shape':'NvidiaTeslaT4','dataset_sources':[],'competition_sources':[],'kernel_sources':[],'model_sources':[]}
-    (KDIR/'kernel-metadata.json').write_text(json.dumps(meta,indent=2),encoding='utf-8')
-    env=dict(os.environ); env['KAGGLE_API_TOKEN']=token
+    (KDIR/'kernel-metadata.json').write_text(json.dumps({'id':KAGGLE_KERNEL,'title':'hindibhajans-ace-step','code_file':'worker.py','language':'python','kernel_type':'script','is_private':True,'enable_gpu':True,'enable_internet':True,'machine_shape':'NvidiaTeslaT4','dataset_sources':[],'competition_sources':[],'kernel_sources':[],'model_sources':[]},indent=2),encoding='utf-8')
+    env=dict(os.environ); env['KAGGLE_API_TOKEN']=token; env['ACE_STEP_COMMIT']=ACE_STEP_COMMIT
     run('kaggle','kernels','push','-p',str(KDIR),'--accelerator','NvidiaTeslaT4','--timeout',str(11*60*60),cwd=ROOT,env=env)
     deadline=time.time()+11*60*60
     while time.time()<deadline:
         p=subprocess.run(['kaggle','kernels','status',KAGGLE_KERNEL],capture_output=True,text=True,env=env)
-        print(p.stdout or p.stderr,flush=True); t=(p.stdout+p.stderr).lower()
+        status_text=p.stdout or p.stderr
+        print(status_text,flush=True)
+        t=(p.stdout+p.stderr).lower()
         if 'complete' in t: break
-        if any(x in t for x in ('error','failed','cancelled','canceled')): raise RuntimeError('KAGGLE_ACE_STEP_KERNEL_FAILED')
+        if any(x in t for x in ('error','failed','cancelled','canceled')):
+            # The status command only reports ERROR and hides the actual Kaggle
+            # exception. Pull the kernel logs before failing so GitHub Actions
+            # contains the real root cause instead of only KAGGLE_*_FAILED.
+            print('KAGGLE_ACE_STEP_FETCHING_ERROR_LOGS=START', flush=True)
+            lp=subprocess.run(['kaggle','kernels','logs',KAGGLE_KERNEL],capture_output=True,text=True,env=env)
+            print(lp.stdout or lp.stderr,flush=True)
+            if lp.returncode != 0:
+                outdir=OUT/'kaggle_audio_error_output'; shutil.rmtree(outdir,ignore_errors=True)
+                op=subprocess.run(['kaggle','kernels','output',KAGGLE_KERNEL,'-p',str(outdir),'--force'],capture_output=True,text=True,env=env)
+                print(op.stdout or op.stderr,flush=True)
+                for f in sorted(outdir.rglob('*')):
+                    if f.is_file() and f.stat().st_size < 2_000_000:
+                        try: print(f'--- {f} ---\n{f.read_text(errors="replace")}',flush=True)
+                        except Exception: pass
+            print('KAGGLE_ACE_STEP_FETCHING_ERROR_LOGS=END', flush=True)
+            raise RuntimeError('KAGGLE_ACE_STEP_KERNEL_FAILED')
         time.sleep(30)
     else: raise TimeoutError('KAGGLE_ACE_STEP_KERNEL_TIMEOUT')
     outdir=OUT/'kaggle_audio_output'; shutil.rmtree(outdir,ignore_errors=True)
