@@ -105,9 +105,15 @@ def patch_infer_for_cpu_offload(repo: Path) -> None:
     text = text.replace(second, '    # T4-safe: offload pipeline components between GPU operations.\n    pipeline.enable_model_cpu_offload(device=device)\n    print("CPU_OFFLOAD_READY", flush=True)\n\n    # Create output directory', 1)
     text = text.replace('low_cpu_mem_usage=True if not fsdp_dit else False,', 'low_cpu_mem_usage=False,', 1)
     text = text.replace('low_cpu_mem_usage=True,\n        torch_dtype=weight_dtype,', 'low_cpu_mem_usage=False,\n        torch_dtype=weight_dtype,', 1)
+    # EchoMimic's parser defaults transformer_path to an empty string. Its
+    # upstream loader checks only `is not None`, which then tries to open
+    # checkpoint-50000.pth even though the transformer is already loaded from
+    # the mounted safetensors model. Only load an explicit transformer path.
+    text = text.replace('if transformer_path is not None:', 'if transformer_path:', 1)
     path.write_text(text)
     print('INFER_FLASH_PATCHED_CPU_OFFLOAD', flush=True)
     print('INFER_FLASH_PATCHED_LOW_CPU_MEM_FALSE', flush=True)
+    print('INFER_FLASH_PATCHED_EMPTY_TRANSFORMER_PATH', flush=True)
 
 
 def main() -> None:
