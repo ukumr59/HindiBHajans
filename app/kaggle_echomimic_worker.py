@@ -9,7 +9,7 @@ ROOT = Path('/kaggle/working')
 INPUT_ROOT = Path('/kaggle/input')
 SECONDS_FILE = 'duration.txt'
 IMAGE_ENCODER_FILE = 'models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth'
-BASE_HF = 'Wan-AI/Wan2.1-T2V-1.3B-Diffusers'
+FUN_HF = 'alibaba-pai/Wan2.1-Fun-V1.1-1.3B-InP'
 FLASH_HF = 'BadToBest/EchoMimicV3'
 
 
@@ -19,9 +19,8 @@ def run(*args: object) -> None:
 
 
 def find_input(name: str) -> Path:
-    roots = [INPUT_ROOT, ROOT]
     matches: list[Path] = []
-    for root in roots:
+    for root in (INPUT_ROOT, ROOT):
         if root.exists():
             matches.extend(p for p in root.rglob(name) if p.is_file())
     if not matches:
@@ -48,29 +47,15 @@ def newest_mp4(directory: Path) -> Path:
 
 def disk_report(label: str) -> None:
     p = shutil.disk_usage(ROOT)
-    print('DISK', label, f'free_gb={p.free / 1024**3:.2f}', f'total_gb={p.total / 1024**3:.2f}', flush=True)
+    free = p.free / 1024**3
+    print('DISK', label, f'free_gb={free:.2f}', f'total_gb={p.total / 1024**3:.2f}', flush=True)
     if p.free < 1_500_000_000:
-        raise RuntimeError(f'WORKING_DISK_LOW: {p.free / 1024**3:.2f}GB')
-
-
-def link_tree(src: Path, dst: Path, names: list[str]) -> None:
-    dst.mkdir(parents=True, exist_ok=True)
-    for name in names:
-        source = src / name
-        target = dst / name
-        if not source.exists():
-            raise RuntimeError(f'WAN_BASE_COMPONENT_MISSING: {source}')
-        if target.exists() or target.is_symlink():
-            if target.is_dir() and not target.is_symlink():
-                shutil.rmtree(target)
-            else:
-                target.unlink()
-        target.symlink_to(source, target_is_directory=source.is_dir())
+        raise RuntimeError(f'WORKING_DISK_LOW: {free:.2f}GB')
 
 
 def link_file(source: Path, target: Path) -> None:
     if not source.exists():
-        raise RuntimeError(f'WAN_IMAGE_ENCODER_MISSING: {source}')
+        raise RuntimeError(f'REQUIRED_FILE_MISSING: {source}')
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists() or target.is_symlink():
         if target.is_dir() and not target.is_symlink():
@@ -80,17 +65,49 @@ def link_file(source: Path, target: Path) -> None:
     target.symlink_to(source)
 
 
-def ensure_hf_components(runtime_base: Path, names: list[str]) -> None:
-    missing = [name for name in names if not (runtime_base / name).exists()]
+def ensure_fun_base(runtime_base: Path) -> None:
+    required = [
+        runtime_base / 'config.json',
+        runtime_base / 'Wan2.1_VAE.pth',
+        runtime_base / 'models_t5_umt5-xxl-enc-bf16.pth',
+        runtime_base / 'google' / 'umt5-xxl' / 'tokenizer.json',
+    ]
+    missing = [str(p.relative_to(runtime_base)) for p in required if not p.exists()]
     if not missing:
+        print('FUN_BASE_READY existing', flush=True)
         return
-    print('BASE_COMPONENTS_MISSING', ','.join(missing), flush=True)
+    print('FUN_BASE_DOWNLOAD', ','.join(missing), flush=True)
     from huggingface_hub import snapshot_download
-    patterns = [f'{name}/**' for name in missing]
-    snapshot_download(BASE_HF, local_dir=str(runtime_base), allow_patterns=patterns)
-    still_missing = [name for name in names if not (runtime_base / name).exists()]
-    if still_missing:
-        raise RuntimeError(f'WAN_BASE_COMPONENT_MISSING_AFTER_HF: {still_missing}')
+    disk_report('before_fun_base_download')
+    if shutil.disk_usage(ROOT).free < 14 * 1024**3:
+        raise RuntimeError('INSUFFICIENT_DISK_FOR_FUN_BASE: need >=14GB free')
+    snapshot_download(
+        FUN_HF,
+        local_dir=str(runtime_base),
+        allow_patterns=[
+            'config.json',
+            'Wan2.1_VAE.pth',
+            'models_t5_umt5-xxl-enc-bf16.pth',
+            'google/umt5-xxl/*',
+        ],
+    )
+    still = [str(p.relative_to(runtime_base)) for p in required if not p.exists()]
+    if still:
+        raise RuntimeError(f'FUN_BASE_INCOMPLETE: {still}')
+    disk_report('after_fun_base_download')
+
+
+def patch_infer_for_cpu_offload(repo: Path) -> None:
+    path = repo / 'infer_flash.py'
+    text = path.read_text()
+    first = '    pipeline.to(device=device)\n\n    coefficients = get_teacache_coefficients(model_name) if enable_teacache else None'
+    second = '    pipeline.to(device=device)\n\n    # Create output directory'
+    if first not in text or second not in text:
+        raise RuntimeError('INFER_FLASH_PATCH_TARGET_NOT_FOUND')
+    text = text.replace(first, '    # Keep components on CPU while TeaCache is configured.\n\n    coefficients = get_teacache_coefficients(model_name) if enable_teacache else None', 1)
+    text = text.replace(second, '    # T4-safe: keep large text/image/transformer components off GPU except during forward.\n    pipeline.enable_model_cpu_offload(device=device)\n    print("CPU_OFFLOAD_READY", flush=True)\n\n    # Create output directory', 1)
+    path.write_text(text)
+    print('INFER_FLASH_PATCHED_CPU_OFFLOAD', flush=True)
 
 
 def main() -> None:
@@ -117,6 +134,7 @@ def main() -> None:
     segments = ROOT / 'segments'
     outputs = ROOT / 'outputs'
     run('git', 'clone', '--depth', '1', 'https://github.com/antgroup/echomimic_v3.git', str(repo))
+    patch_infer_for_cpu_offload(repo)
 
     runtime_requirements = ROOT / 'echomimic_v3_flash_requirements.txt'
     lines = (repo / 'requirements.txt').read_text().splitlines()
@@ -128,52 +146,21 @@ def main() -> None:
             kept.append(line)
             continue
         package = stripped.split('=', 1)[0].split('<', 1)[0].split('>', 1)[0].split('!', 1)[0].strip().lower()
-        if package in excluded:
-            continue
-        kept.append(line)
+        if package not in excluded:
+            kept.append(line)
     runtime_requirements.write_text('\n'.join(kept) + '\n')
     run(sys.executable, '-m', 'pip', 'install', '--no-cache-dir', '-q', '-r', str(runtime_requirements))
     run(sys.executable, '-m', 'pip', 'install', '--no-cache-dir', '-q', 'huggingface_hub', 'pyloudnorm')
     run(sys.executable, '-m', 'pip', 'cache', 'purge')
     disk_report('after_runtime_install')
 
-    source_base = find_dir('Wan2.1-T2V-1.3B')
-    print('WAN_BASE_INPUT', source_base, flush=True)
     runtime_base = models / 'Wan2.1-Fun-V1.1-1.3B-InP'
     runtime_base.mkdir(parents=True, exist_ok=True)
-
-    # The mounted Kaggle model contains the large T2V text encoder and the
-    # small tokenizer/other files when present. EchoMimic also needs a VAE;
-    # if the uploaded model omitted it, fetch only the missing VAE/tokenizer
-    # from the public T2V Diffusers repo instead of downloading the full model.
-    for name in ('text_encoder',):
-        source = source_base / name
-        if not source.exists():
-            raise RuntimeError(f'WAN_BASE_COMPONENT_MISSING: {source}')
-        target = runtime_base / name
-        if target.exists() or target.is_symlink():
-            if target.is_dir() and not target.is_symlink():
-                shutil.rmtree(target)
-            else:
-                target.unlink()
-        target.symlink_to(source, target_is_directory=True)
-
-    for name in ('vae', 'tokenizer'):
-        source = source_base / name
-        target = runtime_base / name
-        if source.exists():
-            if target.exists() or target.is_symlink():
-                if target.is_dir() and not target.is_symlink():
-                    shutil.rmtree(target)
-                else:
-                    target.unlink()
-            target.symlink_to(source, target_is_directory=True)
-
-    ensure_hf_components(runtime_base, ['vae', 'tokenizer'])
+    ensure_fun_base(runtime_base)
 
     image_encoder_source = find_input(IMAGE_ENCODER_FILE)
     print('WAN_IMAGE_ENCODER_INPUT', image_encoder_source, flush=True)
-    link_file(image_encoder_source, runtime_base / 'image_encoder')
+    link_file(image_encoder_source, runtime_base / IMAGE_ENCODER_FILE)
 
     fun_base = find_dir('Wan2.1-Fun-V1.1-1.3B-InP')
     fun_transformer = fun_base / 'diffusion_pytorch_model.safetensors'
@@ -183,8 +170,6 @@ def main() -> None:
 
     from huggingface_hub import snapshot_download
     wav = models / 'chinese-wav2vec2-base'
-    flash = models / 'echomimicv3-flash-pro'
-
     if not wav.exists():
         snapshot_download(
             'TencentGameMate/chinese-wav2vec2-base',
@@ -193,15 +178,14 @@ def main() -> None:
         )
     disk_report('after_wav2vec')
 
-    # Only the 577-byte Flash config is downloaded. The 3.7 GB Flash weights
-    # are mounted from the Kaggle PAI model above, so writable disk stays low.
-    if not (flash / 'config.json').exists():
+    flash = models / 'echomimicv3-flash-pro'
+    flash_root = flash / 'echomimicv3-flash-pro'
+    if not (flash_root / 'config.json').exists():
         snapshot_download(
             FLASH_HF,
             local_dir=str(flash),
             allow_patterns=['echomimicv3-flash-pro/config.json'],
         )
-    flash_root = flash / 'echomimicv3-flash-pro'
     if not (flash_root / 'config.json').exists():
         raise RuntimeError('FLASH_CONFIG_MISSING')
 
