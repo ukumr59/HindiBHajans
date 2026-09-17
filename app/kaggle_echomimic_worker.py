@@ -46,6 +46,8 @@ def newest_mp4(directory: Path) -> Path:
 def disk_report(label: str) -> None:
     p = shutil.disk_usage(ROOT)
     print('DISK', label, f'free_gb={p.free / 1024**3:.2f}', f'total_gb={p.total / 1024**3:.2f}', flush=True)
+    if p.free < 1_500_000_000:
+        raise RuntimeError(f'WORKING_DISK_LOW: {p.free / 1024**3:.2f}GB')
 
 
 def link_tree(src: Path, dst: Path, names: list[str]) -> None:
@@ -56,7 +58,10 @@ def link_tree(src: Path, dst: Path, names: list[str]) -> None:
         if not source.exists():
             raise RuntimeError(f'WAN_BASE_COMPONENT_MISSING: {source}')
         if target.exists() or target.is_symlink():
-            target.unlink()
+            if target.is_dir() and not target.is_symlink():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
         target.symlink_to(source, target_is_directory=source.is_dir())
 
 
@@ -104,13 +109,6 @@ def main() -> None:
     run(sys.executable, '-m', 'pip', 'cache', 'purge')
     disk_report('after_runtime_install')
 
-    # The full Wan2.1-Fun-V1.1-1.3B-InP Hub repository is ~19.8 GB. Kaggle's
-    # writable disk is only about 20 GB, so downloading it into /kaggle/working
-    # leaves no room for the Flash transformer or wav2vec model. The kernel
-    # metadata attaches a public Kaggle Model containing the Wan base components
-    # under /kaggle/input; input/model mounts are read-only and do not consume
-    # the writable working volume. Build a tiny writable symlink tree pointing
-    # at those mounted components.
     source_base = find_dir('Wan2.1-T2V-1.3B')
     print('WAN_BASE_INPUT', source_base, flush=True)
     runtime_base = models / 'Wan2.1-Fun-V1.1-1.3B-InP'
@@ -120,8 +118,6 @@ def main() -> None:
     wav = models / 'chinese-wav2vec2-base'
     flash = models / 'echomimicv3-flash-pro'
 
-    # Use the compact 380 MB PyTorch wav2vec file; the repository's optional
-    # 1.14 GB fairseq checkpoint is not used by infer_flash.py.
     if not wav.exists():
         snapshot_download(
             'TencentGameMate/chinese-wav2vec2-base',
@@ -140,12 +136,12 @@ def main() -> None:
     if not (flash_root / 'config.json').exists() or not (flash_root / 'diffusion_pytorch_model.safetensors').exists():
         raise RuntimeError('FLASH_MODEL_INCOMPLETE')
 
-    # infer_flash.py first constructs its WanTransformer from model_name/transformer
-    # and then replaces the weights with --transformer_path. The Flash checkpoint
-    # supplies the compatible transformer config, so expose it as a symlink too.
     transformer_link = runtime_base / 'transformer'
     if transformer_link.exists() or transformer_link.is_symlink():
-        transformer_link.unlink()
+        if transformer_link.is_dir() and not transformer_link.is_symlink():
+            shutil.rmtree(transformer_link)
+        else:
+            transformer_link.unlink()
     transformer_link.symlink_to(flash_root, target_is_directory=True)
     disk_report('models_ready')
 
@@ -158,47 +154,57 @@ def main() -> None:
     frames = 81
     segment_seconds = frames / fps
     count = int((seconds + segment_seconds - 1) // segment_seconds)
+    print('INFERENCE_PLAN', f'segments={count}', f'segment_seconds={segment_seconds:.2f}', flush=True)
 
     for i in range(count):
+        disk_report(f'before_segment_{i:04d}')
         start = i * segment_seconds
         remain = max(0.1, min(segment_seconds, seconds - start))
         if remain < 0.5:
             break
         wav_file = segments / f'audio_{i:04d}.wav'
-        run('ffmpeg', '-y', '-v', 'error', '-ss', f'{start:.3f}', '-i', str(norm), '-t', f'{remain:.3f}', '-ar', '16000', '-ac', '1', str(wav_file))
         raw_dir = segments / f'raw_{i:04d}'
-        raw_dir.mkdir(exist_ok=True)
-        run(
-            sys.executable, str(repo / 'infer_flash.py'),
-            '--image_path', str(image),
-            '--audio_path', str(wav_file),
-            '--prompt', 'A single Indian devotional singer performing a Hindi bhajan in traditional Indian clothing before the specified Hindu deity in a serene temple setting; only the same singer is visible; natural singing mouth movement, subtle expressive head and upper-body motion, stable identity.',
-            '--num_inference_steps', '8',
-            '--config_path', str(repo / 'config/config.yaml'),
-            '--model_name', str(runtime_base),
-            '--ckpt_idx', '50000',
-            '--transformer_path', str(flash_root / 'diffusion_pytorch_model.safetensors'),
-            '--save_path', str(raw_dir),
-            '--wav2vec_model_dir', str(wav),
-            '--sampler_name', 'Flow_Unipc',
-            '--video_length', str(frames),
-            '--guidance_scale', '5.0',
-            '--audio_guidance_scale', '2.5',
-            '--audio_scale', '1.0',
-            '--neg_scale', '1.0',
-            '--neg_steps', '0',
-            '--seed', str(4300 + i),
-            '--enable_teacache',
-            '--teacache_threshold', '0.1',
-            '--num_skip_start_steps', '5',
-            '--weight_dtype', 'float16',
-            '--sample_size', '768', '768',
-            '--fps', str(fps),
-            '--negative_prompt', 'blurry, distorted face, identity drift, extra person, duplicate person, malformed hands, fused fingers, deformed mouth, jitter, flicker, camera cut, text, watermark',
-        )
-        raw = newest_mp4(raw_dir)
-        silent = segments / f'video_{i:04d}.mp4'
-        run('ffmpeg', '-y', '-v', 'error', '-i', str(raw), '-an', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', str(silent))
+        try:
+            run('ffmpeg', '-y', '-v', 'error', '-ss', f'{start:.3f}', '-i', str(norm), '-t', f'{remain:.3f}', '-ar', '16000', '-ac', '1', str(wav_file))
+            raw_dir.mkdir(exist_ok=True)
+            run(
+                sys.executable, str(repo / 'infer_flash.py'),
+                '--image_path', str(image),
+                '--audio_path', str(wav_file),
+                '--prompt', 'A single Indian devotional singer performing a Hindi bhajan in traditional Indian clothing before the specified Hindu deity in a serene temple setting; only the same singer is visible; natural singing mouth movement, subtle expressive head and upper-body motion, stable identity.',
+                '--num_inference_steps', '8',
+                '--config_path', str(repo / 'config/config.yaml'),
+                '--model_name', str(runtime_base),
+                '--ckpt_idx', '50000',
+                '--transformer_path', str(flash_root / 'diffusion_pytorch_model.safetensors'),
+                '--save_path', str(raw_dir),
+                '--wav2vec_model_dir', str(wav),
+                '--sampler_name', 'Flow_Unipc',
+                '--video_length', str(frames),
+                '--guidance_scale', '5.0',
+                '--audio_guidance_scale', '2.5',
+                '--audio_scale', '1.0',
+                '--neg_scale', '1.0',
+                '--neg_steps', '0',
+                '--seed', str(4300 + i),
+                '--enable_teacache',
+                '--teacache_threshold', '0.1',
+                '--num_skip_start_steps', '5',
+                '--weight_dtype', 'float16',
+                '--sample_size', '768', '768',
+                '--fps', str(fps),
+                '--negative_prompt', 'blurry, distorted face, identity drift, extra person, duplicate person, malformed hands, fused fingers, deformed mouth, jitter, flicker, camera cut, text, watermark',
+            )
+            raw = newest_mp4(raw_dir)
+            silent = segments / f'video_{i:04d}.mp4'
+            run('ffmpeg', '-y', '-v', 'error', '-i', str(raw), '-an', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', str(silent))
+            if not silent.exists() or silent.stat().st_size < 100_000:
+                raise RuntimeError(f'SEGMENT_NOT_CREATED: {silent}')
+        finally:
+            wav_file.unlink(missing_ok=True)
+            if raw_dir.exists():
+                shutil.rmtree(raw_dir, ignore_errors=True)
+        disk_report(f'after_segment_{i:04d}')
 
     videos = sorted(segments.glob('video_*.mp4'))
     if not videos:
