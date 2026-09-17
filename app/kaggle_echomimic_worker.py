@@ -28,13 +28,10 @@ def find_input(name: str) -> Path:
     return min(matches, key=lambda p: len(p.parts))
 
 
-def find_dir(name: str) -> Path:
-    matches: list[Path] = []
-    for root in (INPUT_ROOT, ROOT):
-        if root.exists():
-            matches.extend(p for p in root.rglob(name) if p.is_dir())
+def find_mounted_file(name: str) -> Path:
+    matches = [p for p in INPUT_ROOT.rglob(name) if p.is_file()] if INPUT_ROOT.exists() else []
     if not matches:
-        raise RuntimeError(f'KAGGLE_INPUT_DIR_MISSING: {name}')
+        raise RuntimeError(f'KAGGLE_MOUNTED_FILE_MISSING: {name}')
     return min(matches, key=lambda p: len(p.parts))
 
 
@@ -101,11 +98,11 @@ def patch_infer_for_cpu_offload(repo: Path) -> None:
     path = repo / 'infer_flash.py'
     text = path.read_text()
     first = '    pipeline.to(device=device)\n\n    coefficients = get_teacache_coefficients(model_name) if enable_teacache else None'
-    second = '    pipeline.to(device=device)\n\n    # Create output directory'
+    second = '    # Create output directory'
     if first not in text or second not in text:
         raise RuntimeError('INFER_FLASH_PATCH_TARGET_NOT_FOUND')
     text = text.replace(first, '    # Keep components on CPU while TeaCache is configured.\n\n    coefficients = get_teacache_coefficients(model_name) if enable_teacache else None', 1)
-    text = text.replace(second, '    # T4-safe: keep large text/image/transformer components off GPU except during forward.\n    pipeline.enable_model_cpu_offload(device=device)\n    print("CPU_OFFLOAD_READY", flush=True)\n\n    # Create output directory', 1)
+    text = text.replace(second, '    # T4-safe: offload pipeline components between GPU operations.\n    pipeline.enable_model_cpu_offload(device=device)\n    print("CPU_OFFLOAD_READY", flush=True)\n\n    # Create output directory', 1)
     path.write_text(text)
     print('INFER_FLASH_PATCHED_CPU_OFFLOAD', flush=True)
 
@@ -158,18 +155,19 @@ def main() -> None:
     runtime_base.mkdir(parents=True, exist_ok=True)
     ensure_fun_base(runtime_base)
 
-    image_encoder_source = find_input(IMAGE_ENCODER_FILE)
+    image_encoder_source = find_mounted_file(IMAGE_ENCODER_FILE)
     print('WAN_IMAGE_ENCODER_INPUT', image_encoder_source, flush=True)
     link_file(image_encoder_source, runtime_base / IMAGE_ENCODER_FILE)
 
-    fun_base = find_dir('Wan2.1-Fun-V1.1-1.3B-InP')
-    fun_transformer = fun_base / 'diffusion_pytorch_model.safetensors'
-    if not fun_transformer.exists():
-        raise RuntimeError(f'FLASH_TRANSFORMER_MISSING: {fun_transformer}')
-    print('FLASH_TRANSFORMER_INPUT', fun_transformer, fun_transformer.stat().st_size, flush=True)
+    transformer_source = find_mounted_file('diffusion_pytorch_model.safetensors')
+    if transformer_source.parent.name != 'Wan2.1-Fun-V1.1-1.3B-InP':
+        raise RuntimeError(f'FLASH_TRANSFORMER_WRONG_SOURCE: {transformer_source}')
+    print('FLASH_TRANSFORMER_INPUT', transformer_source, transformer_source.stat().st_size, flush=True)
+    transformer_link = runtime_base / 'diffusion_pytorch_model.safetensors'
+    link_file(transformer_source, transformer_link)
 
-    from huggingface_hub import snapshot_download
     wav = models / 'chinese-wav2vec2-base'
+    from huggingface_hub import snapshot_download
     if not wav.exists():
         snapshot_download(
             'TencentGameMate/chinese-wav2vec2-base',
@@ -189,13 +187,6 @@ def main() -> None:
     if not (flash_root / 'config.json').exists():
         raise RuntimeError('FLASH_CONFIG_MISSING')
 
-    transformer_link = runtime_base / 'transformer'
-    if transformer_link.exists() or transformer_link.is_symlink():
-        if transformer_link.is_dir() and not transformer_link.is_symlink():
-            shutil.rmtree(transformer_link)
-        else:
-            transformer_link.unlink()
-    transformer_link.symlink_to(flash_root, target_is_directory=True)
     disk_report('models_ready')
 
     segments.mkdir(exist_ok=True)
@@ -229,7 +220,7 @@ def main() -> None:
                 '--config_path', str(repo / 'config/config.yaml'),
                 '--model_name', str(runtime_base),
                 '--ckpt_idx', '50000',
-                '--transformer_path', str(fun_transformer),
+                '--transformer_path', str(transformer_link),
                 '--save_path', str(raw_dir),
                 '--wav2vec_model_dir', str(wav),
                 '--sampler_name', 'Flow_Unipc',
