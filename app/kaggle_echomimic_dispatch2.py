@@ -13,7 +13,7 @@ KDIR = ROOT / '.kaggle_worker'
 DDIR = ROOT / '.kaggle_dataset'
 KERNEL = 'bhajanaabha/hindibhajans-echomimic-v3'
 INPUT_DATASET = 'bhajanaabha/hindibhajans-echomimic-inputs'
-WAN_BASE_MODEL = 'mahbubahmedturza/wan-ai-new/Other/default/1'
+WAN_MODEL = 'mahbubahmedturza/wan-ai-new/Other/default/1'
 WORKER_SOURCE = ROOT / 'app' / 'kaggle_echomimic_worker.py'
 
 
@@ -101,15 +101,13 @@ def main(seconds: int) -> None:
         'dataset_sources': [INPUT_DATASET],
         'competition_sources': [],
         'kernel_sources': [],
-        # Public Kaggle model: ~16.66 GB of Wan2.1 T2V-1.3B base components.
-        # Mounting it as an input keeps it off the ~20 GB writable disk.
-        'model_sources': [WAN_BASE_MODEL],
+        'model_sources': [WAN_MODEL],
     }
     (KDIR / 'kernel-metadata.json').write_text(json.dumps(metadata, indent=2))
 
     run(['python', '-m', 'py_compile', str(KDIR / 'worker.py')], env=env)
     worker_bytes = (KDIR / 'worker.py').stat().st_size
-    print('KAGGLE_WORKER_PACKAGE', f'worker_bytes={worker_bytes}', flush=True)
+    print('KAGGLE_WORKER_PACKAGE', f'worker_bytes={worker_bytes}', f'WAN_MODEL_SOURCE={WAN_MODEL}', flush=True)
     if worker_bytes > 100_000:
         raise RuntimeError(f'WORKER_SOURCE_TOO_LARGE: {worker_bytes}')
 
