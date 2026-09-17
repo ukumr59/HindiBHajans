@@ -9,6 +9,8 @@ ROOT = Path('/kaggle/working')
 INPUT_ROOT = Path('/kaggle/input')
 SECONDS_FILE = 'duration.txt'
 IMAGE_ENCODER_FILE = 'models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth'
+BASE_HF = 'Wan-AI/Wan2.1-T2V-1.3B-Diffusers'
+FLASH_HF = 'BadToBest/EchoMimicV3'
 
 
 def run(*args: object) -> None:
@@ -78,6 +80,19 @@ def link_file(source: Path, target: Path) -> None:
     target.symlink_to(source)
 
 
+def ensure_hf_components(runtime_base: Path, names: list[str]) -> None:
+    missing = [name for name in names if not (runtime_base / name).exists()]
+    if not missing:
+        return
+    print('BASE_COMPONENTS_MISSING', ','.join(missing), flush=True)
+    from huggingface_hub import snapshot_download
+    patterns = [f'{name}/**' for name in missing]
+    snapshot_download(BASE_HF, local_dir=str(runtime_base), allow_patterns=patterns)
+    still_missing = [name for name in names if not (runtime_base / name).exists()]
+    if still_missing:
+        raise RuntimeError(f'WAN_BASE_COMPONENT_MISSING_AFTER_HF: {still_missing}')
+
+
 def main() -> None:
     image = find_input('singer.png')
     audio = find_input('bhajan.mp3')
@@ -125,11 +140,46 @@ def main() -> None:
     source_base = find_dir('Wan2.1-T2V-1.3B')
     print('WAN_BASE_INPUT', source_base, flush=True)
     runtime_base = models / 'Wan2.1-Fun-V1.1-1.3B-InP'
-    link_tree(source_base, runtime_base, ['vae', 'text_encoder', 'tokenizer'])
+    runtime_base.mkdir(parents=True, exist_ok=True)
+
+    # The mounted Kaggle model contains the large T2V text encoder and the
+    # small tokenizer/other files when present. EchoMimic also needs a VAE;
+    # if the uploaded model omitted it, fetch only the missing VAE/tokenizer
+    # from the public T2V Diffusers repo instead of downloading the full model.
+    for name in ('text_encoder',):
+        source = source_base / name
+        if not source.exists():
+            raise RuntimeError(f'WAN_BASE_COMPONENT_MISSING: {source}')
+        target = runtime_base / name
+        if target.exists() or target.is_symlink():
+            if target.is_dir() and not target.is_symlink():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
+        target.symlink_to(source, target_is_directory=True)
+
+    for name in ('vae', 'tokenizer'):
+        source = source_base / name
+        target = runtime_base / name
+        if source.exists():
+            if target.exists() or target.is_symlink():
+                if target.is_dir() and not target.is_symlink():
+                    shutil.rmtree(target)
+                else:
+                    target.unlink()
+            target.symlink_to(source, target_is_directory=True)
+
+    ensure_hf_components(runtime_base, ['vae', 'tokenizer'])
 
     image_encoder_source = find_input(IMAGE_ENCODER_FILE)
     print('WAN_IMAGE_ENCODER_INPUT', image_encoder_source, flush=True)
     link_file(image_encoder_source, runtime_base / 'image_encoder')
+
+    fun_base = find_dir('Wan2.1-Fun-V1.1-1.3B-InP')
+    fun_transformer = fun_base / 'diffusion_pytorch_model.safetensors'
+    if not fun_transformer.exists():
+        raise RuntimeError(f'FLASH_TRANSFORMER_MISSING: {fun_transformer}')
+    print('FLASH_TRANSFORMER_INPUT', fun_transformer, fun_transformer.stat().st_size, flush=True)
 
     from huggingface_hub import snapshot_download
     wav = models / 'chinese-wav2vec2-base'
@@ -143,15 +193,17 @@ def main() -> None:
         )
     disk_report('after_wav2vec')
 
-    if not flash.exists():
+    # Only the 577-byte Flash config is downloaded. The 3.7 GB Flash weights
+    # are mounted from the Kaggle PAI model above, so writable disk stays low.
+    if not (flash / 'config.json').exists():
         snapshot_download(
-            'BadToBest/EchoMimicV3',
+            FLASH_HF,
             local_dir=str(flash),
-            allow_patterns=['echomimicv3-flash-pro/config.json', 'echomimicv3-flash-pro/diffusion_pytorch_model.safetensors'],
+            allow_patterns=['echomimicv3-flash-pro/config.json'],
         )
     flash_root = flash / 'echomimicv3-flash-pro'
-    if not (flash_root / 'config.json').exists() or not (flash_root / 'diffusion_pytorch_model.safetensors').exists():
-        raise RuntimeError('FLASH_MODEL_INCOMPLETE')
+    if not (flash_root / 'config.json').exists():
+        raise RuntimeError('FLASH_CONFIG_MISSING')
 
     transformer_link = runtime_base / 'transformer'
     if transformer_link.exists() or transformer_link.is_symlink():
@@ -193,7 +245,7 @@ def main() -> None:
                 '--config_path', str(repo / 'config/config.yaml'),
                 '--model_name', str(runtime_base),
                 '--ckpt_idx', '50000',
-                '--transformer_path', str(flash_root / 'diffusion_pytorch_model.safetensors'),
+                '--transformer_path', str(fun_transformer),
                 '--save_path', str(raw_dir),
                 '--wav2vec_model_dir', str(wav),
                 '--sampler_name', 'Flow_Unipc',
