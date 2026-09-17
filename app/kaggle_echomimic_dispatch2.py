@@ -14,6 +14,7 @@ DDIR = ROOT / '.kaggle_dataset'
 KERNEL = 'bhajanaabha/hindibhajans-echomimic-v3'
 INPUT_DATASET = 'bhajanaabha/hindibhajans-echomimic-inputs'
 WAN_MODEL = 'mahbubahmedturza/wan-ai-new/Other/default/1'
+FLASH_MODEL = 'mahbubahmedturza/pai/Other/default/1'
 WORKER_SOURCE = ROOT / 'app' / 'kaggle_echomimic_worker.py'
 
 
@@ -101,13 +102,13 @@ def main(seconds: int) -> None:
         'dataset_sources': [INPUT_DATASET],
         'competition_sources': [],
         'kernel_sources': [],
-        'model_sources': [WAN_MODEL],
+        'model_sources': [WAN_MODEL, FLASH_MODEL],
     }
     (KDIR / 'kernel-metadata.json').write_text(json.dumps(metadata, indent=2))
 
     run(['python', '-m', 'py_compile', str(KDIR / 'worker.py')], env=env)
     worker_bytes = (KDIR / 'worker.py').stat().st_size
-    print('KAGGLE_WORKER_PACKAGE', f'worker_bytes={worker_bytes}', f'WAN_MODEL_SOURCE={WAN_MODEL}', flush=True)
+    print('KAGGLE_WORKER_PACKAGE', f'worker_bytes={worker_bytes}', f'WAN_MODEL_SOURCE={WAN_MODEL}', f'FLASH_MODEL_SOURCE={FLASH_MODEL}', flush=True)
     if worker_bytes > 100_000:
         raise RuntimeError(f'WORKER_SOURCE_TOO_LARGE: {worker_bytes}')
 
