@@ -8,6 +8,7 @@ from pathlib import Path
 ROOT = Path('/kaggle/working')
 INPUT_ROOT = Path('/kaggle/input')
 SECONDS_FILE = 'duration.txt'
+IMAGE_ENCODER_FILE = 'models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth'
 
 
 def run(*args: object) -> None:
@@ -65,6 +66,18 @@ def link_tree(src: Path, dst: Path, names: list[str]) -> None:
         target.symlink_to(source, target_is_directory=source.is_dir())
 
 
+def link_file(source: Path, target: Path) -> None:
+    if not source.exists():
+        raise RuntimeError(f'WAN_IMAGE_ENCODER_MISSING: {source}')
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists() or target.is_symlink():
+        if target.is_dir() and not target.is_symlink():
+            shutil.rmtree(target)
+        else:
+            target.unlink()
+    target.symlink_to(source)
+
+
 def main() -> None:
     image = find_input('singer.png')
     audio = find_input('bhajan.mp3')
@@ -112,7 +125,11 @@ def main() -> None:
     source_base = find_dir('Wan2.1-T2V-1.3B')
     print('WAN_BASE_INPUT', source_base, flush=True)
     runtime_base = models / 'Wan2.1-Fun-V1.1-1.3B-InP'
-    link_tree(source_base, runtime_base, ['vae', 'text_encoder', 'tokenizer', 'image_encoder'])
+    link_tree(source_base, runtime_base, ['vae', 'text_encoder', 'tokenizer'])
+
+    image_encoder_source = find_input(IMAGE_ENCODER_FILE)
+    print('WAN_IMAGE_ENCODER_INPUT', image_encoder_source, flush=True)
+    link_file(image_encoder_source, runtime_base / 'image_encoder')
 
     from huggingface_hub import snapshot_download
     wav = models / 'chinese-wav2vec2-base'
