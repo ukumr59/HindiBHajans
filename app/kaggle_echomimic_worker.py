@@ -135,12 +135,16 @@ def patch_infer_for_cpu_offload(repo: Path) -> None:
     text = path.read_text()
 
     # get_image_to_video_latent3 is required for the list of overlap PIL frames
-    # handed to every chunk after chunk 0. Fail before model loading if the
-    # upstream import shape changes instead of wasting a Kaggle GPU run.
-    old_utils_import = "from src.utils import (filter_kwargs, get_image_to_video_latent, get_image_to_video_latent2,\\n                                   save_videos_grid)"
-    new_utils_import = "from src.utils import (filter_kwargs, get_image_to_video_latent, get_image_to_video_latent2, get_image_to_video_latent3,\\n                                   save_videos_grid)"
+    # handed to every chunk after chunk 0. Inject it into the upstream import
+    # using the actual newline, not a literal backslash-n.
+    old_utils_import = """from src.utils import (filter_kwargs, get_image_to_video_latent, get_image_to_video_latent2,
+                                   save_videos_grid)"""
+    new_utils_import = """from src.utils import (filter_kwargs, get_image_to_video_latent, get_image_to_video_latent2, get_image_to_video_latent3,
+                                   save_videos_grid)"""
     if old_utils_import in text:
         text = text.replace(old_utils_import, new_utils_import, 1)
+    elif "get_image_to_video_latent3" not in text:
+        raise RuntimeError("INFER_FLASH_PATCH_IMPORT_SOURCE_NOT_FOUND: upstream utils import changed")
 
     if 'INFER_FLASH_PATCHED_BOUNDED_LONGVIDEO' in text:
         print('INFER_FLASH_ALREADY_PATCHED', flush=True)
@@ -387,8 +391,12 @@ def patch_infer_for_cpu_offload(repo: Path) -> None:
 
     text = text[:start] + bounded_block + text[end:]
 
-    if 'get_image_to_video_latent3' not in text:
-        raise RuntimeError('INFER_FLASH_PATCH_IMPORT_FAILED: get_image_to_video_latent3 missing from patched infer_flash.py')
+    import_line = next(
+        (line for line in text.splitlines() if line.strip().startswith("from src.utils import")),
+        "",
+    )
+    if "get_image_to_video_latent3" not in import_line:
+        raise RuntimeError("INFER_FLASH_PATCH_IMPORT_FAILED: get_image_to_video_latent3 missing from patched import")
     path.write_text(text)
     print('INFER_FLASH_PATCHED_CPU_OFFLOAD', flush=True)
     print('INFER_FLASH_PATCHED_LOW_CPU_MEM_TRUE', flush=True)
