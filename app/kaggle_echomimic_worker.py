@@ -278,8 +278,6 @@ def main() -> None:
     # The EchoMimicV3 Flash transformer is mounted as a Kaggle dataset.
     # This avoids downloading the 3.73GB Xet/LFS object into the T4 working disk.
     flash_root = models / 'echomimicv3-flash-pro'
-    flash_model_root = flash_root / 'echomimicv3-flash-pro'
-    flash_required = flash_model_root / 'transformer' / 'diffusion_pytorch_model.safetensors'
 
     mounted_flash = [
         p for p in INPUT_ROOT.rglob('diffusion_pytorch_model.safetensors')
@@ -304,7 +302,7 @@ def main() -> None:
     print('FLASH_TRANSFORMER_SHA256', actual_sha256, flush=True)
     if actual_sha256 != expected_sha256:
         raise RuntimeError(f'FLASH_TRANSFORMER_SHA256_MISMATCH: expected={expected_sha256} actual={actual_sha256}')
-    flash_config = flash_source.parent.parent / 'config.json'
+    flash_config = flash_source.parent / 'config.json'
     if not flash_config.exists():
         raise RuntimeError(f'FLASH_CONFIG_MISSING: {flash_config}')
     transformer_link = flash_source
@@ -318,9 +316,6 @@ def main() -> None:
             allow_patterns=['config.json', 'preprocessor_config.json', 'pytorch_model.bin'],
         )
     disk_report('after_wav2vec')
-
-    if not (flash_model_root / 'config.json').exists():
-        raise RuntimeError(f'FLASH_CONFIG_MISSING: {flash_model_root / "config.json"}')
 
     disk_report('models_ready')
 
