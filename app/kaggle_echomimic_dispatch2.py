@@ -182,33 +182,39 @@ def main(seconds: int) -> None:
     if worker_bytes > 100_000:
         raise RuntimeError(f'WORKER_SOURCE_TOO_LARGE: {worker_bytes}')
 
-    run(['kaggle', 'kernels', 'push', '-p', str(KDIR), '--timeout', '39600'], env=env)
-
-    deadline = time.time() + 39600
-    while time.time() < deadline:
-        p = subprocess.run(
-            ['kaggle', 'kernels', 'status', KERNEL],
-            capture_output=True,
-            text=True,
-            env=env,
-        )
-        status = (p.stdout + p.stderr).strip()
-        print(status, flush=True)
-        t = status.lower()
-        if 'complete' in t and not any(x in t for x in ('incomplete', 'not complete')):
-            break
-        if any(x in t for x in ('error', 'failed', 'cancelled', 'canceled')):
-            log = subprocess.run(
-                ['kaggle', 'kernels', 'logs', KERNEL],
+    def push_and_wait() -> tuple[bool, str]:
+        run(['kaggle', 'kernels', 'push', '-p', str(KDIR), '--timeout', '39600'], env=env)
+        deadline = time.time() + 39600
+        while time.time() < deadline:
+            p = subprocess.run(
+                ['kaggle', 'kernels', 'status', KERNEL],
                 capture_output=True,
                 text=True,
                 env=env,
             )
-            print(log.stdout or log.stderr or 'KAGGLE_KERNEL_LOG_EMPTY', flush=True)
-            raise RuntimeError('KAGGLE_KERNEL_FAILED')
-        time.sleep(30)
-    else:
+            status = (p.stdout + p.stderr).strip()
+            print(status, flush=True)
+            t = status.lower()
+            if 'complete' in t and not any(x in t for x in ('incomplete', 'not complete')):
+                return True, status
+            if any(x in t for x in ('error', 'failed', 'cancelled', 'canceled')):
+                log = subprocess.run(
+                    ['kaggle', 'kernels', 'logs', KERNEL],
+                    capture_output=True,
+                    text=True,
+                    env=env,
+                )
+                return False, (log.stdout or log.stderr or 'KAGGLE_KERNEL_LOG_EMPTY')
+            time.sleep(30)
         raise TimeoutError('KAGGLE_KERNEL_TIMEOUT')
+
+    ok, failure_text = push_and_wait()
+    if not ok and 'FLASH_DATASET_NOT_MOUNTED' in failure_text:
+        print('KAGGLE_FLASH_DATASET_RETRY=1', flush=True)
+        ok, failure_text = push_and_wait()
+    if not ok:
+        print(failure_text, flush=True)
+        raise RuntimeError('KAGGLE_KERNEL_FAILED')
 
     dest = OUT / 'kaggle_output'
     shutil.rmtree(dest, ignore_errors=True)
