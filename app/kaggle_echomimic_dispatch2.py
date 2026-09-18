@@ -107,7 +107,7 @@ def main(seconds: int) -> None:
 
     run(['python', '-m', 'py_compile', str(KDIR / 'worker.py')], env=env)
     worker_bytes = (KDIR / 'worker.py').stat().st_size
-    print('KAGGLE_WORKER_PACKAGE', f'worker_bytes={worker_bytes}', f'WAN_MODEL_SOURCE={WAN_MODEL}', f'FLASH_MODEL_SOURCE={FLASH_MODEL}', flush=True)
+    print('KAGGLE_WORKER_PACKAGE', f'worker_bytes={worker_bytes}', f'WAN_MODEL_SOURCE={WAN_MODEL}', flush=True)
     if worker_bytes > 100_000:
         raise RuntimeError(f'WORKER_SOURCE_TOO_LARGE: {worker_bytes}')
 
