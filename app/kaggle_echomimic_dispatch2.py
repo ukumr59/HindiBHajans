@@ -11,8 +11,10 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / 'output'
 KDIR = ROOT / '.kaggle_worker'
 DDIR = ROOT / '.kaggle_dataset'
+FLASH_DDIR = ROOT / '.kaggle_flash_dataset'
 KERNEL = 'bhajanaabha/hindibhajans-echomimic-v3'
 INPUT_DATASET = 'bhajanaabha/hindibhajans-echomimic-inputs'
+FLASH_DATASET = 'bhajanaabha/hindibhajans-echomimic-flash'
 WAN_MODEL = 'mahbubahmedturza/wan-ai-new/Other/default/1'
 WORKER_SOURCE = ROOT / 'app' / 'kaggle_echomimic_worker.py'
 
@@ -67,6 +69,74 @@ def publish_input_dataset(env: dict[str, str], image: Path, audio: Path, seconds
     print('KAGGLE_INPUT_DATASET_READY', INPUT_DATASET, flush=True)
 
 
+def wait_dataset_handle(env: dict[str, str], dataset: str, timeout: int = 1800) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        p = subprocess.run(
+            ['kaggle', 'datasets', 'status', dataset, '--format', 'json'],
+            cwd=ROOT, env=env, capture_output=True, text=True,
+        )
+        text = (p.stdout + p.stderr).strip()
+        print('DATASET_STATUS', dataset, text, flush=True)
+        if p.returncode == 0:
+            low = text.lower()
+            if 'complete' in low or 'ready' in low or 'success' in low:
+                return
+            if 'error' in low or 'failed' in low or 'cancelled' in low or 'canceled' in low:
+                raise RuntimeError(f'KAGGLE_DATASET_FAILED: {dataset}: {text}')
+        time.sleep(15)
+    raise TimeoutError(f'KAGGLE_DATASET_TIMEOUT: {dataset}')
+
+def ensure_flash_dataset(env: dict[str, str]) -> None:
+    status = subprocess.run(
+        ['kaggle', 'datasets', 'status', FLASH_DATASET, '--format', 'json'],
+        cwd=ROOT, env=env, capture_output=True, text=True,
+    )
+    if status.returncode == 0 and any(x in (status.stdout + status.stderr).lower() for x in ('complete', 'ready', 'success')):
+        files = subprocess.run(
+            ['kaggle', 'datasets', 'files', FLASH_DATASET, '--page-size', '20'],
+            cwd=ROOT, env=env, capture_output=True, text=True,
+        )
+        if 'diffusion_pytorch_model.safetensors' in (files.stdout + files.stderr):
+            print('KAGGLE_FLASH_DATASET_READY', FLASH_DATASET, flush=True)
+            return
+    shutil.rmtree(FLASH_DDIR, ignore_errors=True)
+    (FLASH_DDIR / 'transformer').mkdir(parents=True)
+    flash_file = FLASH_DDIR / 'transformer' / 'diffusion_pytorch_model.safetensors'
+    flash_config = FLASH_DDIR / 'config.json'
+    expected_size = 3_727_671_120
+    expected_sha256 = '5ebdbb2fc709108bf2a1728fd92eb2874804e4bc0324e92a2cd55425968c85a4'
+    flash_url = 'https://huggingface.co/BadToBest/EchoMimicV3/resolve/main/echomimicv3-flash-pro/diffusion_pytorch_model.safetensors?download=true'
+    config_url = 'https://huggingface.co/BadToBest/EchoMimicV3/resolve/main/echomimicv3-flash-pro/config.json?download=true'
+    print('KAGGLE_FLASH_DATASET_PREPARE', FLASH_DATASET, flush=True)
+    run(['df', '-h', str(ROOT)], env=env)
+    run(['curl', '-L', '--fail', '--retry', '5', '--retry-all-errors', '--retry-delay', '3', '--connect-timeout', '30', '--max-time', '1800', '-o', str(flash_file), flash_url], env=env)
+    run(['curl', '-L', '--fail', '--retry', '5', '--retry-all-errors', '--retry-delay', '2', '--connect-timeout', '30', '--max-time', '120', '-o', str(flash_config), config_url], env=env)
+    if flash_file.stat().st_size != expected_size:
+        raise RuntimeError(f'GITHUB_FLASH_SIZE_MISMATCH: expected={expected_size} actual={flash_file.stat().st_size}')
+    import hashlib
+    digest = hashlib.sha256()
+    with flash_file.open('rb') as fh:
+        for block in iter(lambda: fh.read(16 * 1024 * 1024), b''):
+            digest.update(block)
+    actual = digest.hexdigest()
+    print('GITHUB_FLASH_SHA256', actual, flush=True)
+    if actual != expected_sha256:
+        raise RuntimeError(f'GITHUB_FLASH_SHA256_MISMATCH: expected={expected_sha256} actual={actual}')
+    (FLASH_DDIR / 'dataset-metadata.json').write_text(json.dumps({
+        'title': 'HindiBHajans EchoMimicV3 Flash',
+        'id': FLASH_DATASET,
+        'subtitle': 'Official EchoMimicV3 Flash transformer checkpoint',
+        'description': 'Official BadToBest/EchoMimicV3 echomimicv3-flash-pro transformer checkpoint.',
+        'licenses': [{'name': 'apache-2.0'}],
+    }, indent=2))
+    if status.returncode == 0:
+        run(['kaggle', 'datasets', 'version', '-p', str(FLASH_DDIR), '-m', 'Official EchoMimicV3 Flash checkpoint', '-d'], env=env)
+    else:
+        run(['kaggle', 'datasets', 'create', '-p', str(FLASH_DDIR)], env=env)
+    wait_dataset_handle(env, FLASH_DATASET)
+    print('KAGGLE_FLASH_DATASET_READY', FLASH_DATASET, flush=True)
+
 def main(seconds: int) -> None:
     token = os.getenv('KAGGLE_API_TOKEN') or os.getenv('KAGGLE_API_TOKEN3')
     if not token:
@@ -84,6 +154,7 @@ def main(seconds: int) -> None:
     env['KAGGLE_API_TOKEN'] = token
 
     publish_input_dataset(env, image, audio, seconds)
+    ensure_flash_dataset(env)
 
     shutil.rmtree(KDIR, ignore_errors=True)
     KDIR.mkdir(parents=True)
@@ -98,7 +169,7 @@ def main(seconds: int) -> None:
         'enable_gpu': True,
         'enable_internet': True,
         'machine_shape': 'NvidiaTeslaT4',
-        'dataset_sources': [INPUT_DATASET],
+        'dataset_sources': [INPUT_DATASET, FLASH_DATASET],
         'competition_sources': [],
         'kernel_sources': [],
         'model_sources': [WAN_MODEL],
@@ -107,7 +178,7 @@ def main(seconds: int) -> None:
 
     run(['python', '-m', 'py_compile', str(KDIR / 'worker.py')], env=env)
     worker_bytes = (KDIR / 'worker.py').stat().st_size
-    print('KAGGLE_WORKER_PACKAGE', f'worker_bytes={worker_bytes}', f'WAN_MODEL_SOURCE={WAN_MODEL}', flush=True)
+    print('KAGGLE_WORKER_PACKAGE', f'worker_bytes={worker_bytes}', f'WAN_MODEL_SOURCE={WAN_MODEL}', f'FLASH_DATASET_SOURCE={FLASH_DATASET}', flush=True)
     if worker_bytes > 100_000:
         raise RuntimeError(f'WORKER_SOURCE_TOO_LARGE: {worker_bytes}')
 
