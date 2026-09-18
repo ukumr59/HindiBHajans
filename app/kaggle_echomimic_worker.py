@@ -305,8 +305,14 @@ def main() -> None:
     flash_config = flash_source.parent / 'config.json'
     if not flash_config.exists():
         raise RuntimeError(f'FLASH_CONFIG_MISSING: {flash_config}')
+    # EchoMimic's config uses transformer_subpath='./', so WanTransformer.from_pretrained
+    # looks for the transformer checkpoint directly in runtime_base. The Flash checkpoint
+    # must therefore also be exposed at the runtime model root; passing --transformer_path
+    # alone is too late because infer_flash.py constructs the transformer first.
     transformer_link = flash_source
+    link_file(flash_source, runtime_base / 'diffusion_pytorch_model.safetensors')
     print('FLASH_TRANSFORMER_VERIFIED', transformer_link, actual_size, flush=True)
+    print('FLASH_TRANSFORMER_RUNTIME_LINK', runtime_base / 'diffusion_pytorch_model.safetensors', flush=True)
     wav = models / 'chinese-wav2vec2-base'
     from huggingface_hub import snapshot_download
     if not wav.exists():
