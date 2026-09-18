@@ -101,7 +101,7 @@ def patch_infer_for_cpu_offload(repo: Path) -> None:
     second = '    # Create output directory'
     if first not in text or second not in text:
         raise RuntimeError('INFER_FLASH_PATCH_TARGET_NOT_FOUND')
-    text = text.replace('import sys\n', 'import sys\nimport subprocess\n', 1)
+    text = text.replace('import sys\n', 'import sys\nimport subprocess\nimport shutil\n', 1)
     text = text.replace(first, '    # Keep components on CPU while TeaCache is configured.\n\n    coefficients = get_teacache_coefficients(model_name) if enable_teacache else None', 1)
     text = text.replace(second, '    # T4-safe: offload pipeline components between GPU operations.\n    pipeline.enable_model_cpu_offload(device=device)\n    print("CPU_OFFLOAD_READY", flush=True)\n\n    # Create output directory', 1)
     text = text.replace('low_cpu_mem_usage=True if not fsdp_dit else False,', 'low_cpu_mem_usage=False,', 1)
@@ -171,7 +171,8 @@ def patch_infer_for_cpu_offload(repo: Path) -> None:
                     shift=shift,
                 ).videos
 
-            write_sample = sample[:, :, overlap_frames:] if start_frame > 0 else sample
+            is_final_chunk = (start_frame + current_frames) >= total_frames
+            write_sample = sample if is_final_chunk else (sample[:, :, overlap_frames:] if start_frame > 0 else sample)
             chunk_path = os.path.join(chunk_dir, f"chunk_{chunk_index:04d}.mp4")
             save_videos_grid(write_sample, chunk_path, fps=fps)
             chunk_paths.append(chunk_path)
