@@ -106,7 +106,15 @@ def patch_infer_for_cpu_offload(repo: Path) -> None:
     text = text.replace(second, '    # T4-safe: offload pipeline components between GPU operations.\n    # This must happen before any pipeline.to(cuda) call.\n    pipeline.enable_model_cpu_offload(device=device)\n    print("CPU_OFFLOAD_READY", flush=True)\n\n    # Create output directory', 1)
     text = text.replace('low_cpu_mem_usage=True if not fsdp_dit else False,', 'low_cpu_mem_usage=False,', 1)
     text = text.replace('low_cpu_mem_usage=True,\n        torch_dtype=weight_dtype,', 'low_cpu_mem_usage=False,\n        torch_dtype=weight_dtype,', 1)
-    text = text.replace('if transformer_path is not None:', 'if transformer_path:', 1)
+    text = text.replace(
+        'if transformer_path is not None:',
+        'if transformer_path and not os.path.exists(os.path.join(model_name, "diffusion_pytorch_model.safetensors")):',
+        1,
+    )
+    text = text.replace(
+        '    pipeline.to(device=device)\\n',
+        '',
+    )
     start = text.index('        validation_image_start = Image.fromarray(ref_start).convert("RGB")')
     end = text.index('        print(f"Saved output to: {output_video_path}")', start) + len('        print(f"Saved output to: {output_video_path}")')
     long_block = r'''        validation_image_start = Image.fromarray(ref_start).convert("RGB")
