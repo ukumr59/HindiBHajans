@@ -6,7 +6,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path('/kaggle/working')
+RUNTIME_ROOT = Path('/kaggle/tmp/hindibhajans_echomimic_runtime')
+FINAL_ROOT = Path('/kaggle/working')
+ROOT = RUNTIME_ROOT
 INPUT_ROOT = Path('/kaggle/input')
 SECONDS_FILE = 'duration.txt'
 IMAGE_ENCODER_FILE = 'models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth'
@@ -351,6 +353,8 @@ def patch_infer_for_cpu_offload(repo: Path) -> None:
     print('INFER_FLASH_PATCHED_BOUNDED_LONGVIDEO', flush=True)
 
 def main() -> None:
+    ROOT.mkdir(parents=True, exist_ok=True)
+    FINAL_ROOT.mkdir(parents=True, exist_ok=True)
     image = find_input('singer.png')
     audio = find_input('bhajan.mp3')
     duration_file = find_input(SECONDS_FILE)
@@ -533,7 +537,7 @@ def main() -> None:
     final_size = master.stat().st_size
     if final_size > 1_500_000_000:
         raise RuntimeError(f'FINAL_VIDEO_TOO_LARGE: {final_size / 1024**3:.2f}GB')
-    shutil.copy2(master, ROOT / 'master.mp4')
+    shutil.copy2(master, FINAL_ROOT / 'master.mp4')
     # Keep only the final master video in /kaggle/working.
     # The model/checkpoint/repository files are runtime inputs, not deliverables.
     for cleanup_path in [
@@ -553,13 +557,13 @@ def main() -> None:
         except Exception as exc:
             print('CLEANUP_WARNING', cleanup_path, repr(exc), flush=True)
 
-    final_size = (ROOT / 'master.mp4').stat().st_size
+    final_size = (FINAL_ROOT / 'master.mp4').stat().st_size
     if final_size > 1_500_000_000:
         raise RuntimeError(f'FINAL_VIDEO_TOO_LARGE: {final_size / 1024**3:.2f}GB')
 
     print(
         'BHAJAN_KAGGLE_WORKER_OK',
-        (ROOT / 'master.mp4').stat().st_size,
+        (FINAL_ROOT / 'master.mp4').stat().st_size,
         f'duration={actual_duration:.2f}s',
         flush=True,
     )
