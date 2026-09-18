@@ -98,83 +98,118 @@ def ensure_fun_base(runtime_base: Path) -> None:
 def patch_infer_for_cpu_offload(repo: Path) -> None:
     path = repo / 'infer_flash.py'
     text = path.read_text()
-    first = '    pipeline.to(device=device)\n\n    coefficients = get_teacache_coefficients(model_name) if enable_teacache else None'
-    second = '    # Create output directory'
-    if first not in text or second not in text:
-        raise RuntimeError('INFER_FLASH_PATCH_TARGET_NOT_FOUND')
-    text = text.replace('import sys\n', 'import sys\nimport subprocess\nimport shutil\n', 1)
-    text = text.replace(first, '    # Keep components on CPU; model CPU offload is enabled before inference.\n\n    coefficients = get_teacache_coefficients(model_name) if enable_teacache else None', 1)
-    text = text.replace(second, '    # T4-safe: offload pipeline components between GPU operations.\n    # This must happen before any pipeline.to(cuda) call.\n    pipeline.enable_model_cpu_offload(device=device)\n    print("CPU_OFFLOAD_READY", flush=True)\n\n    # Create output directory', 1)
-    # Keep checkpoint loading memory-efficient. The previous forced False setting caused
-    # large CPU-RAM peaks while materializing the multi-GB transformer/T5 weights.
-    text = text.replace('low_cpu_mem_usage=True if not fsdp_dit else False,', 'low_cpu_mem_usage=True,', 1)
-    text = text.replace('low_cpu_mem_usage=True,\n        torch_dtype=weight_dtype,', 'low_cpu_mem_usage=True,\n        torch_dtype=weight_dtype,', 1)
-    # Wav2Vec is also loaded with the memory-efficient HF loader; otherwise its .bin
-    # checkpoint can temporarily require an extra full copy in system RAM.
+
+    if 'INFER_FLASH_PATCHED_BOUNDED_LONGVIDEO' in text:
+        print('INFER_FLASH_ALREADY_PATCHED', flush=True)
+        return
+
+    text = text.replace('import sys\n', 'import sys\nimport gc\nimport subprocess\nimport shutil\n', 1)
+
     text = text.replace(
-        'Wav2Vec2Model.from_pretrained(wav2vec_model_dir, local_files_only=True)',
-        'Wav2Vec2Model.from_pretrained(wav2vec_model_dir, local_files_only=True, low_cpu_mem_usage=True)',
-        1,
+        '    pipeline.to(device=device)\n',
+        '    pipeline.enable_model_cpu_offload(device=device)\n    print("CPU_OFFLOAD_READY", flush=True)\n',
     )
-    text = text.replace(
-        'if transformer_path is not None:',
-        'if transformer_path and not os.path.exists(os.path.join(model_name, "diffusion_pytorch_model.safetensors")):',
-        1,
-    )
-    text = text.replace(
-        '    pipeline.to(device=device)\\n',
-        '',
-    )
-    start = text.index('        validation_image_start = Image.fromarray(ref_start).convert("RGB")')
-    end = text.index('        print(f"Saved output to: {output_video_path}")', start) + len('        print(f"Saved output to: {output_video_path}")')
-    long_block = r'''        validation_image_start = Image.fromarray(ref_start).convert("RGB")
+
+    old_audio = '''        # Get audio batch 
+        audio_embeds = audio_feature_wav2vec.to(device=device, dtype=weight_dtype)
+
+        indices = (torch.arange(2 * 2 + 1) - 2) * 1 
+        center_indices = torch.arange(
+            0,  
+            video_length_actual,
+            1,).unsqueeze(1) + indices.unsqueeze(0)
+        center_indices = torch.clamp(center_indices, min=0, max=audio_embeds.shape[0]-1)
+        audio_embeds = audio_embeds[center_indices] # F w s c [F, 5, 12, 768]
+
+        audio_embeds = audio_embeds.unsqueeze(0).to(device=device)
+
+        print(f"Audio embeds shape: {audio_embeds.shape}")
+'''
+    new_audio = '''        # Keep full audio embeddings on CPU; only the active window goes to GPU.
+        audio_embeds = audio_feature_wav2vec.to(dtype=weight_dtype)
+
+        indices = (torch.arange(2 * 2 + 1) - 2) * 1
+        center_indices = torch.arange(
+            0,
+            video_length_actual,
+            1,
+        ).unsqueeze(1) + indices.unsqueeze(0)
+        center_indices = torch.clamp(center_indices, min=0, max=audio_embeds.shape[0] - 1)
+        audio_embeds = audio_embeds[center_indices].contiguous()
+
+        print(f"Audio embeds shape (CPU): {audio_embeds.shape}", flush=True)
+'''
+    if old_audio not in text:
+        raise RuntimeError('AUDIO_BLOCK_NOT_FOUND')
+    text = text.replace(old_audio, new_audio, 1)
+
+    start_marker = '        validation_image_start = Image.fromarray(ref_start).convert("RGB")'
+    end_marker = '        print(f"Saved output to: {output_video_path}")'
+    start = text.index(start_marker)
+    end = text.index(end_marker, start) + len(end_marker)
+
+    bounded_block = '''        validation_image_start = Image.fromarray(ref_start).convert("RGB")
         validation_image_end = None
         sample_size_0, sample_size_1 = get_sample_size(validation_image_start, sample_size)
 
-        total_frames = video_length_actual
-        # Bound every individual EchoMimic inference to ~15 seconds on a T4.
-        # 25 FPS × 15 s = 375 frames. VAE alignment below may trim this
-        # slightly to a valid frame count.
-        chunk_frames = 375
+        # 113 frames ~= 4.5 seconds at 25 FPS. Small bounded windows keep
+        # CPU/GPU tensors bounded while one model instance is reused.
+        chunk_frames = 113
         overlap_frames = 8
-        chunk_dir = os.path.join(save_path, "_chunks")
+        total_frames = video_length_actual
+        chunk_dir = os.path.join(save_path, "_bounded_chunks")
         os.makedirs(chunk_dir, exist_ok=True)
-        concat_file = os.path.join(chunk_dir, "concat.txt")
+
+        print(
+            f"LONG_VIDEO_PLAN total_frames={total_frames} "
+            f"chunk_frames={chunk_frames} overlap={overlap_frames} "
+            f"bounded_inference=True codec=libx264",
+            flush=True,
+        )
+
         chunk_paths = []
         previous_ref = validation_image_start
         start_frame = 0
         chunk_index = 0
-        clip_image = None
-
-        print(
-            f"LONG_VIDEO_PLAN total_frames={total_frames} "
-            f"chunk_frames={chunk_frames} (~15s) overlap={overlap_frames} "
-            f"bounded_inference=True",
-            flush=True,
-        )
 
         while start_frame < total_frames:
-            current_frames = min(chunk_frames, total_frames - start_frame)
-            if current_frames < 2:
-                break
-            if current_frames != total_frames - start_frame:
-                current_frames = int((current_frames - 1) // vae.config.temporal_compression_ratio * vae.config.temporal_compression_ratio) + 1
+            remaining = total_frames - start_frame
+            current_frames = min(chunk_frames, remaining)
             if current_frames <= overlap_frames and start_frame > 0:
                 break
 
+            if current_frames > 1:
+                current_frames = int(
+                    (current_frames - 1) // vae.config.temporal_compression_ratio
+                    * vae.config.temporal_compression_ratio
+                ) + 1
+
+            end_frame = min(total_frames, start_frame + current_frames)
+            actual_frames = end_frame - start_frame
+            if actual_frames <= 0:
+                break
+
             input_video, input_video_mask, clip_image = get_image_to_video_latent2(
-                previous_ref, validation_image_end,
-                video_length=current_frames,
+                previous_ref,
+                validation_image_end,
+                video_length=actual_frames,
                 sample_size=[sample_size_0, sample_size_1],
             )
-            end_frame = min(total_frames, start_frame + current_frames)
-            partial_audio_embeds = audio_embeds[:, start_frame:end_frame]
 
-            print(f"LONG_VIDEO_CHUNK index={chunk_index} start={start_frame} frames={current_frames}", flush=True)
+            partial_audio_embeds = audio_embeds[start_frame:end_frame].unsqueeze(0).to(
+                device=device, dtype=weight_dtype
+            )
+
+            print(
+                f"LONG_VIDEO_CHUNK index={chunk_index} "
+                f"start={start_frame} frames={actual_frames}",
+                flush=True,
+            )
+
             with torch.inference_mode():
                 sample = pipeline(
                     prompt,
-                    num_frames=current_frames,
+                    num_frames=actual_frames,
                     negative_prompt=negative_prompt,
                     audio_embeds=partial_audio_embeds,
                     audio_scale=audio_scale,
@@ -197,14 +232,24 @@ def patch_infer_for_cpu_offload(repo: Path) -> None:
                     shift=shift,
                 ).videos
 
-            is_final_chunk = (start_frame + current_frames) >= total_frames
-            # The first chunk is emitted in full. Every later chunk discards the
-            # overlap frames because those frames are already present in the
-            # preceding chunk. This keeps the concatenated video at total_frames.
             write_sample = sample if start_frame == 0 else sample[:, :, overlap_frames:]
-            chunk_path = os.path.join(chunk_dir, f"chunk_{chunk_index:04d}.mp4")
-            save_videos_grid(write_sample, chunk_path, fps=fps)
-            chunk_paths.append(chunk_path)
+            raw_chunk = os.path.join(chunk_dir, f"chunk_{chunk_index:04d}_raw.mp4")
+            encoded_chunk = os.path.join(chunk_dir, f"chunk_{chunk_index:04d}.mp4")
+
+            # Encode immediately; never accumulate raw frame/video artifacts.
+            save_videos_grid(write_sample, raw_chunk, fps=fps)
+            subprocess.run([
+                "ffmpeg", "-y", "-v", "error",
+                "-i", raw_chunk,
+                "-an",
+                "-c:v", "libx264",
+                "-preset", "medium",
+                "-crf", "20",
+                "-pix_fmt", "yuv420p",
+                encoded_chunk,
+            ], check=True)
+            os.remove(raw_chunk)
+            chunk_paths.append(encoded_chunk)
 
             tail = sample[0, :, -overlap_frames:].detach().float().cpu()
             previous_ref = [
@@ -214,7 +259,8 @@ def patch_infer_for_cpu_offload(repo: Path) -> None:
                 for j in range(tail.shape[1])
             ]
 
-            del input_video, input_video_mask, partial_audio_embeds, sample, write_sample, tail, clip_image
+            del input_video, input_video_mask, partial_audio_embeds
+            del sample, write_sample, tail, clip_image
             gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.synchronize()
@@ -224,41 +270,66 @@ def patch_infer_for_cpu_offload(repo: Path) -> None:
                 except Exception:
                     pass
 
-            start_frame += current_frames - overlap_frames
+            start_frame += actual_frames - overlap_frames
             chunk_index += 1
 
         if not chunk_paths:
             raise RuntimeError("LONG_VIDEO_NO_CHUNKS")
 
+        concat_file = os.path.join(chunk_dir, "concat.txt")
         with open(concat_file, "w") as fh:
             for p in chunk_paths:
-                fh.write(f"file '{os.path.abspath(p)}'\\n")
+                fh.write("file '" + os.path.abspath(p).replace("'", "'\\\\''") + "'\\n")
 
         silent_path = os.path.join(save_path, f"{image_name}_silent.mp4")
         subprocess.run([
-            "ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0",
-            "-i", concat_file, "-c", "copy", silent_path
+            "ffmpeg", "-y", "-v", "error",
+            "-f", "concat", "-safe", "0",
+            "-i", concat_file,
+            "-c", "copy",
+            silent_path,
         ], check=True)
+
+        # Final persistent video: H.264 CRF 20 + AAC. This is the only video
+        # artifact kept after inference; all intermediates are deleted.
         subprocess.run([
             "ffmpeg", "-y", "-v", "error",
-            "-i", silent_path, "-i", audio_path,
-            "-map", "0:v:0", "-map", "1:a:0",
+            "-i", silent_path,
+            "-i", audio_path,
+            "-map", "0:v:0",
+            "-map", "1:a:0",
             "-t", str(video_length_actual / fps),
-            "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
-            "-ar", "48000", "-movflags", "+faststart",
-            output_video_path
+            "-c:v", "libx264",
+            "-preset", "medium",
+            "-crf", "20",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac",
+            "-b:a", "160k",
+            "-ar", "48000",
+            "-movflags", "+faststart",
+            output_video_path,
         ], check=True)
 
         shutil.rmtree(chunk_dir, ignore_errors=True)
         if os.path.exists(silent_path):
             os.remove(silent_path)
+
+        output_size_mb = os.path.getsize(output_video_path) / 1024**2
+        print(
+            f"OUTPUT_VIDEO_READY path={output_video_path} "
+            f"size_mb={output_size_mb:.1f} duration={video_length_actual / fps:.2f}s",
+            flush=True,
+        )
         print(f"Saved output to: {output_video_path}")'''
-    text = text[:start] + long_block + text[end:]
+
+    text = text[:start] + bounded_block + text[end:]
+
     path.write_text(text)
     print('INFER_FLASH_PATCHED_CPU_OFFLOAD', flush=True)
     print('INFER_FLASH_PATCHED_LOW_CPU_MEM_TRUE', flush=True)
     print('INFER_FLASH_PATCHED_TRANSFORMER_PATH_GUARD', flush=True)
-    print('INFER_FLASH_PATCHED_BOUNDED_15S_CHUNKS', flush=True)
+    print('INFER_FLASH_PATCHED_BOUNDED_LONGVIDEO', flush=True)
+
 def main() -> None:
     image = find_input('singer.png')
     audio = find_input('bhajan.mp3')
@@ -383,6 +454,7 @@ def main() -> None:
     infer_dir = ROOT / 'infer_output'
     shutil.rmtree(infer_dir, ignore_errors=True)
     infer_dir.mkdir(parents=True)
+    print('BOUNDED_INFER_RUNTIME_START', flush=True)
     run(
         sys.executable, str(repo / 'infer_flash.py'),
         '--image_path', str(image),
@@ -433,6 +505,9 @@ def main() -> None:
         raise RuntimeError(
             f'OUTPUT_DURATION_MISMATCH: expected={seconds:.2f}s actual={actual_duration:.2f}s'
         )
+    final_size = master.stat().st_size
+    if final_size > 1_500_000_000:
+        raise RuntimeError(f'FINAL_VIDEO_TOO_LARGE: {final_size / 1024**3:.2f}GB')
     shutil.copy2(master, ROOT / 'master.mp4')
     print(
         'BHAJAN_KAGGLE_WORKER_OK',
