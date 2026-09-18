@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import shutil
 import subprocess
 import sys
@@ -131,7 +132,10 @@ def patch_infer_for_cpu_offload(repo: Path) -> None:
         sample_size_0, sample_size_1 = get_sample_size(validation_image_start, sample_size)
 
         total_frames = video_length_actual
-        chunk_frames = 81
+        # Bound every individual EchoMimic inference to ~15 seconds on a T4.
+        # 25 FPS × 15 s = 375 frames. VAE alignment below may trim this
+        # slightly to a valid frame count.
+        chunk_frames = 375
         overlap_frames = 8
         chunk_dir = os.path.join(save_path, "_chunks")
         os.makedirs(chunk_dir, exist_ok=True)
@@ -142,7 +146,12 @@ def patch_infer_for_cpu_offload(repo: Path) -> None:
         chunk_index = 0
         clip_image = None
 
-        print(f"LONG_VIDEO_PLAN total_frames={total_frames} chunk_frames={chunk_frames} overlap={overlap_frames}", flush=True)
+        print(
+            f"LONG_VIDEO_PLAN total_frames={total_frames} "
+            f"chunk_frames={chunk_frames} (~15s) overlap={overlap_frames} "
+            f"bounded_inference=True",
+            flush=True,
+        )
 
         while start_frame < total_frames:
             current_frames = min(chunk_frames, total_frames - start_frame)
@@ -162,7 +171,7 @@ def patch_infer_for_cpu_offload(repo: Path) -> None:
             partial_audio_embeds = audio_embeds[:, start_frame:end_frame]
 
             print(f"LONG_VIDEO_CHUNK index={chunk_index} start={start_frame} frames={current_frames}", flush=True)
-            with torch.no_grad():
+            with torch.inference_mode():
                 sample = pipeline(
                     prompt,
                     num_frames=current_frames,
@@ -189,7 +198,10 @@ def patch_infer_for_cpu_offload(repo: Path) -> None:
                 ).videos
 
             is_final_chunk = (start_frame + current_frames) >= total_frames
-            write_sample = sample if is_final_chunk else (sample[:, :, overlap_frames:] if start_frame > 0 else sample)
+            # The first chunk is emitted in full. Every later chunk discards the
+            # overlap frames because those frames are already present in the
+            # preceding chunk. This keeps the concatenated video at total_frames.
+            write_sample = sample if start_frame == 0 else sample[:, :, overlap_frames:]
             chunk_path = os.path.join(chunk_dir, f"chunk_{chunk_index:04d}.mp4")
             save_videos_grid(write_sample, chunk_path, fps=fps)
             chunk_paths.append(chunk_path)
@@ -202,8 +214,15 @@ def patch_infer_for_cpu_offload(repo: Path) -> None:
                 for j in range(tail.shape[1])
             ]
 
-            del input_video, input_video_mask, partial_audio_embeds, sample, write_sample, tail
-            torch.cuda.empty_cache()
+            del input_video, input_video_mask, partial_audio_embeds, sample, write_sample, tail, clip_image
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+                torch.cuda.empty_cache()
+                try:
+                    torch.cuda.ipc_collect()
+                except Exception:
+                    pass
 
             start_frame += current_frames - overlap_frames
             chunk_index += 1
@@ -239,7 +258,7 @@ def patch_infer_for_cpu_offload(repo: Path) -> None:
     print('INFER_FLASH_PATCHED_CPU_OFFLOAD', flush=True)
     print('INFER_FLASH_PATCHED_LOW_CPU_MEM_TRUE', flush=True)
     print('INFER_FLASH_PATCHED_TRANSFORMER_PATH_GUARD', flush=True)
-    print('INFER_FLASH_PATCHED_LONG_VIDEO_SINGLE_MODEL_LOAD', flush=True)
+    print('INFER_FLASH_PATCHED_BOUNDED_15S_CHUNKS', flush=True)
 def main() -> None:
     image = find_input('singer.png')
     audio = find_input('bhajan.mp3')
@@ -349,7 +368,17 @@ def main() -> None:
 
     fps = 25
     total_frames = int(seconds * fps)
-    print('INFERENCE_PLAN', f'model_loads=1', f'target_frames={total_frames}', f'target_seconds={seconds}', flush=True)
+    print(
+        'INFERENCE_PLAN',
+        'model_loads=1',
+        f'target_frames={total_frames}',
+        f'target_seconds={seconds}',
+        'chunk_seconds=15',
+        'chunk_frames=375',
+        'bounded_inference=True',
+        'publish=False',
+        flush=True,
+    )
 
     infer_dir = ROOT / 'infer_output'
     shutil.rmtree(infer_dir, ignore_errors=True)
@@ -387,8 +416,30 @@ def main() -> None:
     if not generated:
         raise RuntimeError('ECHOMIMIC_OUTPUT_MISSING')
     generated.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    shutil.copy2(generated[0], ROOT / 'master.mp4')
-    print('BHAJAN_KAGGLE_WORKER_OK', (ROOT / 'master.mp4').stat().st_size, flush=True)
+    master = generated[0]
+    probe = subprocess.run(
+        [
+            'ffprobe', '-v', 'error',
+            '-show_entries', 'format=duration',
+            '-of', 'default=noprint_wrappers=1:nokey=1',
+            str(master),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    actual_duration = float(probe.stdout.strip())
+    if abs(actual_duration - seconds) > 0.75:
+        raise RuntimeError(
+            f'OUTPUT_DURATION_MISMATCH: expected={seconds:.2f}s actual={actual_duration:.2f}s'
+        )
+    shutil.copy2(master, ROOT / 'master.mp4')
+    print(
+        'BHAJAN_KAGGLE_WORKER_OK',
+        (ROOT / 'master.mp4').stat().st_size,
+        f'duration={actual_duration:.2f}s',
+        flush=True,
+    )
     shutil.rmtree(infer_dir, ignore_errors=True)
 
     return
