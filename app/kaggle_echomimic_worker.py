@@ -110,6 +110,39 @@ def patch_infer_for_cpu_offload(repo: Path) -> None:
         '    pipeline.enable_model_cpu_offload(device=device)\n    print("CPU_OFFLOAD_READY", flush=True)\n',
     )
 
+    # Remove the upstream duplicate Flash checkpoint load. The model is already
+    # initialized from the verified checkpoint exposed at model_name.
+    transformer_patch_start = text.index('    if transformer_path is not None:')
+    transformer_patch_end = text.index('    # Get Vae', transformer_patch_start)
+    transformer_patch = '''    if transformer_path is not None:
+        transformer_root_ckpt = os.path.join(
+            model_name, "diffusion_pytorch_model.safetensors"
+        )
+        if os.path.exists(transformer_root_ckpt):
+            print(
+                f"FLASH_CHECKPOINT_ALREADY_LOADED path={transformer_root_ckpt}; "
+                "skipping duplicate state_dict load",
+                flush=True,
+            )
+        else:
+            print(f"From checkpoint: {transformer_path}")
+            if transformer_path.endswith("safetensors"):
+                from safetensors.torch import load_file
+                state_dict = load_file(transformer_path)
+            else:
+                state_dict = torch.load(
+                    os.path.join(transformer_path, f"checkpoint-{ckpt_idx}.pth"),
+                    map_location="cpu",
+                )
+            state_dict = state_dict["state_dict"] if "state_dict" in state_dict else state_dict
+            m, u = transformer.load_state_dict(state_dict, strict=False)
+            del state_dict
+            gc.collect()
+            print(f"missing keys: {len(m)}, unexpected keys: {len(u)}", flush=True)
+
+'''
+    text = text[:transformer_patch_start] + transformer_patch + text[transformer_patch_end:]
+
     audio_start_marker = '        # Get audio batch '
     audio_end_marker = '        validation_image_start = Image.fromarray(ref_start).convert("RGB")'
     audio_start = text.index(audio_start_marker)
