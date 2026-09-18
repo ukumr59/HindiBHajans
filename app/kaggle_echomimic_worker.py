@@ -104,8 +104,17 @@ def patch_infer_for_cpu_offload(repo: Path) -> None:
     text = text.replace('import sys\n', 'import sys\nimport subprocess\nimport shutil\n', 1)
     text = text.replace(first, '    # Keep components on CPU; model CPU offload is enabled before inference.\n\n    coefficients = get_teacache_coefficients(model_name) if enable_teacache else None', 1)
     text = text.replace(second, '    # T4-safe: offload pipeline components between GPU operations.\n    # This must happen before any pipeline.to(cuda) call.\n    pipeline.enable_model_cpu_offload(device=device)\n    print("CPU_OFFLOAD_READY", flush=True)\n\n    # Create output directory', 1)
-    text = text.replace('low_cpu_mem_usage=True if not fsdp_dit else False,', 'low_cpu_mem_usage=False,', 1)
-    text = text.replace('low_cpu_mem_usage=True,\n        torch_dtype=weight_dtype,', 'low_cpu_mem_usage=False,\n        torch_dtype=weight_dtype,', 1)
+    # Keep checkpoint loading memory-efficient. The previous forced False setting caused
+    # large CPU-RAM peaks while materializing the multi-GB transformer/T5 weights.
+    text = text.replace('low_cpu_mem_usage=True if not fsdp_dit else False,', 'low_cpu_mem_usage=True,', 1)
+    text = text.replace('low_cpu_mem_usage=True,\n        torch_dtype=weight_dtype,', 'low_cpu_mem_usage=True,\n        torch_dtype=weight_dtype,', 1)
+    # Wav2Vec is also loaded with the memory-efficient HF loader; otherwise its .bin
+    # checkpoint can temporarily require an extra full copy in system RAM.
+    text = text.replace(
+        'Wav2Vec2Model.from_pretrained(wav2vec_model_dir, local_files_only=True)',
+        'Wav2Vec2Model.from_pretrained(wav2vec_model_dir, local_files_only=True, low_cpu_mem_usage=True)',
+        1,
+    )
     text = text.replace(
         'if transformer_path is not None:',
         'if transformer_path and not os.path.exists(os.path.join(model_name, "diffusion_pytorch_model.safetensors")):',
@@ -228,7 +237,7 @@ def patch_infer_for_cpu_offload(repo: Path) -> None:
     text = text[:start] + long_block + text[end:]
     path.write_text(text)
     print('INFER_FLASH_PATCHED_CPU_OFFLOAD', flush=True)
-    print('INFER_FLASH_PATCHED_LOW_CPU_MEM_FALSE', flush=True)
+    print('INFER_FLASH_PATCHED_LOW_CPU_MEM_TRUE', flush=True)
     print('INFER_FLASH_PATCHED_TRANSFORMER_PATH_GUARD', flush=True)
     print('INFER_FLASH_PATCHED_LONG_VIDEO_SINGLE_MODEL_LOAD', flush=True)
 def main() -> None:
