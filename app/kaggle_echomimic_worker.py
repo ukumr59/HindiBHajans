@@ -219,9 +219,11 @@ def patch_infer_for_cpu_offload(repo: Path) -> None:
         validation_image_end = None
         sample_size_0, sample_size_1 = get_sample_size(validation_image_start, sample_size)
 
-        # 49 frames ~= 2 seconds at 25 FPS. Smaller windows are required on a 15GB T4
-        # CPU/GPU tensors bounded while one model instance is reused.
-        chunk_frames = 49
+        # 65 frames ~= 2.6 seconds at 25 FPS. 113 frames previously OOM'd on a 15GB T4;
+        # 65 is the next conservative step up from the proven 49-frame window.
+        # Sequential CPU offload keeps model residency bounded while reducing the
+        # number of expensive chunk/model transfers for the full 3-minute render.
+        chunk_frames = 65
         overlap_frames = 8
         total_frames = video_length_actual
         chunk_dir = os.path.join(save_path, "_bounded_chunks")
