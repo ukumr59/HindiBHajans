@@ -130,10 +130,6 @@ def patch_infer_for_cpu_offload(repo: Path) -> None:
 
 '''
     text = text[:audio_start] + new_audio + text[audio_end:]
-    if old_audio not in text:
-        raise RuntimeError('AUDIO_BLOCK_NOT_FOUND')
-    text = text.replace(old_audio, new_audio, 1)
-
     start_marker = '        validation_image_start = Image.fromarray(ref_start).convert("RGB")'
     end_marker = '        print(f"Saved output to: {output_video_path}")'
     start = text.index(start_marker)
