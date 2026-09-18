@@ -187,7 +187,7 @@ def patch_infer_for_cpu_offload(repo: Path) -> None:
             del input_video, input_video_mask, partial_audio_embeds, sample, write_sample, tail
             torch.cuda.empty_cache()
 
-            start_frame += current_frames - (overlap_frames if start_frame > 0 else 0)
+            start_frame += current_frames - overlap_frames
             chunk_index += 1
 
         if not chunk_paths:
