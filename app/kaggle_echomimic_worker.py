@@ -134,6 +134,14 @@ def patch_infer_for_cpu_offload(repo: Path) -> None:
     path = repo / 'infer_flash.py'
     text = path.read_text()
 
+    # get_image_to_video_latent3 is required for the list of overlap PIL frames
+    # handed to every chunk after chunk 0. Fail before model loading if the
+    # upstream import shape changes instead of wasting a Kaggle GPU run.
+    old_utils_import = "from src.utils import (filter_kwargs, get_image_to_video_latent, get_image_to_video_latent2,\\n                                   save_videos_grid)"
+    new_utils_import = "from src.utils import (filter_kwargs, get_image_to_video_latent, get_image_to_video_latent2, get_image_to_video_latent3,\\n                                   save_videos_grid)"
+    if old_utils_import in text:
+        text = text.replace(old_utils_import, new_utils_import, 1)
+
     if 'INFER_FLASH_PATCHED_BOUNDED_LONGVIDEO' in text:
         print('INFER_FLASH_ALREADY_PATCHED', flush=True)
         return
@@ -379,6 +387,8 @@ def patch_infer_for_cpu_offload(repo: Path) -> None:
 
     text = text[:start] + bounded_block + text[end:]
 
+    if 'get_image_to_video_latent3' not in text:
+        raise RuntimeError('INFER_FLASH_PATCH_IMPORT_FAILED: get_image_to_video_latent3 missing from patched infer_flash.py')
     path.write_text(text)
     print('INFER_FLASH_PATCHED_CPU_OFFLOAD', flush=True)
     print('INFER_FLASH_PATCHED_LOW_CPU_MEM_TRUE', flush=True)
@@ -506,8 +516,8 @@ def main() -> None:
         'model_loads=1',
         f'target_frames={total_frames}',
         f'target_seconds={seconds}',
-        'chunk_seconds=4.52',
-        'chunk_frames=113',
+        'chunk_seconds=1.96',
+        'chunk_frames=49',
         'bounded_inference=True',
         'raw_frame_accumulation=False',
         'publish=False',
