@@ -14,7 +14,6 @@ DDIR = ROOT / '.kaggle_dataset'
 KERNEL = 'bhajanaabha/hindibhajans-echomimic-v3'
 INPUT_DATASET = 'bhajanaabha/hindibhajans-echomimic-inputs'
 WAN_MODEL = 'mahbubahmedturza/wan-ai-new/Other/default/1'
-FLASH_MODEL = 'mahbubahmedturza/pai/Other/default/1'
 WORKER_SOURCE = ROOT / 'app' / 'kaggle_echomimic_worker.py'
 
 
@@ -102,7 +101,7 @@ def main(seconds: int) -> None:
         'dataset_sources': [INPUT_DATASET],
         'competition_sources': [],
         'kernel_sources': [],
-        'model_sources': [WAN_MODEL, FLASH_MODEL],
+        'model_sources': [WAN_MODEL],
     }
     (KDIR / 'kernel-metadata.json').write_text(json.dumps(metadata, indent=2))
 
