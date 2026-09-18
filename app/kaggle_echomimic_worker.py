@@ -275,66 +275,40 @@ def main() -> None:
     print('WAN_IMAGE_ENCODER_INPUT', image_encoder_source, flush=True)
     link_file(image_encoder_source, runtime_base / IMAGE_ENCODER_FILE)
 
-    # The EchoMimicV3 Flash transformer is a separate checkpoint from the
-    # Wan base transformer. Keep it outside runtime_base so the base loader
-    # cannot auto-discover the wrong 3.13GB Wan checkpoint.
+    # The EchoMimicV3 Flash transformer is mounted as a Kaggle dataset.
+    # This avoids downloading the 3.73GB Xet/LFS object into the T4 working disk.
     flash_root = models / 'echomimicv3-flash-pro'
     flash_model_root = flash_root / 'echomimicv3-flash-pro'
     flash_required = flash_model_root / 'transformer' / 'diffusion_pytorch_model.safetensors'
-    # Download the exact official EchoMimicV3-Flash checkpoint directly.
-    # Hugging Face stores this file through Xet/LFS; snapshot_download can leave
-    # a pointer/partial object on constrained Kaggle disks. Direct streaming
-    # avoids a second cache copy and verifies the exact upstream SHA256.
-    flash_model_root.mkdir(parents=True, exist_ok=True)
-    flash_config = flash_model_root / 'config.json'
+
+    mounted_flash = [
+        p for p in INPUT_ROOT.rglob('diffusion_pytorch_model.safetensors')
+        if 'hindibhajans-echomimic-flash' in str(p)
+    ]
+    if not mounted_flash:
+        raise RuntimeError('FLASH_DATASET_NOT_MOUNTED')
+    flash_source = min(mounted_flash, key=lambda p: len(p.parts))
+    print('FLASH_MOUNTED_INPUT', flash_source, flash_source.stat().st_size, flush=True)
+
     expected_size = 3_727_671_120
     expected_sha256 = '5ebdbb2fc709108bf2a1728fd92eb2874804e4bc0324e92a2cd55425968c85a4'
-    flash_url = (
-        'https://huggingface.co/BadToBest/EchoMimicV3/resolve/main/'
-        'echomimicv3-flash-pro/diffusion_pytorch_model.safetensors?download=true'
-    )
-    config_url = (
-        'https://huggingface.co/BadToBest/EchoMimicV3/resolve/main/'
-        'echomimicv3-flash-pro/config.json?download=true'
-    )
-    if not flash_required.exists() or flash_required.stat().st_size != expected_size:
-        if flash_required.exists():
-            flash_required.unlink()
-        disk_report('before_flash_direct_download')
-        if shutil.disk_usage(ROOT).free < 4 * 1024**3:
-            raise RuntimeError('INSUFFICIENT_DISK_FOR_FLASH: need >=4GB free')
-        run(
-            'curl', '-L', '--fail', '--retry', '5', '--retry-all-errors',
-            '--retry-delay', '3', '--connect-timeout', '30', '--max-time', '1800',
-            '-o', str(flash_required), flash_url,
-        )
-    if not flash_config.exists():
-        run(
-            'curl', '-L', '--fail', '--retry', '5', '--retry-all-errors',
-            '--retry-delay', '2', '--connect-timeout', '30', '--max-time', '120',
-            '-o', str(flash_config), config_url,
-        )
-    if not flash_required.exists():
-        raise RuntimeError(f'FLASH_TRANSFORMER_MISSING: {flash_required}')
-    actual_size = flash_required.stat().st_size
+    actual_size = flash_source.stat().st_size
     if actual_size != expected_size:
-        raise RuntimeError(
-            f'FLASH_TRANSFORMER_SIZE_MISMATCH: expected={expected_size} actual={actual_size}'
-        )
+        raise RuntimeError(f'FLASH_TRANSFORMER_SIZE_MISMATCH: expected={expected_size} actual={actual_size}')
     import hashlib
     digest = hashlib.sha256()
-    with flash_required.open('rb') as fh:
+    with flash_source.open('rb') as fh:
         for block in iter(lambda: fh.read(16 * 1024 * 1024), b''):
             digest.update(block)
     actual_sha256 = digest.hexdigest()
     print('FLASH_TRANSFORMER_SHA256', actual_sha256, flush=True)
     if actual_sha256 != expected_sha256:
-        raise RuntimeError(
-            f'FLASH_TRANSFORMER_SHA256_MISMATCH: expected={expected_sha256} actual={actual_sha256}'
-        )
-    transformer_link = flash_required
+        raise RuntimeError(f'FLASH_TRANSFORMER_SHA256_MISMATCH: expected={expected_sha256} actual={actual_sha256}')
+    flash_config = flash_source.parent.parent / 'config.json'
+    if not flash_config.exists():
+        raise RuntimeError(f'FLASH_CONFIG_MISSING: {flash_config}')
+    transformer_link = flash_source
     print('FLASH_TRANSFORMER_VERIFIED', transformer_link, actual_size, flush=True)
-
     wav = models / 'chinese-wav2vec2-base'
     from huggingface_hub import snapshot_download
     if not wav.exists():
