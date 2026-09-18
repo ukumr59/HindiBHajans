@@ -168,12 +168,29 @@ def main() -> None:
     print('WAN_IMAGE_ENCODER_INPUT', image_encoder_source, flush=True)
     link_file(image_encoder_source, runtime_base / IMAGE_ENCODER_FILE)
 
-    transformer_source = find_mounted_file('diffusion_pytorch_model.safetensors')
-    if transformer_source.parent.name != 'Wan2.1-Fun-V1.1-1.3B-InP':
-        raise RuntimeError(f'FLASH_TRANSFORMER_WRONG_SOURCE: {transformer_source}')
-    print('FLASH_TRANSFORMER_INPUT', transformer_source, transformer_source.stat().st_size, flush=True)
-    transformer_link = runtime_base / 'diffusion_pytorch_model.safetensors'
-    link_file(transformer_source, transformer_link)
+    # The EchoMimicV3 Flash transformer is a separate checkpoint from the
+    # Wan base transformer. Keep it outside runtime_base so the base loader
+    # cannot auto-discover the wrong 3.13GB Wan checkpoint.
+    flash_root = models / 'echomimicv3-flash-pro'
+    flash_model_root = flash_root / 'echomimicv3-flash-pro'
+    flash_required = flash_model_root / 'transformer' / 'diffusion_pytorch_model.safetensors'
+    if not flash_required.exists():
+        from huggingface_hub import snapshot_download
+        disk_report('before_flash_download')
+        if shutil.disk_usage(ROOT).free < 4 * 1024**3:
+            raise RuntimeError('INSUFFICIENT_DISK_FOR_FLASH: need >=4GB free')
+        snapshot_download(
+            FLASH_HF,
+            local_dir=str(flash_root),
+            allow_patterns=[
+                'echomimicv3-flash-pro/config.json',
+                'echomimicv3-flash-pro/transformer/diffusion_pytorch_model.safetensors',
+            ],
+        )
+    if not flash_required.exists() or flash_required.stat().st_size < 3_500_000_000:
+        raise RuntimeError(f'FLASH_TRANSFORMER_INCOMPLETE: {flash_required}')
+    transformer_link = flash_required
+    print('FLASH_TRANSFORMER_HF', transformer_link, transformer_link.stat().st_size, flush=True)
 
     wav = models / 'chinese-wav2vec2-base'
     from huggingface_hub import snapshot_download
@@ -185,16 +202,8 @@ def main() -> None:
         )
     disk_report('after_wav2vec')
 
-    flash = models / 'echomimicv3-flash-pro'
-    flash_root = flash / 'echomimicv3-flash-pro'
-    if not (flash_root / 'config.json').exists():
-        snapshot_download(
-            FLASH_HF,
-            local_dir=str(flash),
-            allow_patterns=['echomimicv3-flash-pro/config.json'],
-        )
-    if not (flash_root / 'config.json').exists():
-        raise RuntimeError('FLASH_CONFIG_MISSING')
+    if not (flash_model_root / 'config.json').exists():
+        raise RuntimeError(f'FLASH_CONFIG_MISSING: {flash_model_root / "config.json"}')
 
     disk_report('models_ready')
 
