@@ -1,5 +1,5 @@
 {
-  "workflow_run_id": "35251444001",
+  "workflow_run_id": "35307545566",
   "workflow": "bhajan-daily-production",
   "model": "EchoMimicV3-Flash",
   "gpu_provider": "Kaggle-free-T4",
