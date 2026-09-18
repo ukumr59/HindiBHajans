@@ -447,6 +447,7 @@ def main() -> None:
         'chunk_seconds=15',
         'chunk_frames=375',
         'bounded_inference=True',
+        'raw_frame_accumulation=False',
         'publish=False',
         flush=True,
     )
@@ -509,6 +510,29 @@ def main() -> None:
     if final_size > 1_500_000_000:
         raise RuntimeError(f'FINAL_VIDEO_TOO_LARGE: {final_size / 1024**3:.2f}GB')
     shutil.copy2(master, ROOT / 'master.mp4')
+    # Keep only the final master video in /kaggle/working.
+    # The model/checkpoint/repository files are runtime inputs, not deliverables.
+    for cleanup_path in [
+        repo,
+        models,
+        segments,
+        outputs,
+        infer_dir,
+        runtime_requirements,
+        norm,
+    ]:
+        try:
+            if isinstance(cleanup_path, Path) and cleanup_path.is_dir():
+                shutil.rmtree(cleanup_path, ignore_errors=True)
+            elif isinstance(cleanup_path, Path) and cleanup_path.exists():
+                cleanup_path.unlink()
+        except Exception as exc:
+            print('CLEANUP_WARNING', cleanup_path, repr(exc), flush=True)
+
+    final_size = (ROOT / 'master.mp4').stat().st_size
+    if final_size > 1_500_000_000:
+        raise RuntimeError(f'FINAL_VIDEO_TOO_LARGE: {final_size / 1024**3:.2f}GB')
+
     print(
         'BHAJAN_KAGGLE_WORKER_OK',
         (ROOT / 'master.mp4').stat().st_size,
