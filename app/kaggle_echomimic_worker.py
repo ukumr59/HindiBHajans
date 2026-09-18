@@ -110,21 +110,10 @@ def patch_infer_for_cpu_offload(repo: Path) -> None:
         '    pipeline.enable_model_cpu_offload(device=device)\n    print("CPU_OFFLOAD_READY", flush=True)\n',
     )
 
-    old_audio = '''        # Get audio batch 
-        audio_embeds = audio_feature_wav2vec.to(device=device, dtype=weight_dtype)
-
-        indices = (torch.arange(2 * 2 + 1) - 2) * 1 
-        center_indices = torch.arange(
-            0,  
-            video_length_actual,
-            1,).unsqueeze(1) + indices.unsqueeze(0)
-        center_indices = torch.clamp(center_indices, min=0, max=audio_embeds.shape[0]-1)
-        audio_embeds = audio_embeds[center_indices] # F w s c [F, 5, 12, 768]
-
-        audio_embeds = audio_embeds.unsqueeze(0).to(device=device)
-
-        print(f"Audio embeds shape: {audio_embeds.shape}")
-'''
+    audio_start_marker = '        # Get audio batch '
+    audio_end_marker = '        validation_image_start = Image.fromarray(ref_start).convert("RGB")'
+    audio_start = text.index(audio_start_marker)
+    audio_end = text.index(audio_end_marker, audio_start)
     new_audio = '''        # Keep full audio embeddings on CPU; only the active window goes to GPU.
         audio_embeds = audio_feature_wav2vec.to(dtype=weight_dtype)
 
@@ -138,7 +127,9 @@ def patch_infer_for_cpu_offload(repo: Path) -> None:
         audio_embeds = audio_embeds[center_indices].contiguous()
 
         print(f"Audio embeds shape (CPU): {audio_embeds.shape}", flush=True)
+
 '''
+    text = text[:audio_start] + new_audio + text[audio_end:]
     if old_audio not in text:
         raise RuntimeError('AUDIO_BLOCK_NOT_FOUND')
     text = text.replace(old_audio, new_audio, 1)
