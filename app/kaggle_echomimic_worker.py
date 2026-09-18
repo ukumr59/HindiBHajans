@@ -109,7 +109,7 @@ def patch_infer_for_cpu_offload(repo: Path) -> None:
     text = text.replace('if transformer_path is not None:', 'if transformer_path:', 1)
     start = text.index('        validation_image_start = Image.fromarray(ref_start).convert("RGB")')
     end = text.index('        print(f"Saved output to: {output_video_path}")', start) + len('        print(f"Saved output to: {output_video_path}")')
-    long_block = \`        validation_image_start = Image.fromarray(ref_start).convert("RGB")
+    long_block = r'''        validation_image_start = Image.fromarray(ref_start).convert("RGB")
         validation_image_end = None
         sample_size_0, sample_size_1 = get_sample_size(validation_image_start, sample_size)
 
@@ -215,7 +215,7 @@ def patch_infer_for_cpu_offload(repo: Path) -> None:
         shutil.rmtree(chunk_dir, ignore_errors=True)
         if os.path.exists(silent_path):
             os.remove(silent_path)
-        print(f"Saved output to: {output_video_path}")\`;
+        print(f"Saved output to: {output_video_path}")'''
     text = text[:start] + long_block + text[end:]
     path.write_text(text)
     print('INFER_FLASH_PATCHED_CPU_OFFLOAD', flush=True)
