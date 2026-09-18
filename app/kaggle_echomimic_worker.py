@@ -114,8 +114,19 @@ def patch_echomimic_low_cpu_compat(repo: Path) -> None:
         raise RuntimeError(
             f"LOW_CPU_MEM_COMPAT_PATCH_FAILED: expected >=2 loader imports, found={replacements}"
         )
+
+    # The umT5-XXL checkpoint is ~11.4GB. Use PyTorch memory-mapped loading so
+    # the checkpoint is not eagerly copied into RAM before meta-weight loading.
+    t5_path = repo / "src" / "wan_text_encoder.py"
+    t5_source = t5_path.read_text()
+    mmap_old = 'torch.load(pretrained_model_path, map_location="cpu")'
+    mmap_new = 'torch.load(pretrained_model_path, map_location="cpu", mmap=True, weights_only=True)'
+    mmap_replacements = t5_source.count(mmap_old)
+    if mmap_replacements:
+        t5_path.write_text(t5_source.replace(mmap_old, mmap_new))
     print(
-        f"ECHOMIMIC_LOW_CPU_MEM_COMPAT_PATCHED files={replacements}",
+        f"ECHOMIMIC_LOW_CPU_MEM_COMPAT_PATCHED files={replacements} "
+        f"t5_mmap_replacements={mmap_replacements}",
         flush=True,
     )
 
