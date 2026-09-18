@@ -102,8 +102,8 @@ def patch_infer_for_cpu_offload(repo: Path) -> None:
     if first not in text or second not in text:
         raise RuntimeError('INFER_FLASH_PATCH_TARGET_NOT_FOUND')
     text = text.replace('import sys\n', 'import sys\nimport subprocess\nimport shutil\n', 1)
-    text = text.replace(first, '    # Keep components on CPU while TeaCache is configured.\n\n    coefficients = get_teacache_coefficients(model_name) if enable_teacache else None', 1)
-    text = text.replace(second, '    # T4-safe: offload pipeline components between GPU operations.\n    pipeline.enable_model_cpu_offload(device=device)\n    print("CPU_OFFLOAD_READY", flush=True)\n\n    # Create output directory', 1)
+    text = text.replace(first, '    # Keep components on CPU; model CPU offload is enabled before inference.\n\n    coefficients = get_teacache_coefficients(model_name) if enable_teacache else None', 1)
+    text = text.replace(second, '    # T4-safe: offload pipeline components between GPU operations.\n    # This must happen before any pipeline.to(cuda) call.\n    pipeline.enable_model_cpu_offload(device=device)\n    print("CPU_OFFLOAD_READY", flush=True)\n\n    # Create output directory', 1)
     text = text.replace('low_cpu_mem_usage=True if not fsdp_dit else False,', 'low_cpu_mem_usage=False,', 1)
     text = text.replace('low_cpu_mem_usage=True,\n        torch_dtype=weight_dtype,', 'low_cpu_mem_usage=False,\n        torch_dtype=weight_dtype,', 1)
     text = text.replace('if transformer_path is not None:', 'if transformer_path:', 1)
