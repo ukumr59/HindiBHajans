@@ -386,16 +386,20 @@ def main() -> None:
     # This avoids downloading the 3.73GB Xet/LFS object into the T4 working disk.
     flash_root = models / 'echomimicv3-flash-pro'
 
-    mounted_flash = [
-        p for p in INPUT_ROOT.rglob('diffusion_pytorch_model.safetensors')
-        if 'hindibhajans-echomimic-flash' in str(p)
-    ]
-    if not mounted_flash:
-        raise RuntimeError('FLASH_DATASET_NOT_MOUNTED')
-    flash_source = min(mounted_flash, key=lambda p: len(p.parts))
+    # Locate the Flash transformer by its verified checkpoint size/hash, not by
+    # the Kaggle dataset folder name (Kaggle may mount the dataset under a
+    # generated/renamed path).
+    flash_candidates = list(INPUT_ROOT.rglob('diffusion_pytorch_model.safetensors'))
+    if not flash_candidates:
+        raise RuntimeError('FLASH_DATASET_NOT_MOUNTED: no diffusion_pytorch_model.safetensors found under /kaggle/input')
+    expected_size = 3_727_671_120
+    flash_candidates = [p for p in flash_candidates if p.stat().st_size == expected_size]
+    if not flash_candidates:
+        found = [(str(p), p.stat().st_size) for p in INPUT_ROOT.rglob('diffusion_pytorch_model.safetensors')]
+        raise RuntimeError(f'FLASH_TRANSFORMER_NOT_FOUND: expected_size={expected_size} candidates={found}')
+    flash_source = min(flash_candidates, key=lambda p: len(p.parts))
     print('FLASH_MOUNTED_INPUT', flash_source, flash_source.stat().st_size, flush=True)
 
-    expected_size = 3_727_671_120
     expected_sha256 = '5ebdbb2fc709108bf2a1728fd92eb2874804e4bc0324e92a2cd55425968c85a4'
     actual_size = flash_source.stat().st_size
     if actual_size != expected_size:
@@ -444,8 +448,8 @@ def main() -> None:
         'model_loads=1',
         f'target_frames={total_frames}',
         f'target_seconds={seconds}',
-        'chunk_seconds=15',
-        'chunk_frames=375',
+        'chunk_seconds=4.52',
+        'chunk_frames=113',
         'bounded_inference=True',
         'raw_frame_accumulation=False',
         'publish=False',
