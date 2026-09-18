@@ -142,7 +142,7 @@ def patch_infer_for_cpu_offload(repo: Path) -> None:
 
     text = text.replace(
         '    pipeline.to(device=device)\n',
-        '    pipeline.enable_model_cpu_offload(device=device)\n    print("CPU_OFFLOAD_READY", flush=True)\n',
+        '    pipeline.enable_sequential_cpu_offload(device=device)\n    print("CPU_OFFLOAD_READY", flush=True)\n',
     )
 
     # Remove the upstream duplicate Flash checkpoint load. The model is already
@@ -207,9 +207,9 @@ def patch_infer_for_cpu_offload(repo: Path) -> None:
         validation_image_end = None
         sample_size_0, sample_size_1 = get_sample_size(validation_image_start, sample_size)
 
-        # 113 frames ~= 4.5 seconds at 25 FPS. Small bounded windows keep
+        # 49 frames ~= 2 seconds at 25 FPS. Smaller windows are required on a 15GB T4
         # CPU/GPU tensors bounded while one model instance is reused.
-        chunk_frames = 113
+        chunk_frames = 49
         overlap_frames = 8
         total_frames = video_length_actual
         chunk_dir = os.path.join(save_path, "_bounded_chunks")
@@ -217,7 +217,7 @@ def patch_infer_for_cpu_offload(repo: Path) -> None:
 
         print(
             f"LONG_VIDEO_PLAN total_frames={total_frames} "
-            f"chunk_frames={chunk_frames} overlap={overlap_frames} "
+            f"chunk_frames={chunk_frames} overlap={overlap_frames} offload=sequential "
             f"bounded_inference=True codec=libx264",
             flush=True,
         )
