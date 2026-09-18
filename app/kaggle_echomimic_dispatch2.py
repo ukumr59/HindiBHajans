@@ -101,8 +101,8 @@ def ensure_flash_dataset(env: dict[str, str]) -> None:
             print('KAGGLE_FLASH_DATASET_READY', FLASH_DATASET, flush=True)
             return
     shutil.rmtree(FLASH_DDIR, ignore_errors=True)
-    (FLASH_DDIR / 'transformer').mkdir(parents=True)
-    flash_file = FLASH_DDIR / 'transformer' / 'diffusion_pytorch_model.safetensors'
+    (FLASH_DDIR).mkdir(parents=True, exist_ok=True)
+    flash_file = FLASH_DDIR / 'diffusion_pytorch_model.safetensors'
     flash_config = FLASH_DDIR / 'config.json'
     expected_size = 3_727_671_120
     expected_sha256 = '5ebdbb2fc709108bf2a1728fd92eb2874804e4bc0324e92a2cd55425968c85a4'
