@@ -97,6 +97,28 @@ def ensure_fun_base(runtime_base: Path) -> None:
     disk_report('after_fun_base_download')
 
 
+def patch_echomimic_low_cpu_compat(repo: Path) -> None:
+    # EchoMimic's custom loaders were written against an older diffusers import path.
+    # Current diffusers moved load_model_dict_into_meta from modeling_utils to
+    # model_loading_utils. If the old import fails, EchoMimic silently falls back
+    # to full CPU model loading, which is fatal for the 11.4GB umT5-XXL checkpoint.
+    replacements = 0
+    old = "from diffusers.models.modeling_utils import \\\n                    load_model_dict_into_meta"
+    new = "from diffusers.models.model_loading_utils import \\\n                    load_model_dict_into_meta"
+    for path in (repo / "src").rglob("*.py"):
+        source = path.read_text()
+        if old in source:
+            path.write_text(source.replace(old, new))
+            replacements += 1
+    if replacements < 2:
+        raise RuntimeError(
+            f"LOW_CPU_MEM_COMPAT_PATCH_FAILED: expected >=2 loader imports, found={replacements}"
+        )
+    print(
+        f"ECHOMIMIC_LOW_CPU_MEM_COMPAT_PATCHED files={replacements}",
+        flush=True,
+    )
+
 def patch_infer_for_cpu_offload(repo: Path) -> None:
     path = repo / 'infer_flash.py'
     text = path.read_text()
@@ -378,6 +400,7 @@ def main() -> None:
     segments = ROOT / 'segments'
     outputs = ROOT / 'outputs'
     run('git', 'clone', '--depth', '1', 'https://github.com/antgroup/echomimic_v3.git', str(repo))
+    patch_echomimic_low_cpu_compat(repo)
     patch_infer_for_cpu_offload(repo)
 
     runtime_requirements = ROOT / 'echomimic_v3_flash_requirements.txt'
