@@ -244,7 +244,7 @@ def patch_infer_for_cpu_offload(repo: Path) -> None:
             if actual_frames <= 0:
                 break
 
-            input_video, input_video_mask, clip_image = get_image_to_video_latent2(
+            input_video, input_video_mask, clip_image = get_image_to_video_latent3(
                 previous_ref,
                 validation_image_end,
                 video_length=actual_frames,
