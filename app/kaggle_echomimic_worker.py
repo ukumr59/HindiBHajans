@@ -101,21 +101,127 @@ def patch_infer_for_cpu_offload(repo: Path) -> None:
     second = '    # Create output directory'
     if first not in text or second not in text:
         raise RuntimeError('INFER_FLASH_PATCH_TARGET_NOT_FOUND')
+    text = text.replace('import sys\n', 'import sys\nimport subprocess\n', 1)
     text = text.replace(first, '    # Keep components on CPU while TeaCache is configured.\n\n    coefficients = get_teacache_coefficients(model_name) if enable_teacache else None', 1)
     text = text.replace(second, '    # T4-safe: offload pipeline components between GPU operations.\n    pipeline.enable_model_cpu_offload(device=device)\n    print("CPU_OFFLOAD_READY", flush=True)\n\n    # Create output directory', 1)
     text = text.replace('low_cpu_mem_usage=True if not fsdp_dit else False,', 'low_cpu_mem_usage=False,', 1)
     text = text.replace('low_cpu_mem_usage=True,\n        torch_dtype=weight_dtype,', 'low_cpu_mem_usage=False,\n        torch_dtype=weight_dtype,', 1)
-    # Upstream defaults transformer_path to an empty string but tests only for
-    # None. Keep the upstream Flash behavior by loading the explicit mounted
-    # safetensors file, while preventing an empty path from becoming
-    # checkpoint-50000.pth.
     text = text.replace('if transformer_path is not None:', 'if transformer_path:', 1)
+    start = text.index('        validation_image_start = Image.fromarray(ref_start).convert("RGB")')
+    end = text.index('        print(f"Saved output to: {output_video_path}")', start) + len('        print(f"Saved output to: {output_video_path}")')
+    long_block = \`        validation_image_start = Image.fromarray(ref_start).convert("RGB")
+        validation_image_end = None
+        sample_size_0, sample_size_1 = get_sample_size(validation_image_start, sample_size)
+
+        total_frames = video_length_actual
+        chunk_frames = 81
+        overlap_frames = 8
+        chunk_dir = os.path.join(save_path, "_chunks")
+        os.makedirs(chunk_dir, exist_ok=True)
+        concat_file = os.path.join(chunk_dir, "concat.txt")
+        chunk_paths = []
+        previous_ref = validation_image_start
+        start_frame = 0
+        chunk_index = 0
+        clip_image = None
+
+        print(f"LONG_VIDEO_PLAN total_frames={total_frames} chunk_frames={chunk_frames} overlap={overlap_frames}", flush=True)
+
+        while start_frame < total_frames:
+            current_frames = min(chunk_frames, total_frames - start_frame)
+            if current_frames < 2:
+                break
+            if current_frames != total_frames - start_frame:
+                current_frames = int((current_frames - 1) // vae.config.temporal_compression_ratio * vae.config.temporal_compression_ratio) + 1
+            if current_frames <= overlap_frames and start_frame > 0:
+                break
+
+            input_video, input_video_mask, clip_image = get_image_to_video_latent2(
+                previous_ref, validation_image_end,
+                video_length=current_frames,
+                sample_size=[sample_size_0, sample_size_1],
+            )
+            end_frame = min(total_frames, start_frame + current_frames)
+            partial_audio_embeds = audio_embeds[:, start_frame:end_frame]
+
+            print(f"LONG_VIDEO_CHUNK index={chunk_index} start={start_frame} frames={current_frames}", flush=True)
+            with torch.no_grad():
+                sample = pipeline(
+                    prompt,
+                    num_frames=current_frames,
+                    negative_prompt=negative_prompt,
+                    audio_embeds=partial_audio_embeds,
+                    audio_scale=audio_scale,
+                    ip_mask=None,
+                    use_un_ip_mask=use_un_ip_mask,
+                    height=sample_size_0,
+                    width=sample_size_1,
+                    generator=generator,
+                    neg_scale=neg_scale,
+                    neg_steps=neg_steps,
+                    use_dynamic_cfg=use_dynamic_cfg,
+                    use_dynamic_acfg=use_dynamic_acfg,
+                    guidance_scale=guidance_scale,
+                    audio_guidance_scale=audio_guidance_scale,
+                    num_inference_steps=num_inference_steps,
+                    video=input_video,
+                    mask_video=input_video_mask,
+                    clip_image=clip_image,
+                    cfg_skip_ratio=cfg_skip_ratio,
+                    shift=shift,
+                ).videos
+
+            write_sample = sample[:, :, overlap_frames:] if start_frame > 0 else sample
+            chunk_path = os.path.join(chunk_dir, f"chunk_{chunk_index:04d}.mp4")
+            save_videos_grid(write_sample, chunk_path, fps=fps)
+            chunk_paths.append(chunk_path)
+
+            tail = sample[0, :, -overlap_frames:].detach().float().cpu()
+            previous_ref = [
+                Image.fromarray(
+                    (tail[:, j].permute(1, 2, 0).numpy().clip(0, 1) * 255).astype(np.uint8)
+                )
+                for j in range(tail.shape[1])
+            ]
+
+            del input_video, input_video_mask, partial_audio_embeds, sample, write_sample, tail
+            torch.cuda.empty_cache()
+
+            start_frame += current_frames - (overlap_frames if start_frame > 0 else 0)
+            chunk_index += 1
+
+        if not chunk_paths:
+            raise RuntimeError("LONG_VIDEO_NO_CHUNKS")
+
+        with open(concat_file, "w") as fh:
+            for p in chunk_paths:
+                fh.write(f"file '{os.path.abspath(p)}'\\n")
+
+        silent_path = os.path.join(save_path, f"{image_name}_silent.mp4")
+        subprocess.run([
+            "ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0",
+            "-i", concat_file, "-c", "copy", silent_path
+        ], check=True)
+        subprocess.run([
+            "ffmpeg", "-y", "-v", "error",
+            "-i", silent_path, "-i", audio_path,
+            "-map", "0:v:0", "-map", "1:a:0",
+            "-t", str(video_length_actual / fps),
+            "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+            "-ar", "48000", "-movflags", "+faststart",
+            output_video_path
+        ], check=True)
+
+        shutil.rmtree(chunk_dir, ignore_errors=True)
+        if os.path.exists(silent_path):
+            os.remove(silent_path)
+        print(f"Saved output to: {output_video_path}")\`;
+    text = text[:start] + long_block + text[end:]
     path.write_text(text)
     print('INFER_FLASH_PATCHED_CPU_OFFLOAD', flush=True)
     print('INFER_FLASH_PATCHED_LOW_CPU_MEM_FALSE', flush=True)
     print('INFER_FLASH_PATCHED_TRANSFORMER_PATH_GUARD', flush=True)
-
-
+    print('INFER_FLASH_PATCHED_LONG_VIDEO_SINGLE_MODEL_LOAD', flush=True)
 def main() -> None:
     image = find_input('singer.png')
     audio = find_input('bhajan.mp3')
@@ -213,60 +319,50 @@ def main() -> None:
     run('ffmpeg', '-y', '-v', 'error', '-i', str(audio), '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', str(norm))
 
     fps = 25
-    frames = 81
-    segment_seconds = frames / fps
-    count = int((seconds + segment_seconds - 1) // segment_seconds)
-    print('INFERENCE_PLAN', f'segments={count}', f'segment_seconds={segment_seconds:.2f}', flush=True)
+    total_frames = int(seconds * fps)
+    print('INFERENCE_PLAN', f'model_loads=1', f'target_frames={total_frames}', f'target_seconds={seconds}', flush=True)
 
-    for i in range(count):
-        disk_report(f'before_segment_{i:04d}')
-        start = i * segment_seconds
-        remain = max(0.1, min(segment_seconds, seconds - start))
-        if remain < 0.5:
-            break
-        wav_file = segments / f'audio_{i:04d}.wav'
-        raw_dir = segments / f'raw_{i:04d}'
-        try:
-            run('ffmpeg', '-y', '-v', 'error', '-ss', f'{start:.3f}', '-i', str(norm), '-t', f'{remain:.3f}', '-ar', '16000', '-ac', '1', str(wav_file))
-            raw_dir.mkdir(exist_ok=True)
-            run(
-                sys.executable, str(repo / 'infer_flash.py'),
-                '--image_path', str(image),
-                '--audio_path', str(wav_file),
-                '--prompt', 'A single Indian devotional singer performing a Hindi bhajan in traditional Indian clothing before the specified Hindu deity in a serene temple setting; only the same singer is visible; natural singing mouth movement, subtle expressive head and upper-body motion, stable identity.',
-                '--num_inference_steps', '8',
-                '--config_path', str(repo / 'config/config.yaml'),
-                '--model_name', str(runtime_base),
-                '--ckpt_idx', '50000',
-                '--transformer_path', str(transformer_link),
-                '--save_path', str(raw_dir),
-                '--wav2vec_model_dir', str(wav),
-                '--sampler_name', 'Flow_Unipc',
-                '--video_length', str(frames),
-                '--guidance_scale', '5.0',
-                '--audio_guidance_scale', '2.5',
-                '--audio_scale', '1.0',
-                '--neg_scale', '1.0',
-                '--neg_steps', '0',
-                '--seed', str(4300 + i),
-                '--enable_teacache',
-                '--teacache_threshold', '0.1',
-                '--num_skip_start_steps', '5',
-                '--weight_dtype', 'float16',
-                '--sample_size', '768', '768',
-                '--fps', str(fps),
-                '--negative_prompt', 'blurry, distorted face, identity drift, extra person, duplicate person, malformed hands, fused fingers, deformed mouth, jitter, flicker, camera cut, text, watermark',
-            )
-            raw = newest_mp4(raw_dir)
-            silent = segments / f'video_{i:04d}.mp4'
-            run('ffmpeg', '-y', '-v', 'error', '-i', str(raw), '-an', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', str(silent))
-            if not silent.exists() or silent.stat().st_size < 100_000:
-                raise RuntimeError(f'SEGMENT_NOT_CREATED: {silent}')
-        finally:
-            wav_file.unlink(missing_ok=True)
-            if raw_dir.exists():
-                shutil.rmtree(raw_dir, ignore_errors=True)
-        disk_report(f'after_segment_{i:04d}')
+    infer_dir = ROOT / 'infer_output'
+    shutil.rmtree(infer_dir, ignore_errors=True)
+    infer_dir.mkdir(parents=True)
+    run(
+        sys.executable, str(repo / 'infer_flash.py'),
+        '--image_path', str(image),
+        '--audio_path', str(audio),
+        '--prompt', 'A single Indian devotional singer performing a Hindi bhajan in traditional Indian clothing before the specified Hindu deity in a serene temple setting; only the same singer is visible; natural singing mouth movement, subtle expressive head and upper-body motion, stable identity.',
+        '--num_inference_steps', '8',
+        '--config_path', str(repo / 'config/config.yaml'),
+        '--model_name', str(runtime_base),
+        '--ckpt_idx', '50000',
+        '--transformer_path', str(transformer_link),
+        '--save_path', str(infer_dir),
+        '--wav2vec_model_dir', str(wav),
+        '--sampler_name', 'Flow_Unipc',
+        '--video_length', str(total_frames),
+        '--guidance_scale', '5.0',
+        '--audio_guidance_scale', '2.5',
+        '--audio_scale', '1.0',
+        '--neg_scale', '1.0',
+        '--neg_steps', '0',
+        '--seed', '4300',
+        '--enable_teacache',
+        '--teacache_threshold', '0.1',
+        '--num_skip_start_steps', '5',
+        '--weight_dtype', 'float16',
+        '--sample_size', '768', '768',
+        '--fps', str(fps),
+        '--negative_prompt', 'blurry, distorted face, identity drift, extra person, duplicate person, malformed hands, fused fingers, deformed mouth, jitter, flicker, camera cut, text, watermark',
+    )
+
+    generated = list(infer_dir.rglob('*.mp4'))
+    if not generated:
+        raise RuntimeError('ECHOMIMIC_OUTPUT_MISSING')
+    generated.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    shutil.copy2(generated[0], ROOT / 'master.mp4')
+    print('BHAJAN_KAGGLE_WORKER_OK', (ROOT / 'master.mp4').stat().st_size, flush=True)
+    shutil.rmtree(infer_dir, ignore_errors=True)
+
+    return
 
     videos = sorted(segments.glob('video_*.mp4'))
     if not videos:
