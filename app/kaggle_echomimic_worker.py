@@ -219,11 +219,12 @@ def patch_infer_for_cpu_offload(repo: Path) -> None:
         validation_image_end = None
         sample_size_0, sample_size_1 = get_sample_size(validation_image_start, sample_size)
 
-        # 65 frames ~= 2.6 seconds at 25 FPS. 113 frames previously OOM'd on a 15GB T4;
-        # 65 is the next conservative step up from the proven 49-frame window.
-        # Sequential CPU offload keeps model residency bounded while reducing the
-        # number of expensive chunk/model transfers for the full 3-minute render.
-        chunk_frames = 65
+        # EchoMimicV3-Flash officially supports 81-frame windows and documents 5 steps
+        # for talking-head generation. 81 frames reduces the number of long-video
+        # chunks substantially versus 65 while staying within the model's stated
+        # 12GB VRAM requirement; this worker has a 15GB T4.
+        # Sequential CPU offload keeps model residency bounded.
+        chunk_frames = 81
         overlap_frames = 8
         total_frames = video_length_actual
         chunk_dir = os.path.join(save_path, "_bounded_chunks")
@@ -526,8 +527,8 @@ def main() -> None:
         'model_loads=1',
         f'target_frames={total_frames}',
         f'target_seconds={seconds}',
-        'chunk_seconds=1.96',
-        'chunk_frames=49',
+        'chunk_seconds=3.24',
+        'chunk_frames=81',
         'bounded_inference=True',
         'raw_frame_accumulation=False',
         'publish=False',
@@ -543,7 +544,7 @@ def main() -> None:
         '--image_path', str(image),
         '--audio_path', str(audio),
         '--prompt', 'A single Indian devotional singer performing a Hindi bhajan in traditional Indian clothing before the specified Hindu deity in a serene temple setting; only the same singer is visible; natural singing mouth movement, subtle expressive head and upper-body motion, stable identity.',
-        '--num_inference_steps', '8',
+        '--num_inference_steps', '5',
         '--config_path', str(repo / 'config/config.yaml'),
         '--model_name', str(runtime_base),
         '--ckpt_idx', '50000',
@@ -553,7 +554,7 @@ def main() -> None:
         '--sampler_name', 'Flow_Unipc',
         '--video_length', str(total_frames),
         '--guidance_scale', '5.0',
-        '--audio_guidance_scale', '2.5',
+        '--audio_guidance_scale', '2.0',
         '--audio_scale', '1.0',
         '--neg_scale', '1.0',
         '--neg_steps', '0',
