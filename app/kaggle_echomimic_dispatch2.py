@@ -183,8 +183,13 @@ def main(seconds: int) -> None:
         raise RuntimeError(f'WORKER_SOURCE_TOO_LARGE: {worker_bytes}')
 
     def push_and_wait() -> tuple[bool, str]:
-        run(['kaggle', 'kernels', 'push', '-p', str(KDIR), '--timeout', '39600'], env=env)
-        deadline = time.time() + 39600
+        # Kaggle's documented notebook/session ceiling is 12 hours. Keep the API
+        # watchdog at that ceiling; the worker itself is now optimized to finish
+        # materially earlier.
+        KAGGLE_MAX_RUNTIME = 12 * 60 * 60
+        run(['kaggle', 'kernels', 'push', '-p', str(KDIR), '--timeout', str(KAGGLE_MAX_RUNTIME)], env=env)
+        print(f'KAGGLE_KERNEL_TIMEOUT_CONFIG={KAGGLE_MAX_RUNTIME}s', flush=True)
+        deadline = time.time() + KAGGLE_MAX_RUNTIME
         while time.time() < deadline:
             p = subprocess.run(
                 ['kaggle', 'kernels', 'status', KERNEL],
