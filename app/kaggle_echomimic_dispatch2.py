@@ -202,14 +202,27 @@ def main(seconds: int) -> None:
             t = status.lower()
             if 'complete' in t and not any(x in t for x in ('incomplete', 'not complete')):
                 return True, status
-            if any(x in t for x in ('error', 'failed', 'cancelled', 'canceled')):
+
+            # Kaggle can report cancellation as KernelWorkerStatus.CANCEL_ACKNOWLEDGED.
+            # Treat acknowledged cancellation as terminal immediately; otherwise the
+            # GitHub runner would keep polling the same cancelled kernel indefinitely.
+            terminal_failure_markers = (
+                'error',
+                'failed',
+                'cancelled',
+                'canceled',
+                'cancel_acknowledged',
+                'cancel acknowledged',
+            )
+            if any(x in t for x in terminal_failure_markers):
                 log = subprocess.run(
                     ['kaggle', 'kernels', 'logs', KERNEL],
                     capture_output=True,
                     text=True,
                     env=env,
                 )
-                return False, (log.stdout or log.stderr or 'KAGGLE_KERNEL_LOG_EMPTY')
+                diagnostic = log.stdout or log.stderr or 'KAGGLE_KERNEL_LOG_EMPTY'
+                return False, f'KAGGLE_KERNEL_TERMINAL_FAILURE status={status}\\n{diagnostic}'
             time.sleep(30)
         raise TimeoutError('KAGGLE_KERNEL_TIMEOUT')
 
