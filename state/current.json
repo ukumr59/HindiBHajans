@@ -1,5 +1,5 @@
 {
-  "workflow_run_id": "35990270630",
+  "workflow_run_id": "36054190866",
   "workflow": "bhajan-daily-production",
   "model": "EchoMimicV3-Flash",
   "gpu_provider": "Kaggle-free-T4",
@@ -7,8 +7,8 @@
   "publishing": "not_run",
   "audio_model": "ACE-Step-v1.5-turbo",
   "audio_gpu_provider": "Kaggle-free-T4",
-  "video_model": "EchoMimicV3-Flash",
+  "video_model": "MuseTalk-1.5",
   "video_gpu_provider": "Kaggle-free-T4",
   "audio_backend": "KAGGLE_FREE_T4",
-  "video_backend": "KAGGLE_FREE_T4_ECHOMIMICV3_FLASH"
+  "video_backend": "KAGGLE_FREE_T4_MUSETALK"
 }
