@@ -11,7 +11,12 @@ KERNEL_PREFIX='bhajanaabha/hindibhajans-musetalk'
 
 def run(cmd,env):
     print('RUN:',*cmd,flush=True)
-    return subprocess.run(cmd,cwd=ROOT,env=env,text=True,check=True)
+    p=subprocess.run(cmd,cwd=ROOT,env=env,text=True,capture_output=True)
+    if p.stdout:
+        print(p.stdout,end='',flush=True)
+    if p.stderr:
+        print(p.stderr,end='',flush=True)
+    return p
 
 def wait_dataset(env,timeout=900):
     deadline=time.time()+timeout
@@ -60,7 +65,13 @@ def run_kernel(env,kernel):
           'dataset_sources':[INPUT_DATASET],'competition_sources':[],'kernel_sources':[],'model_sources':[]}
     (KDIR/'kernel-metadata.json').write_text(json.dumps(meta,indent=2))
     run([sys.executable,'-m','py_compile',str(KDIR/'worker.py')],env)
-    run(['kaggle','kernels','push','-p',str(KDIR),'--timeout',str(12*60*60)],env)
+    push=run(['kaggle','kernels','push','-p',str(KDIR),'--timeout',str(12*60*60)],env)
+    push_text=(push.stdout or '')+'\n'+(push.stderr or '')
+    low=push_text.lower()
+    if 'maximum weekly gpu quota' in low or ('gpu quota' in low and 'reached' in low):
+        raise RuntimeError('KAGGLE_GPU_QUOTA_EXHAUSTED: Kaggle refused GPU allocation before the MuseTalk kernel was created. Do not retry; wait for quota reset.')
+    if push.returncode != 0:
+        raise RuntimeError(f'KAGGLE_KERNEL_PUSH_FAILED: {push_text.strip()}')
     return wait_kernel(env,kernel)
 
 def main(seconds):
