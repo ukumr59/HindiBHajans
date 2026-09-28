@@ -60,6 +60,7 @@ def wait_kernel(env,kernel):
 def run_kernel(env,kernel):
     shutil.rmtree(KDIR,ignore_errors=True); KDIR.mkdir(parents=True)
     shutil.copy2(ROOT/'app'/'kaggle_echomimic_worker.py',KDIR/'worker.py')
+    shutil.copy2(ROOT/'app'/'lipsync_quality_gate.py',KDIR/'lipsync_quality_gate.py')
     meta={'id':kernel,'title':kernel.rsplit('/',1)[-1],'code_file':'worker.py','language':'python','kernel_type':'script',
           'is_private':True,'enable_gpu':True,'enable_internet':True,'machine_shape':'NvidiaTeslaT4',
           'dataset_sources':[INPUT_DATASET],'competition_sources':[],'kernel_sources':[],'model_sources':[]}
@@ -89,11 +90,34 @@ def main(seconds):
         ok,detail=run_kernel(env,kernel)
         if ok:
             dest=OUT/'kaggle_output'; shutil.rmtree(dest,ignore_errors=True); dest.mkdir(parents=True)
-            run(['kaggle','kernels','output',kernel,'-p',str(dest),'--force','--file-pattern',r'.*master\.mp4$'],env)
+            run(['kaggle','kernels','output',kernel,'-p',str(dest),'--force','--file-pattern',r'.*(master\\.mp4|lipsync_qa\\.json)
+            return
+        print(detail,flush=True)
+        # A worker ERROR containing a traceback is an application/dependency failure,
+        # not a transient Kaggle kernel-state problem. Retrying would burn GPU quota
+        # without changing the code. Only retry clean terminal kernel-state failures.
+        detail_low=detail.lower()
+        non_retryable=('traceback','importerror','modulenotfounderror','dependency_smoke_failed','out of memory','cuda out of memory')
+        if any(x in detail_low for x in non_retryable):
+            raise RuntimeError('KAGGLE_MUSETALK_WORKER_NONRETRYABLE_FAILURE: '+detail)
+        if attempt==1:
+            print('MUSETALK_AUTO_RETRY=1 terminal Kaggle state; using a fresh kernel slug',flush=True)
+            time.sleep(60)
+    raise RuntimeError('KAGGLE_MUSETALK_KERNEL_FAILED_AFTER_RETRY')
+
+if __name__=='__main__':
+    import argparse
+    ap=argparse.ArgumentParser(); ap.add_argument('--seconds',type=int,default=180)
+    main(ap.parse_args().seconds)
+],env)
             files=list(dest.rglob('master.mp4'))
+            qa=list(dest.rglob('lipsync_qa.json'))
             if not files: raise RuntimeError('KAGGLE_COMPLETED_BUT_MASTER_MP4_MISSING')
+            if not qa: raise RuntimeError('KAGGLE_COMPLETED_BUT_LIPSYNC_QA_MISSING')
             shutil.copy2(files[0],OUT/'master.mp4')
+            shutil.copy2(qa[0],OUT/'lipsync_qa.json')
             print('KAGGLE_MUSETALK_MASTER_READY',flush=True)
+            print('KAGGLE_LIPSYNC_QA_READY',flush=True)
             return
         print(detail,flush=True)
         # A worker ERROR containing a traceback is an application/dependency failure,
