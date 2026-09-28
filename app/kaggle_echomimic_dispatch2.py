@@ -65,7 +65,7 @@ def run_kernel(env,kernel):
           'is_private':True,'enable_gpu':True,'enable_internet':True,'machine_shape':'NvidiaTeslaT4',
           'dataset_sources':[INPUT_DATASET],'competition_sources':[],'kernel_sources':[],'model_sources':[]}
     (KDIR/'kernel-metadata.json').write_text(json.dumps(meta,indent=2))
-    run([sys.executable,'-m','py_compile',str(KDIR/'worker.py')],env)
+    run([sys.executable,'-m','py_compile',str(KDIR/'worker.py'),str(KDIR/'lipsync_quality_gate.py')],env)
     push=run(['kaggle','kernels','push','-p',str(KDIR),'--timeout',str(12*60*60)],env)
     push_text=(push.stdout or '')+'\n'+(push.stderr or '')
     low=push_text.lower()
