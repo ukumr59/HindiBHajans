@@ -90,7 +90,15 @@ def main(seconds):
         ok,detail=run_kernel(env,kernel)
         if ok:
             dest=OUT/'kaggle_output'; shutil.rmtree(dest,ignore_errors=True); dest.mkdir(parents=True)
-            run(['kaggle','kernels','output',kernel,'-p',str(dest),'--force','--file-pattern',r'.*(master\\.mp4|lipsync_qa\\.json)
+            run(['kaggle','kernels','output',kernel,'-p',str(dest),'--force','--file-pattern',r'.*(master\\.mp4|lipsync_qa\\.json)$'],env)
+            files=list(dest.rglob('master.mp4'))
+            qa=list(dest.rglob('lipsync_qa.json'))
+            if not files: raise RuntimeError('KAGGLE_COMPLETED_BUT_MASTER_MP4_MISSING')
+            if not qa: raise RuntimeError('KAGGLE_COMPLETED_BUT_LIPSYNC_QA_MISSING')
+            shutil.copy2(files[0],OUT/'master.mp4')
+            shutil.copy2(qa[0],OUT/'lipsync_qa.json')
+            print('KAGGLE_MUSETALK_MASTER_READY',flush=True)
+            print('KAGGLE_LIPSYNC_QA_READY',flush=True)
             return
         print(detail,flush=True)
         # A worker ERROR containing a traceback is an application/dependency failure,
