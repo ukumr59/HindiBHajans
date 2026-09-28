@@ -95,7 +95,7 @@ def main():
     cfg=repo/'configs/inference/musetalk_runtime.yaml'
     cfg.write_text('task_0:\n  video_path: "data/singer.png"\n  audio_path: "data/bhajan.mp3"\n  result_name: "master.mp4"\n',encoding='utf-8')
     disk('before_inference'); started=time.time()
-    run(sys.executable,'-m','scripts.inference','--inference_config',str(cfg),'--result_dir','results/runtime','--unet_model_path','models/musetalkV15/unet.pth','--unet_config','models/musetalkV15/musetalk.json','--whisper_dir','models/whisper','--version','v15','--fps',str(FPS),'--batch_size','8','--use_float16','--output_vid_name','master.mp4',cwd=repo)
+    run(sys.executable,'-m','scripts.inference','--inference_config',str(cfg),'--result_dir','results/runtime','--unet_model_path','models/musetalkV15/unet.pth','--unet_config','models/musetalkV15/musetalk.json','--whisper_dir','models/whisper','--version','v15','--fps',str(FPS),'--batch_size','8','--use_float16','--extra_margin','15','--output_vid_name','master.mp4',cwd=repo)
     print(f'MUSETALK_INFERENCE_SECONDS={time.time()-started:.1f}',flush=True)
     candidates=list((repo/'results/runtime/v15').glob('master.mp4'))
     if not candidates: candidates=list(repo.rglob('master.mp4'))
