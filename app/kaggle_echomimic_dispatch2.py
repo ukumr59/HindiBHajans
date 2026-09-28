@@ -117,30 +117,3 @@ if __name__=='__main__':
     import argparse
     ap=argparse.ArgumentParser(); ap.add_argument('--seconds',type=int,default=180)
     main(ap.parse_args().seconds)
-],env)
-            files=list(dest.rglob('master.mp4'))
-            qa=list(dest.rglob('lipsync_qa.json'))
-            if not files: raise RuntimeError('KAGGLE_COMPLETED_BUT_MASTER_MP4_MISSING')
-            if not qa: raise RuntimeError('KAGGLE_COMPLETED_BUT_LIPSYNC_QA_MISSING')
-            shutil.copy2(files[0],OUT/'master.mp4')
-            shutil.copy2(qa[0],OUT/'lipsync_qa.json')
-            print('KAGGLE_MUSETALK_MASTER_READY',flush=True)
-            print('KAGGLE_LIPSYNC_QA_READY',flush=True)
-            return
-        print(detail,flush=True)
-        # A worker ERROR containing a traceback is an application/dependency failure,
-        # not a transient Kaggle kernel-state problem. Retrying would burn GPU quota
-        # without changing the code. Only retry clean terminal kernel-state failures.
-        detail_low=detail.lower()
-        non_retryable=('traceback','importerror','modulenotfounderror','dependency_smoke_failed','out of memory','cuda out of memory')
-        if any(x in detail_low for x in non_retryable):
-            raise RuntimeError('KAGGLE_MUSETALK_WORKER_NONRETRYABLE_FAILURE: '+detail)
-        if attempt==1:
-            print('MUSETALK_AUTO_RETRY=1 terminal Kaggle state; using a fresh kernel slug',flush=True)
-            time.sleep(60)
-    raise RuntimeError('KAGGLE_MUSETALK_KERNEL_FAILED_AFTER_RETRY')
-
-if __name__=='__main__':
-    import argparse
-    ap=argparse.ArgumentParser(); ap.add_argument('--seconds',type=int,default=180)
-    main(ap.parse_args().seconds)
