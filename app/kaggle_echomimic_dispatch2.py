@@ -96,6 +96,13 @@ def main(seconds):
             print('KAGGLE_MUSETALK_MASTER_READY',flush=True)
             return
         print(detail,flush=True)
+        # A worker ERROR containing a traceback is an application/dependency failure,
+        # not a transient Kaggle kernel-state problem. Retrying would burn GPU quota
+        # without changing the code. Only retry clean terminal kernel-state failures.
+        detail_low=detail.lower()
+        non_retryable=('traceback','importerror','modulenotfounderror','dependency_smoke_failed','out of memory','cuda out of memory')
+        if any(x in detail_low for x in non_retryable):
+            raise RuntimeError('KAGGLE_MUSETALK_WORKER_NONRETRYABLE_FAILURE: '+detail)
         if attempt==1:
             print('MUSETALK_AUTO_RETRY=1 terminal Kaggle state; using a fresh kernel slug',flush=True)
             time.sleep(60)
