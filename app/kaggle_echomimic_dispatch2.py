@@ -90,7 +90,7 @@ def main(seconds):
         ok,detail=run_kernel(env,kernel)
         if ok:
             dest=OUT/'kaggle_output'; shutil.rmtree(dest,ignore_errors=True); dest.mkdir(parents=True)
-            run(['kaggle','kernels','output',kernel,'-p',str(dest),'--force','--file-pattern',r'.*(master\\.mp4|lipsync_qa\\.json)$'],env)
+            run(['kaggle','kernels','output',kernel,'-p',str(dest),'--force','--file-pattern',r'.*(master\.mp4|lipsync_qa\.json)$'],env)
             files=list(dest.rglob('master.mp4'))
             qa=list(dest.rglob('lipsync_qa.json'))
             if not files: raise RuntimeError('KAGGLE_COMPLETED_BUT_MASTER_MP4_MISSING')
