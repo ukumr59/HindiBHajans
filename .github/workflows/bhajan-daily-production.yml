@@ -39,7 +39,7 @@ jobs:
       - name: Production integrity gate
         run: |
           set -euo pipefail
-          python -m py_compile app/kaggle_ace_step_dispatch.py app/kaggle_echomimic_dispatch.py app/kaggle_echomimic_dispatch2.py app/kaggle_echomimic_worker.py app/visual_quality_gate.py
+          python -m py_compile app/kaggle_ace_step_dispatch.py app/kaggle_echomimic_dispatch.py app/kaggle_echomimic_dispatch2.py app/kaggle_echomimic_worker.py app/visual_quality_gate.py app/lipsync_quality_gate.py
           test -s assets/singer_image.png
           test -n "$KAGGLE_API_TOKEN"
           python - <<'PY'
@@ -182,6 +182,7 @@ jobs:
             output/bhajan_source.mp3
             output/shorts/*.mp4
             output/visual_qa.json
+            output/lipsync_qa.json
             output/shorts/*.visual_qa.json
           if-no-files-found: warn
           retention-days: 7
