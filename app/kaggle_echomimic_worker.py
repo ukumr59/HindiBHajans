@@ -110,7 +110,7 @@ def main():
     syncnet_path=FINAL/'syncnet_v2.model'
     run(sys.executable,'-c','from huggingface_hub import hf_hub_download; import shutil; p=hf_hub_download(repo_id="ByteDance/LatentSync-1.6",filename="auxiliary/syncnet_v2.model"); shutil.copy2(p,"/kaggle/working/syncnet_v2.model")')
     import hashlib
-    expected='961e8696f888fce4f3f6a3c3d5b3267cf5b343100b238e79b2659bff2c605442'
+    expected='961e8696f888fce4f3f3a6c3d5b3267cf5b343100b238e79b2659bff2c605442'
     got=hashlib.sha256(syncnet_path.read_bytes()).hexdigest()
     if got!=expected: raise RuntimeError(f'SYNCNET_MODEL_SHA256_MISMATCH={got}')
     run(sys.executable,'/kaggle/working/lipsync_quality_gate.py',str(final),'--model',str(syncnet_path),'--yunet',str(models/'face_detection/yunet_2023mar.onnx'),'--report',str(FINAL/'lipsync_qa.json'))
