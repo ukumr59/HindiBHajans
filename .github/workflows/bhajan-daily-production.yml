@@ -118,8 +118,7 @@ jobs:
           set -euo pipefail
           rm -rf output/shorts; mkdir -p output/shorts
           # Face-centred portrait crop: the previous full-frame foreground made the singer too small.
-          read -r SRC_W SRC_H FACE_X FACE_Y FACE_W FACE_H <<EOF
-          $(python - <<'PY'
+          read -r SRC_W SRC_H FACE_X FACE_Y FACE_W FACE_H <<< "$(python - <<'PY'
           import cv2
           img=cv2.imread('assets/singer_image.png')
           if img is None: raise SystemExit('SINGER_IMAGE_READ_FAILED')
@@ -130,12 +129,9 @@ jobs:
           f=max(faces,key=lambda x:float(x[2]*x[3]))
           print(w,h,*[int(round(float(v))) for v in f[:4]])
           PY
-          )
-          EOF
-          )
+          )"
           export SRC_W SRC_H FACE_X FACE_Y FACE_W FACE_H
-          read -r CROP_W CROP_H CROP_X CROP_Y <<EOF
-          $(python - <<'PY'
+          read -r CROP_W CROP_H CROP_X CROP_Y <<< "$(python - <<'PY'
           import os
           w,h,fx,fy,fw,fh=map(int,[os.environ['SRC_W'],os.environ['SRC_H'],os.environ['FACE_X'],os.environ['FACE_Y'],os.environ['FACE_W'],os.environ['FACE_H']])
           crop_w=min(w,max(int(round(fw*3.2)),int(round(h*9/16))))
@@ -147,9 +143,7 @@ jobs:
           y=max(0,min(int(round(cy-crop_h*0.42)),h-crop_h))
           print(crop_w,crop_h,x,y)
           PY
-          )
-          EOF
-          )
+          )"
           export CROP_W CROP_H CROP_X CROP_Y
           for n in 0 1 2; do
             start=$((n*45))
