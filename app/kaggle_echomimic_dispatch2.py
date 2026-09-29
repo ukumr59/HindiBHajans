@@ -69,6 +69,11 @@ def run_kernel(env,kernel):
     bootstrap=("import base64\n"
                "from pathlib import Path\n"
                f"Path('/kaggle/working/lipsync_quality_gate.py').write_bytes(base64.b64decode({gate_b64!r}))\n")
+    marker="from __future__ import annotations\n"
+    if marker not in worker_src:
+        raise RuntimeError('MuseTalk worker missing future-import marker')
+    worker_src=worker_src.replace(marker,marker+bootstrap,1)
+    (KDIR/'worker.py').write_text(worker_src,encoding='utf-8')
     (KDIR/'lipsync_quality_gate.py').write_text(gate_src,encoding='utf-8')
     meta={'id':kernel,'title':kernel.rsplit('/',1)[-1],'code_file':'worker.py','language':'python','kernel_type':'script',
           'is_private':True,'enable_gpu':True,'enable_internet':True,'machine_shape':'NvidiaTeslaT4',
