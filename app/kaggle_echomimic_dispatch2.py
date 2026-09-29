@@ -64,7 +64,7 @@ def run_kernel(env,kernel):
     # helper into the worker bootstrap so the worker is self-contained.
     worker_src=(ROOT/'app'/'kaggle_echomimic_worker.py').read_text(encoding='utf-8')
     gate_src=(ROOT/'app'/'lipsync_quality_gate.py').read_text(encoding='utf-8')
-    bootstrap="from pathlib import Path\\nPath('/kaggle/working/lipsync_quality_gate.py').write_text("+repr(gate_src)+",encoding='utf-8')\\n"
+    bootstrap="from pathlib import Path\nPath('/kaggle/working/lipsync_quality_gate.py').write_text("+repr(gate_src)+",encoding='utf-8')\n"
     (KDIR/'worker.py').write_text(bootstrap+worker_src,encoding='utf-8')
     (KDIR/'lipsync_quality_gate.py').write_text(gate_src,encoding='utf-8')
     meta={'id':kernel,'title':kernel.rsplit('/',1)[-1],'code_file':'worker.py','language':'python','kernel_type':'script',
