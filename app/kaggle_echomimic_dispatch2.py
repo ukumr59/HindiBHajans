@@ -59,8 +59,14 @@ def wait_kernel(env,kernel):
 
 def run_kernel(env,kernel):
     shutil.rmtree(KDIR,ignore_errors=True); KDIR.mkdir(parents=True)
-    shutil.copy2(ROOT/'app'/'kaggle_echomimic_worker.py',KDIR/'worker.py')
-    shutil.copy2(ROOT/'app'/'lipsync_quality_gate.py',KDIR/'lipsync_quality_gate.py')
+    # Kaggle script kernels execute only the metadata code_file; extra .py files in the
+    # push directory are not guaranteed to appear in /kaggle/working. Embed the QA
+    # helper into the worker bootstrap so the worker is self-contained.
+    worker_src=(ROOT/'app'/'kaggle_echomimic_worker.py').read_text(encoding='utf-8')
+    gate_src=(ROOT/'app'/'lipsync_quality_gate.py').read_text(encoding='utf-8')
+    bootstrap="from pathlib import Path\\nPath('/kaggle/working/lipsync_quality_gate.py').write_text("+repr(gate_src)+",encoding='utf-8')\\n"
+    (KDIR/'worker.py').write_text(bootstrap+worker_src,encoding='utf-8')
+    (KDIR/'lipsync_quality_gate.py').write_text(gate_src,encoding='utf-8')
     meta={'id':kernel,'title':kernel.rsplit('/',1)[-1],'code_file':'worker.py','language':'python','kernel_type':'script',
           'is_private':True,'enable_gpu':True,'enable_internet':True,'machine_shape':'NvidiaTeslaT4',
           'dataset_sources':[INPUT_DATASET],'competition_sources':[],'kernel_sources':[],'model_sources':[]}
