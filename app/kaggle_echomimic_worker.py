@@ -87,7 +87,7 @@ def main():
     snapshot_download('stabilityai/sd-vae-ft-mse',local_dir=str(models/'sd-vae'),allow_patterns=['config.json','diffusion_pytorch_model.bin'])
     snapshot_download('openai/whisper-tiny',local_dir=str(models/'whisper'),allow_patterns=['config.json','pytorch_model.bin','preprocessor_config.json'])
     from huggingface_hub import hf_hub_download
-    hf_hub_download(repo_id='opencv/opencv_zoo', filename='face_detection_yunet/face_detection_yunet_2023mar.onnx', local_dir=str(models/'face_detection'))
+    hf_hub_download(repo_id='opencv/face_detection_yunet', filename='face_detection_yunet_2023mar.onnx', local_dir=str(models/'face_detection'))
     # Ensure standard filename location expected by MuseTalk
     yunet_f = list((models/'face_detection').rglob('*yunet*.onnx'))
     if yunet_f and not (models/'face_detection/yunet_2023mar.onnx').exists():
