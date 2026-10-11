@@ -67,6 +67,19 @@ def get_landmark_and_bbox(img_list, upperbondrange=0):
         s=s.replace('torch.load(model_path) #modelzoo.load_url','torch.load(model_path, weights_only=False) #modelzoo.load_url')
         p.write_text(s,encoding='utf-8')
 
+    inf_p = repo/'scripts/inference.py'
+    inf_s = inf_p.read_text(encoding='utf-8')
+    # Fix MuseTalk 1.5 bug where 'frame.shape[0]' is referenced in padding loop instead of 'ori_frame.shape[0]'
+    t_err = 'y2 = min(y2, frame.shape[0])'
+    idx = inf_s.rfind(t_err)
+    if idx != -1:
+        inf_s = inf_s[:idx] + 'y2 = min(y2, ori_frame.shape[0])' + inf_s[idx+len(t_err):]
+    # Fix UnboundLocalError when input is an image (save_dir_full is only created when input is video)
+    inf_s = inf_s.replace('shutil.rmtree(save_dir_full)', 'if "save_dir_full" in locals(): shutil.rmtree(save_dir_full, ignore_errors=True)')
+    # Re-raise exceptions in inference task loop instead of swallowing them silently
+    inf_s = inf_s.replace('except Exception as e:\n            print("Error occurred during processing:", e)', 'except Exception as e:\n            print("Error occurred during processing:", e)\n            raise')
+    inf_p.write_text(inf_s, encoding='utf-8')
+
 def main():
     image=find_input('singer.png'); audio=find_input('bhajan.mp3'); duration=int(find_input('duration.txt').read_text())
     if not 180<=duration<=300 or duration%15: raise RuntimeError(f'INVALID_DURATION {duration}')
