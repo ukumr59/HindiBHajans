@@ -17,41 +17,9 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "output"
 KDIR = ROOT / ".kaggle_audio_worker"
 KAGGLE_KERNEL = "bhajanaabha/hindibhajans-ace-step"
+from app.deity_catalog import get_daily_bhajan
+
 ACE_STEP_COMMIT = "ca1e85fe9430179831e6bc6be790c332190a3866"
-
-LYRICS = """[Intro]
-श्री राम... श्री राम... जय जय राम...
-
-[Verse 1]
-मन में बसो रघुनंदन, चरणों में मेरा ध्यान
-राम नाम की ज्योति जले, रोशन हो हर प्राण
-
-[Chorus]
-श्री राम जय राम, जय जय राम
-मेरे मन के दीप में, बसते श्री राम
-
-[Verse 2]
-दुख की घड़ी में साथ दो, हे दीनदयाल भगवान
-तेरा नाम ही आसरा, तेरा नाम ही सम्मान
-
-[Chorus]
-श्री राम जय राम, जय जय राम
-मेरे मन के दीप में, बसते श्री राम
-
-[Verse 3]
-अयोध्या के राजकुमार, करुणा के भंडार
-तेरे चरणों में मिल जाए, जीवन का सच्चा सार
-
-[Final Chorus]
-श्री राम जय राम, जय जय राम
-मेरे मन के दीप में, बसते श्री राम
-श्री राम जय राम, जय जय राम
-जय जय राम... जय जय राम...
-
-[Outro]
-श्री राम... जय राम... जय जय राम..."""
-
-PROMPT = "Modern high-energy Hindi devotional bhajan, 128 BPM, 4/4, powerful expressive Hindi male lead vocal clearly singing every lyric with natural emotion and clean pronunciation, catchy devotional melody, memorable chorus, energetic polished arrangement with dhol/dholak, tabla, temple bells, bansuri, harmonium texture and modern synth production. NOT meditation, NOT ambient, NOT spoken narration, NOT humming, NOT instrumental-only."
 
 
 def run(*args: str, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
@@ -59,7 +27,7 @@ def run(*args: str, cwd: Path | None = None, env: dict[str, str] | None = None) 
     subprocess.run(list(args), cwd=str(cwd) if cwd else None, env=env, check=True)
 
 
-def worker_code(seconds: int) -> str:
+def worker_code(seconds: int, prompt: str, lyrics: str, bpm: int = 128) -> str:
     return r'''from pathlib import Path
 import os, re, shutil, subprocess, sys, tempfile
 
@@ -68,8 +36,9 @@ OUT = ROOT / 'outputs'
 REPO = ROOT / 'ACE-Step-1.5'
 SECONDS = ''' + str(seconds) + r'''
 ACE_STEP_COMMIT = ''' + repr(ACE_STEP_COMMIT) + r'''
-LYRICS = r''' + repr(LYRICS) + r'''
-PROMPT = r''' + repr(PROMPT) + r'''
+LYRICS = r''' + repr(lyrics) + r'''
+PROMPT = r''' + repr(prompt) + r'''
+BPM = ''' + str(bpm) + r'''
 
 
 def run(*args):
@@ -134,7 +103,7 @@ def main():
         raise RuntimeError('ACE_STEP_T4_DTYPE_POLICY_FAILED')
     llm = LLMHandler()
     llm.initialize(checkpoint_dir=str(REPO/'checkpoints'), lm_model_path='acestep-5Hz-lm-0.6B', backend='pt', device='cuda')
-    params = GenerationParams(task_type='text2music', caption=PROMPT, lyrics=LYRICS, bpm=128, keyscale='C Major', timesignature='4/4', vocal_language='hi', duration=float(SECONDS), thinking=False, use_cot_metas=False, use_cot_caption=False, use_cot_language=False, use_constrained_decoding=True, inference_steps=8, guidance_scale=1.0, seed=-1, shift=3.0, infer_method='ode', sampler_mode='euler', dcw_enabled=True, dcw_mode='double', dcw_scaler=0.05, dcw_high_scaler=0.02, dcw_wavelet='haar')
+    params = GenerationParams(task_type='text2music', caption=PROMPT, lyrics=LYRICS, bpm=BPM, keyscale='C Major', timesignature='4/4', vocal_language='hi', duration=float(SECONDS), thinking=False, use_cot_metas=False, use_cot_caption=False, use_cot_language=False, use_constrained_decoding=True, inference_steps=8, guidance_scale=1.0, seed=-1, shift=3.0, infer_method='ode', sampler_mode='euler', dcw_enabled=True, dcw_mode='double', dcw_scaler=0.05, dcw_high_scaler=0.02, dcw_wavelet='haar')
     result = generate_music(dit_handler=dit, llm_handler=llm, params=params, config=GenerationConfig(batch_size=1, use_random_seed=True, audio_format='wav'), save_dir=str(work/'out'))
     if not result.success or not result.audios:
         raise RuntimeError(f'ACE_STEP_GENERATION_FAILED:{result.error or result.status_message}')
@@ -167,8 +136,38 @@ def dispatch(seconds: int) -> None:
     token = os.getenv('KAGGLE_API_TOKEN') or os.getenv('KAGGLE_API_TOKEN3')
     if not token: raise RuntimeError('KAGGLE_API_TOKEN secret is required')
     if not 180 <= seconds <= 300 or seconds % 15: raise RuntimeError('seconds must be 180-300 and divisible by 15')
+    
+    daily_entry = get_daily_bhajan()
+    print(f"TODAY_DEITY={daily_entry['deity']} TITLE={daily_entry['title_en']}", flush=True)
+    
+    OUT.mkdir(exist_ok=True, parents=True)
+    seo_info = {
+        "title": f"{daily_entry['title_hi']} | {daily_entry['title_en']} | Bhajan Aabha",
+        "description": (
+            f"{daily_entry['short_caption']}\n\n"
+            f"Original Hindu devotional music and performance by Bhajan Aabha.\n"
+            f"Deity: {daily_entry['deity']}\n\n"
+            f"Lyrics:\n{daily_entry['lyrics']}\n\n"
+            f"#Bhajan #Devotional #{daily_entry['deity'].replace(' ', '')} #Hinduism #BhajanAabha"
+        ),
+        "tags": [
+            daily_entry['deity'],
+            "Bhajan",
+            "Hindi Bhajan",
+            "Devotional Song",
+            "DJ Bhajan",
+            "Hindu Devotional",
+            "Bhajan Aabha",
+            "Sanatan Dharma"
+        ]
+    }
+    (OUT / "youtube_seo.json").write_text(json.dumps(seo_info, ensure_ascii=False, indent=2), encoding="utf-8")
+    
     shutil.rmtree(KDIR, ignore_errors=True); KDIR.mkdir(parents=True)
-    (KDIR/'worker.py').write_text(worker_code(seconds), encoding='utf-8')
+    (KDIR/'worker.py').write_text(
+        worker_code(seconds, prompt=daily_entry['prompt'], lyrics=daily_entry['lyrics'], bpm=daily_entry.get('bpm', 128)),
+        encoding='utf-8'
+    )
     (KDIR/'kernel-metadata.json').write_text(json.dumps({'id':KAGGLE_KERNEL,'title':'hindibhajans-ace-step','code_file':'worker.py','language':'python','kernel_type':'script','is_private':True,'enable_gpu':True,'enable_internet':True,'machine_shape':'NvidiaTeslaT4','dataset_sources':[],'competition_sources':[],'kernel_sources':[],'model_sources':[]},indent=2),encoding='utf-8')
     env=dict(os.environ); env['KAGGLE_API_TOKEN']=token
     run('kaggle','kernels','push','-p',str(KDIR),'--accelerator','NvidiaTeslaT4','--timeout',str(11*60*60),cwd=ROOT,env=env)

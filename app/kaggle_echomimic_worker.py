@@ -86,9 +86,16 @@ def main():
     snapshot_download('TMElyralab/MuseTalk',local_dir=str(models),allow_patterns=['musetalkV15/musetalk.json','musetalkV15/unet.pth'])
     snapshot_download('stabilityai/sd-vae-ft-mse',local_dir=str(models/'sd-vae'),allow_patterns=['config.json','diffusion_pytorch_model.bin'])
     snapshot_download('openai/whisper-tiny',local_dir=str(models/'whisper'),allow_patterns=['config.json','pytorch_model.bin','preprocessor_config.json'])
-    run('wget','-q','-O',str(models/'face_detection/yunet_2023mar.onnx'),'https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx')
-    run('gdown','--id','154JgKpzCPW82qINcVieuPH3fZ2e0P812','-O',str(models/'face-parse-bisent/79999_iter.pth'))
-    run('wget','-q','-O',str(models/'face-parse-bisent/resnet18-5c106cde.pth'),'https://download.pytorch.org/models/resnet18-5c106cde.pth')
+    from huggingface_hub import hf_hub_download
+    hf_hub_download(repo_id='opencv/opencv_zoo', filename='face_detection_yunet/face_detection_yunet_2023mar.onnx', local_dir=str(models/'face_detection'))
+    # Ensure standard filename location expected by MuseTalk
+    yunet_f = list((models/'face_detection').rglob('*yunet*.onnx'))
+    if yunet_f and not (models/'face_detection/yunet_2023mar.onnx').exists():
+        shutil.copy2(yunet_f[0], models/'face_detection/yunet_2023mar.onnx')
+
+    # Replace fragile Google Drive gdown with reliable Hugging Face download
+    hf_hub_download(repo_id='afrizalha/musetalk-models', filename='face-parse-bisent/79999_iter.pth', local_dir=str(models))
+    hf_hub_download(repo_id='afrizalha/musetalk-models', filename='face-parse-bisent/resnet18-5c106cde.pth', local_dir=str(models))
     patch_runtime(repo)
     data=repo/'data'; data.mkdir(exist_ok=True)
     shutil.copy2(image,data/'singer.png'); shutil.copy2(audio,data/'bhajan.mp3')
