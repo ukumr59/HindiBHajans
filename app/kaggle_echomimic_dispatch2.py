@@ -53,7 +53,16 @@ def wait_kernel(env,kernel):
         if 'complete' in low and not any(x in low for x in ('incomplete','not complete')): return True,status
         if any(x in low for x in ('error','failed','cancelled','canceled','cancel_acknowledged','cancel acknowledged')):
             log=subprocess.run(['kaggle','kernels','logs',kernel],cwd=ROOT,env=env,capture_output=True,text=True)
-            return False,f'KAGGLE_KERNEL_TERMINAL_FAILURE status={status}\n{log.stdout or log.stderr}'
+            log_text = log.stdout or log.stderr or ''
+            err_details = [f'status={status}', log_text]
+            err_dir = OUT/'kaggle_video_error_output'; shutil.rmtree(err_dir, ignore_errors=True); err_dir.mkdir(parents=True)
+            op = subprocess.run(['kaggle','kernels','output',kernel,'-p',str(err_dir),'--force'],cwd=ROOT,env=env,capture_output=True,text=True)
+            for f in sorted(err_dir.rglob('*')):
+                if f.is_file() and f.stat().st_size < 2_000_000 and not f.name.endswith(('.mp4','.png','.jpg','.onnx','.pth','.bin')):
+                    try:
+                        err_details.append(f'=== {f.name} ===\n' + f.read_text(encoding='utf-8', errors='replace'))
+                    except Exception: pass
+            return False, 'KAGGLE_KERNEL_TERMINAL_FAILURE\n' + '\n'.join(err_details)
         time.sleep(30)
     return False,'KAGGLE_KERNEL_TIMEOUT'
 

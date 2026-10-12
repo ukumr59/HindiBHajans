@@ -69,15 +69,89 @@ def get_landmark_and_bbox(img_list, upperbondrange=0):
 
     inf_p = repo/'scripts/inference.py'
     inf_s = inf_p.read_text(encoding='utf-8')
-    # Fix MuseTalk 1.5 bug where 'frame.shape[0]' is referenced in padding loop instead of 'ori_frame.shape[0]'
-    t_err = 'y2 = min(y2, frame.shape[0])'
-    idx = inf_s.rfind(t_err)
-    if idx != -1:
-        inf_s = inf_s[:idx] + 'y2 = min(y2, ori_frame.shape[0])' + inf_s[idx+len(t_err):]
-    # Fix UnboundLocalError when input is an image (save_dir_full is only created when input is video)
-    inf_s = inf_s.replace('shutil.rmtree(save_dir_full)', 'if "save_dir_full" in locals(): shutil.rmtree(save_dir_full, ignore_errors=True)')
-    # Re-raise exceptions in inference task loop instead of swallowing them silently
-    inf_s = inf_s.replace('except Exception as e:\n            print("Error occurred during processing:", e)', 'except Exception as e:\n            print("Error occurred during processing:", e)\n            raise')
+    start_marker = '            # Pad generated images to original video size'
+    end_marker = '        except Exception as e:'
+    s_idx = inf_s.find(start_marker)
+    e_idx = inf_s.find(end_marker)
+    if s_idx != -1 and e_idx != -1 and s_idx < e_idx:
+        optimized_code = '''            # Pad generated images to original video size (OPTIMIZED ZERO-DISK STREAMING)
+            print("Starting zero-disk video stream composition...", flush=True)
+            from musetalk.utils.blending import get_image_prepare_material
+            from PIL import Image
+
+            # Pre-compute blending mask once per unique frame to avoid redundant neural inferences
+            material_cache = {}
+            for idx_c in range(len(frame_list_cycle)):
+                ori_c = frame_list_cycle[idx_c]
+                bx, by, bx1, by1 = coord_list_cycle[idx_c]
+                if args.version == "v15":
+                    by1 = min(by1 + args.extra_margin, ori_c.shape[0])
+                m_arr, c_box = get_image_prepare_material(ori_c, [bx, by, bx1, by1], fp=fp, mode=args.parsing_mode)
+                m_pil = Image.fromarray(m_arr).convert("L")
+                material_cache[idx_c] = (bx, by, bx1, by1, m_pil, c_box)
+            print("Facial blending masks cached successfully", flush=True)
+
+            temp_vid_path = f"{temp_dir}/temp_{input_basename}_{audio_basename}.mp4"
+            h_out, w_out = frame_list_cycle[0].shape[:2]
+            ffmpeg_cmd = [
+                "ffmpeg", "-y", "-v", "error",
+                "-f", "rawvideo", "-vcodec", "rawvideo",
+                "-s", f"{w_out}x{h_out}", "-pix_fmt", "bgr24",
+                "-r", str(fps), "-i", "-",
+                "-vcodec", "libx264", "-pix_fmt", "yuv420p", "-crf", "18",
+                temp_vid_path
+            ]
+            ff_proc = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE)
+            for i, res_frame in enumerate(res_frame_list):
+                c_idx = i % len(frame_list_cycle)
+                x, y, x1, y1, m_pil, (x_s, y_s, x_e, y_e) = material_cache[c_idx]
+                ori_frame = copy.deepcopy(frame_list_cycle[c_idx])
+                try:
+                    res_frame = cv2.resize(res_frame.astype(np.uint8), (x1 - x, y1 - y))
+                    body = Image.fromarray(ori_frame[:, :, ::-1])
+                    face = Image.fromarray(res_frame[:, :, ::-1])
+                    face_large = body.crop((x_s, y_s, x_e, y_e))
+                    face_large.paste(face, (x - x_s, y - y_s, x1 - x_s, y1 - y_s))
+                    body.paste(face_large, (x_s, y_s), m_pil)
+                    combine_frame = np.array(body)[:, :, ::-1]
+                except Exception as ex:
+                    if i == 0: print(f"Frame blending fallback: {ex}", flush=True)
+                    combine_frame = ori_frame
+                ff_proc.stdin.write(combine_frame.tobytes())
+                if (i + 1) % 500 == 0 or i == len(res_frame_list) - 1:
+                    print(f"Composited {i + 1}/{len(res_frame_list)} frames", flush=True)
+            ff_proc.stdin.close()
+            ff_proc.wait()
+            if ff_proc.returncode != 0:
+                raise RuntimeError(f"FFmpeg compositing pipe failed with code {ff_proc.returncode}")
+
+            if args.output_vid_name is None:
+                output_vid_name = os.path.join(temp_dir, output_basename + ".mp4")
+            else:
+                output_vid_name = os.path.join(temp_dir, args.output_vid_name)
+            cmd_combine_audio = [
+                "ffmpeg", "-y", "-v", "error",
+                "-i", audio_path, "-i", temp_vid_path,
+                "-c:v", "copy", "-c:a", "aac", output_vid_name
+            ]
+            subprocess.run(cmd_combine_audio, check=True)
+            if os.path.exists(temp_vid_path): os.remove(temp_vid_path)
+            if "save_dir_full" in locals() and os.path.exists(save_dir_full): shutil.rmtree(save_dir_full, ignore_errors=True)
+            if not args.saved_coord and os.path.exists(crop_coord_save_path): os.remove(crop_coord_save_path)
+            print(f"Results saved to {output_vid_name}", flush=True)
+'''
+        inf_s = inf_s[:s_idx] + optimized_code + inf_s[e_idx:]
+    else:
+        t_err = 'y2 = min(y2, frame.shape[0])'
+        idx = inf_s.rfind(t_err)
+        if idx != -1:
+            inf_s = inf_s[:idx] + 'y2 = min(y2, ori_frame.shape[0])' + inf_s[idx+len(t_err):]
+        inf_s = inf_s.replace('shutil.rmtree(save_dir_full)', 'if "save_dir_full" in locals(): shutil.rmtree(save_dir_full, ignore_errors=True)')
+
+    inf_s = inf_s.replace(
+        'except Exception as e:\n            print("Error occurred during processing:", e)',
+        'except Exception as e:\n            import traceback; traceback.print_exc()\n            raise'
+    )
     inf_p.write_text(inf_s, encoding='utf-8')
 
 def main():
@@ -109,6 +183,12 @@ def main():
     # Replace fragile Google Drive gdown with reliable Hugging Face download
     hf_hub_download(repo_id='afrizalha/musetalk-models', filename='face-parse-bisent/79999_iter.pth', local_dir=str(models))
     hf_hub_download(repo_id='afrizalha/musetalk-models', filename='face-parse-bisent/resnet18-5c106cde.pth', local_dir=str(models))
+    bisent_dir = models / 'face-parse-bisent'
+    bisent_dir.mkdir(parents=True, exist_ok=True)
+    for f in models.rglob('*79999_iter.pth'):
+        if f != bisent_dir / '79999_iter.pth': shutil.copy2(f, bisent_dir / '79999_iter.pth')
+    for f in models.rglob('*resnet18-5c106cde.pth'):
+        if f != bisent_dir / 'resnet18-5c106cde.pth': shutil.copy2(f, bisent_dir / 'resnet18-5c106cde.pth')
     patch_runtime(repo)
     data=repo/'data'; data.mkdir(exist_ok=True)
     shutil.copy2(image,data/'singer.png'); shutil.copy2(audio,data/'bhajan.mp3')
