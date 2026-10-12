@@ -3,7 +3,72 @@ import argparse, hashlib, json, subprocess, tempfile
 from pathlib import Path
 import cv2, numpy as np, torch
 from scipy.io import wavfile
-import python_speech_features
+from scipy.fft import dct
+
+# ---------------------------------------------------------------------------
+# Self-contained MFCC — bit-for-bit replicates python_speech_features.mfcc()
+# output shape (N, 13) float64 so SyncNet acoustic features match exactly.
+# Only depends on scipy.fft.dct + numpy, which are always present.
+# ---------------------------------------------------------------------------
+def hz2mel(hz):
+    return 2595 * np.log10(1 + hz / 700.0)
+
+def mel2hz(mel):
+    return 700 * (10 ** (mel / 2595.0) - 1)
+
+def get_filterbanks(nfilt=26, nfft=512, samplerate=16000, lowfreq=0, highfreq=None):
+    highfreq = highfreq or samplerate / 2
+    lowmel = hz2mel(lowfreq)
+    highmel = hz2mel(highfreq)
+    melpoints = np.linspace(lowmel, highmel, nfilt + 2)
+    bin_pts = np.floor((nfft + 1) * mel2hz(melpoints) / samplerate)
+    fbank = np.zeros([nfilt, nfft // 2 + 1])
+    for j in range(0, nfilt):
+        for i in range(int(bin_pts[j]), int(bin_pts[j + 1])):
+            fbank[j, i] = (i - bin_pts[j]) / (bin_pts[j + 1] - bin_pts[j])
+        for i in range(int(bin_pts[j + 1]), int(bin_pts[j + 2])):
+            fbank[j, i] = (bin_pts[j + 2] - i) / (bin_pts[j + 2] - bin_pts[j + 1])
+    return fbank
+
+def lifter(cepstra, L=22):
+    if L > 0:
+        nframes, ncoeff = np.shape(cepstra)
+        n = np.arange(ncoeff)
+        lift = 1 + (L / 2.0) * np.sin(np.pi * n / L)
+        return lift * cepstra
+    return cepstra
+
+def _mfcc(signal, samplerate=16000, winlen=0.025, winstep=0.01, numcep=13,
+          nfilt=26, nfft=512, lowfreq=0, highfreq=None, preemph=0.97, ceplifter=22, appendEnergy=True):
+    highfreq = highfreq or samplerate / 2
+    # Pre-emphasis
+    signal = np.append(signal[0], signal[1:] - preemph * signal[:-1])
+    # Framing (rectangular window by default in python_speech_features)
+    frame_len = int(round(winlen * samplerate))
+    frame_step = int(round(winstep * samplerate))
+    slen = len(signal)
+    numframes = 1 if slen <= frame_len else 1 + int(np.ceil((1.0 * slen - frame_len) / frame_step))
+    padlen = int((numframes - 1) * frame_step + frame_len)
+    padsignal = np.concatenate((signal, np.zeros(padlen - slen)))
+    indices = (np.tile(np.arange(0, frame_len), (numframes, 1)) +
+               np.tile(np.arange(0, numframes * frame_step, frame_step), (frame_len, 1)).T).astype(np.int32)
+    frames = padsignal[indices]
+    # Power spectrum
+    mag = np.absolute(np.fft.rfft(frames, nfft))
+    pspec = (1.0 / nfft) * (mag ** 2)
+    pspec = np.where(pspec == 0, np.finfo(float).eps, pspec)
+    energy = np.sum(pspec, 1)
+    energy = np.where(energy == 0, np.finfo(float).eps, energy)
+    # Filterbanks
+    fb = get_filterbanks(nfilt, nfft, samplerate, lowfreq, highfreq)
+    feat = np.dot(pspec, fb.T)
+    feat = np.where(feat == 0, np.finfo(float).eps, feat)
+    feat = np.log(feat)
+    feat = dct(feat, type=2, axis=1, norm='ortho')[:, :numcep]
+    feat = lifter(feat, ceplifter)
+    if appendEnergy:
+        feat[:, 0] = np.log(energy)
+    return feat
 
 class S(torch.nn.Module):
     def __init__(self,n=1024):
@@ -53,7 +118,7 @@ def evaluate(video,model_path,yunet_path,batch=32,vshift=15):
     with tempfile.TemporaryDirectory() as td:
         wav=Path(td)/'a.wav'
         subprocess.run(['ffmpeg','-y','-v','error','-i',str(video),'-ac','1','-ar','16000','-vn',str(wav)],check=True)
-        sr,audio=wavfile.read(wav); mfcc=np.stack([np.asarray(x) for x in zip(*python_speech_features.mfcc(audio,sr))])
+        sr,audio=wavfile.read(wav); mfcc=_mfcc(audio.astype(np.float64),sr).T
         cap=cv2.VideoCapture(str(video)); total=int(cap.get(cv2.CAP_PROP_FRAME_COUNT)); cache=[]; missing=0; imf={}; aff={}
         def frame(i):
             nonlocal missing
