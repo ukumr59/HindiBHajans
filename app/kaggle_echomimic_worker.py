@@ -81,6 +81,18 @@ def get_landmark_and_bbox(img_list, upperbondrange=0):
 
             # Pre-compute blending mask once per unique frame to avoid redundant neural inferences
             material_cache = {}
+            last_valid_coord = None
+            for idx_c in range(len(coord_list_cycle)):
+                cbx, cby, cbx1, cby1 = coord_list_cycle[idx_c]
+                if cbx1 > cbx and cby1 > cby:
+                    last_valid_coord = (cbx, cby, cbx1, cby1)
+                elif last_valid_coord is not None:
+                    coord_list_cycle[idx_c] = last_valid_coord
+            for idx_c in range(len(coord_list_cycle)):
+                cbx, cby, cbx1, cby1 = coord_list_cycle[idx_c]
+                if (cbx1 <= cbx or cby1 <= cby) and last_valid_coord is not None:
+                    coord_list_cycle[idx_c] = last_valid_coord
+
             for idx_c in range(len(frame_list_cycle)):
                 ori_c = frame_list_cycle[idx_c]
                 bx, by, bx1, by1 = coord_list_cycle[idx_c]
@@ -154,6 +166,70 @@ def get_landmark_and_bbox(img_list, upperbondrange=0):
     )
     inf_p.write_text(inf_s, encoding='utf-8')
 
+def generate_liveportrait_motion(singer_image: Path, output_video: Path) -> bool:
+    try:
+        print("STAGE 1: GENERATING NATURAL DEVOTIONAL SINGER MOTION VIA LIVEPORTRAIT...", flush=True)
+        lp_runtime = Path('/kaggle/tmp/liveportrait')
+        lp_runtime.mkdir(parents=True, exist_ok=True)
+        lp_repo = lp_runtime / 'LivePortrait'
+        if not lp_repo.exists():
+            run('git', 'clone', '--depth', '1', 'https://github.com/KlingAIResearch/LivePortrait.git', str(lp_repo))
+
+        weights_dir = lp_repo / 'pretrained_weights'
+        from huggingface_hub import snapshot_download, hf_hub_download
+        snapshot_download('KwaiVGI/LivePortrait', local_dir=str(weights_dir), ignore_patterns=['liveportrait_animals/*'])
+
+        # Patch helper.py to ensure torch.load uses weights_only=False for PyTorch 2.6+
+        helper_file = lp_repo / 'src/utils/helper.py'
+        if helper_file.exists():
+            h_text = helper_file.read_text(encoding='utf-8')
+            h_text = h_text.replace('torch.load(ckpt_path,', 'torch.load(ckpt_path, weights_only=False,')
+            helper_file.write_text(h_text, encoding='utf-8')
+
+        # Install tyro & rich if needed
+        run(sys.executable, '-m', 'pip', 'install', '-q', 'tyro', 'rich')
+
+        # Devotional driving video: calm demeanor, glasses, natural eye blinks and subtle nods
+        driving_video = lp_repo / 'assets/examples/driving/d13.mp4'
+        if not driving_video.exists():
+            candidates = list((lp_repo / 'assets/examples/driving').glob('*.mp4'))
+            if candidates:
+                driving_video = candidates[0]
+            else:
+                driving_video = Path(hf_hub_download(repo_id='KlingAIResearch/LivePortrait', filename='assets/examples/driving/d13.mp4', local_dir=str(lp_repo)))
+
+        lp_out = lp_runtime / 'output'
+        lp_out.mkdir(parents=True, exist_ok=True)
+
+        run(
+            sys.executable, 'inference.py',
+            '-s', str(singer_image),
+            '-d', str(driving_video),
+            '--flag_pasteback', 'True',
+            '--flag_do_crop', 'True',
+            '--flag_relative_motion', 'True',
+            '--driving_option', 'expression-friendly',
+            '-o', str(lp_out),
+            cwd=lp_repo
+        )
+
+        candidates = [f for f in lp_out.glob('*.mp4') if not f.name.endswith('_concat.mp4')]
+        if not candidates:
+            candidates = list(lp_out.glob('*.mp4'))
+        if candidates:
+            # Re-encode to standard 25 fps H.264 matching MuseTalk FPS
+            run('ffmpeg', '-y', '-v', 'error', '-i', str(candidates[0]), '-r', str(FPS), '-pix_fmt', 'yuv420p', str(output_video))
+            print(f"STAGE 1 COMPLETE: Devotional motion base generated: {output_video} (size={output_video.stat().st_size})", flush=True)
+            return True
+        else:
+            print("STAGE 1: No output video found in LivePortrait output dir", flush=True)
+            return False
+    except Exception as e:
+        import traceback
+        print(f"STAGE 1 LIVEPORTRAIT FALLBACK: {e}", flush=True)
+        traceback.print_exc()
+        return False
+
 def main():
     image=find_input('singer.png'); audio=find_input('bhajan.mp3'); duration=int(find_input('duration.txt').read_text())
     if not 180<=duration<=300 or duration%15: raise RuntimeError(f'INVALID_DURATION {duration}')
@@ -194,8 +270,15 @@ def main():
     patch_runtime(repo)
     data=repo/'data'; data.mkdir(exist_ok=True)
     shutil.copy2(image,data/'singer.png'); shutil.copy2(audio,data/'bhajan.mp3')
+
+    # Stage 1: Generate natural devotional motion base with LivePortrait
+    motion_video = data / 'singer_motion.mp4'
+    has_motion = generate_liveportrait_motion(data / 'singer.png', motion_video)
+    target_video_input = 'data/singer_motion.mp4' if (has_motion and motion_video.exists() and motion_video.stat().st_size > 50000) else 'data/singer.png'
+    print(f'MUSETALK_TARGET_INPUT: {target_video_input}', flush=True)
+
     cfg=repo/'configs/inference/musetalk_runtime.yaml'
-    cfg.write_text('task_0:\n  video_path: "data/singer.png"\n  audio_path: "data/bhajan.mp3"\n  result_name: "master.mp4"\n',encoding='utf-8')
+    cfg.write_text(f'task_0:\n  video_path: "{target_video_input}"\n  audio_path: "data/bhajan.mp3"\n  result_name: "master.mp4"\n',encoding='utf-8')
     disk('before_inference'); started=time.time()
     run(sys.executable,'-m','scripts.inference','--inference_config',str(cfg),'--result_dir','results/runtime','--unet_model_path','models/musetalkV15/unet.pth','--unet_config','models/musetalkV15/musetalk.json','--whisper_dir','models/whisper','--version','v15','--fps',str(FPS),'--batch_size','8','--use_float16','--extra_margin','15','--output_vid_name','master.mp4',cwd=repo)
     print(f'MUSETALK_INFERENCE_SECONDS={time.time()-started:.1f}',flush=True)
@@ -219,6 +302,7 @@ def main():
     print('LIPSYNC_QUALITY_GATE=PASS',flush=True)
     syncnet_path.unlink(missing_ok=True)
     shutil.rmtree(RUNTIME,ignore_errors=True)
+    shutil.rmtree(Path('/kaggle/tmp/liveportrait'),ignore_errors=True)
     print('MUSETALK_WORKER_OK',flush=True)
 
 if __name__=='__main__':

@@ -111,7 +111,7 @@ def run(video: Path, reference: Path, yunet_path: Path, sface_path: Path) -> dic
                 anchor_face = best
             ratio = float(best[2] * best[3]) / float(frame.shape[0] * frame.shape[1])
             areas.append(ratio)
-            p = mouth_patch(frame, anchor_face)
+            p = mouth_patch(frame, best)
             if p is not None:
                 mouth_patches.append(p)
             details.append({"t": round(t, 2), "faces": len(faces), "matched": True, "score": round(matches[0][0], 4), "face_area": round(ratio, 4)})
