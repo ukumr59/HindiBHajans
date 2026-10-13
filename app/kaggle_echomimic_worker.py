@@ -171,7 +171,7 @@ def main():
     # Pin PEFT 0.10.0 to keep this environment internally compatible.
     run(sys.executable,'-m','pip','install','-q','numpy==1.26.4','diffusers==0.30.2','accelerate==0.28.0','transformers==4.39.2','huggingface_hub==0.30.2','peft==0.10.0','librosa==0.11.0','einops==0.8.1','scipy','omegaconf','ffmpeg-python','moviepy','gdown','safetensors')
     # Fail before downloading the large model set if the dependency graph is broken.
-    run(sys.executable,'-c','from diffusers import AutoencoderKL; import accelerate, peft; print(f"DEPENDENCY_SMOKE_OK diffusers={__import__(\\"diffusers\\").__version__} accelerate={accelerate.__version__} peft={peft.__version__}")')
+    run(sys.executable,'-c','import diffusers, accelerate, peft; from diffusers import AutoencoderKL; print("DEPENDENCY_SMOKE_OK", diffusers.__version__, accelerate.__version__, peft.__version__)')
     run('sudo','apt-get','update','-qq'); run('sudo','apt-get','install','-y','-qq','ffmpeg')
     models=repo/'models'
     for d in ('musetalkV15','sd-vae','whisper','face-parse-bisent','face_detection'): (models/d).mkdir(parents=True,exist_ok=True)
@@ -211,10 +211,10 @@ def main():
     mb=final.stat().st_size/1024**2
     print(f'MUSETALK_MASTER_READY path={final} size_mb={mb:.1f} duration={duration}s',flush=True)
     if mb>1536: raise RuntimeError(f'MASTER_TOO_LARGE_MB={mb:.1f}')
-    # HARD audio/video lip-sync gate. The previous motion-only QA could pass
-    # videos whose mouth moved without being temporally aligned to the vocal audio.
+    # HARD audio/video lip-sync gate.
     syncnet_path=FINAL/'syncnet_v2.model'
-    run(sys.executable,'-c','from huggingface_hub import hf_hub_download; import shutil; p=hf_hub_download(repo_id="ByteDance/LatentSync-1.6",filename="auxiliary/syncnet_v2.model"); shutil.copy2(p,"/kaggle/working/syncnet_v2.model")')
+    syncnet_src=hf_hub_download(repo_id='ByteDance/LatentSync-1.6',filename='auxiliary/syncnet_v2.model')
+    shutil.copy2(syncnet_src,syncnet_path)
     import hashlib
     expected='961e8696f888fce4f3f3a6c3d5b3267cf5b343100b238e79b2659bff2c605442'
     got=hashlib.sha256(syncnet_path.read_bytes()).hexdigest()

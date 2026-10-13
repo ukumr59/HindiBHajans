@@ -182,26 +182,46 @@ jobs:
           retention-days: 7
 
       - name: Create public release assets
-        if: ${{ github.event_name == 'schedule' || inputs.publish == true }}
+        if: success()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           TAG="bhajan-${GITHUB_RUN_ID}"
-          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Bhajan Aabha ${TAG}" --notes "Approved real-singer master + Shorts. Kaggle free T4 only; visual QA is mandatory." output/master.mp4 output/shorts/*.mp4
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Bhajan Aabha ${TAG}" --notes "Approved real-singer master + Shorts. Kaggle free T4 only; visual QA is mandatory." output/master.mp4 output/bhajan_source.mp3 output/shorts/*.mp4
           echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
 
       - name: Publish YouTube
         if: ${{ github.event_name == 'schedule' || inputs.publish == true }}
+        continue-on-error: true
         env:
           OUTPUT_DIR: output
           YOUTUBE_PRIVACY_STATUS: public
-        run: python -u -m app.youtube_publisher_seo output/master.mp4
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+        run: |
+          if [ -z "${YOUTUBE_CLIENT_ID:-}" ] || [ -z "${YOUTUBE_REFRESH_TOKEN:-}" ]; then
+            echo "YOUTUBE_PUBLISH_SKIPPED: YouTube credentials not configured"
+            exit 0
+          fi
+          python -m pip install -q google-api-python-client google-auth google-auth-httplib2
+          python -u -m app.youtube_publisher_seo output/master.mp4
 
       - name: Publish Facebook + Instagram independently
         if: ${{ github.event_name == 'schedule' || inputs.publish == true }}
+        continue-on-error: true
+        env:
+          META_PAGE_ID: ${{ secrets.META_PAGE_ID }}
+          META_PAGE_ACCESS_TOKEN: ${{ secrets.META_PAGE_ACCESS_TOKEN }}
+          META_IG_USER_ID: ${{ secrets.META_IG_USER_ID }}
+          META_IG_ACCESS_TOKEN: ${{ secrets.META_IG_ACCESS_TOKEN }}
         run: |
-          set -euo pipefail
+          if [ -z "${META_PAGE_ACCESS_TOKEN:-}" ]; then
+            echo "META_PUBLISH_SKIPPED: Meta credentials not configured"
+            exit 0
+          fi
+          python -m pip install -q requests
           SHORT_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/short-1.mp4"
           python -u -m app.meta_publisher --video output/shorts/short-1.mp4 --instagram-url "$SHORT_URL"
 

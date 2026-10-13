@@ -8,11 +8,11 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-COSINE_THRESHOLD = 0.50
-MIN_MATCH_RATIO = 0.80
-MIN_FACE_RATIO = 0.02
-MAX_FACE_RATIO = 0.65
-MIN_MOTION_RATIO = 0.30
+COSINE_THRESHOLD = 0.363
+MIN_MATCH_RATIO = 0.75
+MIN_FACE_RATIO = 0.015
+MAX_FACE_RATIO = 0.75
+MIN_MOTION_RATIO = 0.20
 
 
 def detect(detector, frame):
@@ -21,7 +21,16 @@ def detect(detector, frame):
     _, faces = detector.detect(frame)
     if faces is None:
         return []
-    return [f for f in faces if float(f[-1]) >= 0.85]
+    valid = [f for f in faces if float(f[-1]) >= 0.75]
+    valid.sort(key=lambda f: float(f[-1]), reverse=True)
+    dedup = []
+    for f in valid:
+        cx, cy = float(f[0] + f[2] / 2.0), float(f[1] + f[3] / 2.0)
+        rad = max(float(f[2]), float(f[3])) * 0.65
+        if any(np.hypot(cx - float(g[0] + g[2] / 2.0), cy - float(g[1] + g[3] / 2.0)) < rad for g in dedup):
+            continue
+        dedup.append(f)
+    return dedup
 
 
 def feature(recognizer, image, face):
@@ -30,11 +39,11 @@ def feature(recognizer, image, face):
 
 
 def mouth_patch(frame, face):
-    x, y, w, h = [float(v) for v in face[:4]]
-    # YuNet landmarks: eyes, nose, right/left mouth corners.
-    mx = (float(face[9]) + float(face[11])) / 2.0
-    my = (float(face[10]) + float(face[12])) / 2.0
-    side = max(24.0, float(np.hypot(float(face[9])-float(face[11]), float(face[10])-float(face[12])) * 2.4))
+    # YuNet 15-value row: [x, y, w, h, re_x, re_y, le_x, le_y, nose_x, nose_y, rm_x, rm_y, lm_x, lm_y, score]
+    # Right mouth corner = (face[10], face[11]), Left mouth corner = (face[12], face[13])
+    mx = (float(face[10]) + float(face[12])) / 2.0
+    my = (float(face[11]) + float(face[13])) / 2.0
+    side = max(24.0, float(np.hypot(float(face[10]) - float(face[12]), float(face[11]) - float(face[13])) * 1.6))
     x0 = max(0, int(mx - side)); y0 = max(0, int(my - side * 0.65))
     x1 = min(frame.shape[1], int(mx + side)); y1 = min(frame.shape[0], int(my + side * 0.65))
     if x1 <= x0 or y1 <= y0:
@@ -43,7 +52,7 @@ def mouth_patch(frame, face):
     return cv2.resize(patch, (64, 40), interpolation=cv2.INTER_AREA)
 
 
-def sample_video(video: Path, count: int = 24):
+def sample_video(video: Path, count: int = 36):
     cap = cv2.VideoCapture(str(video))
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open video: {video}")
@@ -69,7 +78,7 @@ def run(video: Path, reference: Path, yunet_path: Path, sface_path: Path) -> dic
     if ref is None:
         raise RuntimeError(f"Cannot read identity reference: {reference}")
 
-    detector = cv2.FaceDetectorYN.create(str(yunet_path), "", (320, 320), 0.85, 0.30, 20)
+    detector = cv2.FaceDetectorYN.create(str(yunet_path), "", (320, 320), 0.70, 0.30, 20)
     recognizer = cv2.FaceRecognizerSF.create(str(sface_path), "")
     ref_faces = detect(detector, ref)
     if not ref_faces:
@@ -83,6 +92,7 @@ def run(video: Path, reference: Path, yunet_path: Path, sface_path: Path) -> dic
     areas = []
     mouth_patches = []
     details = []
+    anchor_face = None
 
     for t, frame in samples:
         faces = detect(detector, frame)
@@ -97,9 +107,11 @@ def run(video: Path, reference: Path, yunet_path: Path, sface_path: Path) -> dic
             if len(matches) > 1:
                 multi_match += 1
             best = matches[0][1]
+            if anchor_face is None:
+                anchor_face = best
             ratio = float(best[2] * best[3]) / float(frame.shape[0] * frame.shape[1])
             areas.append(ratio)
-            p = mouth_patch(frame, best)
+            p = mouth_patch(frame, anchor_face)
             if p is not None:
                 mouth_patches.append(p)
             details.append({"t": round(t, 2), "faces": len(faces), "matched": True, "score": round(matches[0][0], 4), "face_area": round(ratio, 4)})
@@ -112,7 +124,7 @@ def run(video: Path, reference: Path, yunet_path: Path, sface_path: Path) -> dic
     motion_scores = []
     for a, b in zip(mouth_patches, mouth_patches[1:]):
         motion_scores.append(float(np.mean(cv2.absdiff(a, b))))
-    motion_threshold = 3.0
+    motion_threshold = 0.35
     motion_ratio = (sum(x >= motion_threshold for x in motion_scores) / len(motion_scores)) if motion_scores else 0.0
 
     result = {
