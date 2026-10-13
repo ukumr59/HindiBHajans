@@ -165,13 +165,9 @@ def main():
     RUNTIME.mkdir(parents=True,exist_ok=True)
     repo=RUNTIME/'MuseTalk'
     run('git','clone','--depth','1','https://github.com/TMElyralab/MuseTalk.git',str(repo))
-    # MuseTalk's official pins use diffusers 0.30.2 / accelerate 0.28.0 / transformers 4.39.2.
-    # Kaggle preinstalls a much newer PEFT; that PEFT imports clear_device_cache(),
-    # which does not exist in accelerate 0.28.0 and crashes before inference.
-    # Pin PEFT 0.10.0 to keep this environment internally compatible.
-    run(sys.executable,'-m','pip','install','-q','numpy==1.26.4','diffusers==0.30.2','accelerate==0.28.0','transformers==4.39.2','huggingface_hub==0.30.2','peft==0.10.0','librosa==0.11.0','einops==0.8.1','scipy','omegaconf','ffmpeg-python','moviepy','gdown','safetensors')
-    # Fail before downloading the large model set if the dependency graph is broken.
-    run(sys.executable,'-c','import diffusers, accelerate, peft; from diffusers import AutoencoderKL; print("DEPENDENCY_SMOKE_OK", diffusers.__version__, accelerate.__version__, peft.__version__)')
+    # Use Kaggle's pre-installed PyTorch/Diffusers/Transformers/NumPy 2.x stack directly
+    # (downgrading numpy to 1.26.4 breaks Python 3.13 jax/opencv/transformers on Kaggle).
+    run(sys.executable,'-c','import diffusers, accelerate, transformers, omegaconf, librosa, einops, scipy, safetensors; from diffusers import AutoencoderKL; print("DEPENDENCY_SMOKE_OK", diffusers.__version__, transformers.__version__)')
     run('sudo','apt-get','update','-qq'); run('sudo','apt-get','install','-y','-qq','ffmpeg')
     models=repo/'models'
     for d in ('musetalkV15','sd-vae','whisper','face-parse-bisent','face_detection'): (models/d).mkdir(parents=True,exist_ok=True)
