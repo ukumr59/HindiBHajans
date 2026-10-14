@@ -203,16 +203,16 @@ def generate_liveportrait_motion(singer_image: Path, output_video: Path) -> bool
     # Install tyro, rich, pykalman, onnxruntime-gpu, imageio-ffmpeg, lmdb, ffmpeg-python
     run(sys.executable, '-m', 'pip', 'install', '-q', 'tyro', 'rich', 'pykalman', 'onnxruntime-gpu', 'imageio-ffmpeg', 'lmdb', 'ffmpeg-python')
 
-    # Devotional driving video: calm demeanor, glasses, natural eye blinks and subtle nods
-    driving_video = lp_repo / 'assets/examples/driving/d13.mp4'
-    if not driving_video.exists() or driving_video.stat().st_size < 100000:
+    # Devotional driving motion: pre-computed 275-frame natural nod, blink, and sway template
+    driving_template = lp_repo / 'assets/examples/driving/d8.pkl'
+    if not driving_template.exists() or driving_template.stat().st_size < 50000:
         import urllib.request
-        print("DOWNLOADING REAL DRIVING VIDEO (d13.mp4)...", flush=True)
-        url = 'https://raw.githubusercontent.com/KlingAIResearch/LivePortrait/main/assets/examples/driving/d13.mp4'
+        print("DOWNLOADING MOTION TEMPLATE (d8.pkl)...", flush=True)
+        url = 'https://raw.githubusercontent.com/KlingAIResearch/LivePortrait/main/assets/examples/driving/d8.pkl'
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req) as resp, open(str(driving_video), 'wb') as out_f:
+        with urllib.request.urlopen(req) as resp, open(str(driving_template), 'wb') as out_f:
             shutil.copyfileobj(resp, out_f)
-        print(f"DRIVING VIDEO DOWNLOADED: {driving_video.stat().st_size} bytes", flush=True)
+        print(f"MOTION TEMPLATE DOWNLOADED: {driving_template.stat().st_size} bytes", flush=True)
 
     lp_out = lp_runtime / 'output'
     lp_out.mkdir(parents=True, exist_ok=True)
@@ -220,8 +220,7 @@ def generate_liveportrait_motion(singer_image: Path, output_video: Path) -> bool
     run(
         sys.executable, 'inference.py',
         '-s', str(singer_image),
-        '-d', str(driving_video),
-        '--flag_crop_driving_video',
+        '-d', str(driving_template),
         '-o', str(lp_out),
         cwd=lp_repo
     )
