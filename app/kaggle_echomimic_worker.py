@@ -200,8 +200,8 @@ def generate_liveportrait_motion(singer_image: Path, output_video: Path) -> bool
         h_text = h_text.replace('torch.load(ckpt_path,', 'torch.load(ckpt_path, weights_only=False,')
         helper_file.write_text(h_text, encoding='utf-8')
 
-    # Install tyro, rich, onnxruntime-gpu, imageio-ffmpeg
-    run(sys.executable, '-m', 'pip', 'install', '-q', 'tyro', 'rich', 'onnxruntime-gpu', 'imageio-ffmpeg')
+    # Install tyro, rich, pykalman, onnxruntime-gpu, imageio-ffmpeg, lmdb, ffmpeg-python
+    run(sys.executable, '-m', 'pip', 'install', '-q', 'tyro', 'rich', 'pykalman', 'onnxruntime-gpu', 'imageio-ffmpeg', 'lmdb', 'ffmpeg-python')
 
     # Devotional driving video: calm demeanor, glasses, natural eye blinks and subtle nods
     driving_video = lp_repo / 'assets/examples/driving/d13.mp4'
