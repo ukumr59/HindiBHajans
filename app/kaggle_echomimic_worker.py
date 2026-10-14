@@ -7,9 +7,9 @@ FINAL=Path('/kaggle/working')
 INPUT=Path('/kaggle/input')
 FPS=25
 
-def run(*args, cwd=None):
+def run(*args, cwd=None, env=None):
     print('RUN:', *args, flush=True)
-    subprocess.run([str(x) for x in args], cwd=str(cwd) if cwd else None, check=True)
+    subprocess.run([str(x) for x in args], cwd=str(cwd) if cwd else None, env=env, check=True)
 
 def find_input(name):
     xs=[p for p in INPUT.rglob(name) if p.is_file()]
@@ -178,7 +178,7 @@ def generate_liveportrait_motion(singer_image: Path, output_video: Path) -> bool
     from huggingface_hub import snapshot_download
     snapshot_download('KwaiVGI/LivePortrait', local_dir=str(weights_dir), ignore_patterns=['liveportrait_animals/*'])
 
-    # Monkey-patch torch.load in inference.py to ensure weights_only=False for PyTorch 2.6+
+    # 1. Monkey-patch torch.load and wrap execute in inference.py for PyTorch 2.6+ compatibility and full error trace
     inf_py = lp_repo / 'inference.py'
     if inf_py.exists():
         inf_code = inf_py.read_text(encoding='utf-8')
@@ -192,7 +192,13 @@ def generate_liveportrait_motion(singer_image: Path, output_video: Path) -> bool
                 "    return _orig_torch_load(*args, **kwargs)\n"
                 "torch.load = _safe_torch_load\n"
             )
-            inf_py.write_text(torch_patch + inf_code, encoding='utf-8')
+            inf_code = torch_patch + inf_code
+        if 'live_portrait_pipeline.execute(args)' in inf_code and 'except Exception as ex:' not in inf_code:
+            inf_code = inf_code.replace(
+                'live_portrait_pipeline.execute(args)',
+                'try:\n        live_portrait_pipeline.execute(args)\n    except Exception as ex:\n        import traceback; traceback.print_exc()\n        raise'
+            )
+        inf_py.write_text(inf_code, encoding='utf-8')
 
     helper_file = lp_repo / 'src/utils/helper.py'
     if helper_file.exists():
@@ -200,10 +206,42 @@ def generate_liveportrait_motion(singer_image: Path, output_video: Path) -> bool
         h_text = h_text.replace('torch.load(ckpt_path,', 'torch.load(ckpt_path, weights_only=False,')
         helper_file.write_text(h_text, encoding='utf-8')
 
-    # Install tyro, rich, pykalman, onnxruntime-gpu, imageio-ffmpeg, lmdb, ffmpeg-python
-    run(sys.executable, '-m', 'pip', 'install', '-q', 'tyro', 'rich', 'pykalman', 'onnxruntime-gpu', 'imageio-ffmpeg', 'lmdb', 'ffmpeg-python')
+    # 2. Patch live_portrait_pipeline.py: remove rich.progress.track, add frame progress logging,
+    # periodic CUDA cache clearing, and bypass useless 2.6GB concatenation comparison video.
+    pipe_file = lp_repo / 'src/live_portrait_pipeline.py'
+    if pipe_file.exists():
+        p_text = pipe_file.read_text(encoding='utf-8')
+        old_track = "for i in track(range(n_frames), description='🚀Animating...', total=n_frames):"
+        new_track = (
+            "for i in range(n_frames):\n"
+            "            if i == 0 or (i + 1) % 25 == 0 or i == n_frames - 1:\n"
+            "                print(f'LIVEPORTRAIT_PROGRESS: frame {i + 1}/{n_frames}', flush=True)\n"
+            "            if i > 0 and i % 50 == 0 and torch.cuda.is_available():\n"
+            "                torch.cuda.empty_cache()"
+        )
+        p_text = p_text.replace(old_track, new_track)
+        old_concat = "images2video(frames_concatenated, wfp=wfp_concat, fps=output_fps)"
+        p_text = p_text.replace(old_concat, "# Concat comparison video bypassed to conserve RAM")
+        pipe_file.write_text(p_text, encoding='utf-8')
 
-    # Devotional driving motion: pre-computed 275-frame natural nod, blink, and sway template
+    # 3. Patch video.py to remove rich.progress.track
+    vid_file = lp_repo / 'src/utils/video.py'
+    if vid_file.exists():
+        v_text = vid_file.read_text(encoding='utf-8')
+        v_text = v_text.replace(
+            "for i in track(range(n), description='Writing', transient=True):",
+            "for i in range(n):\n        if i == 0 or (i + 1) % 50 == 0 or i == n - 1: print(f'LIVEPORTRAIT_ENCODING: {i+1}/{n}', flush=True)"
+        )
+        v_text = v_text.replace(
+            "for idx, _ in track(enumerate(I_p_lst), total=len(I_p_lst), description='Concatenating result...'):",
+            "for idx in range(len(I_p_lst)):"
+        )
+        vid_file.write_text(v_text, encoding='utf-8')
+
+    # 4. Install lightweight, stable dependencies without onnxruntime-gpu CUDA conflicts
+    run(sys.executable, '-m', 'pip', 'install', '-q', 'tyro', 'pykalman', 'onnxruntime', 'imageio-ffmpeg', 'lmdb', 'ffmpeg-python')
+
+    # 5. Devotional driving motion: pre-computed 275-frame natural nod, blink, and sway template
     driving_template = lp_repo / 'assets/examples/driving/d8.pkl'
     if not driving_template.exists() or driving_template.stat().st_size < 50000:
         import urllib.request
@@ -217,12 +255,17 @@ def generate_liveportrait_motion(singer_image: Path, output_video: Path) -> bool
     lp_out = lp_runtime / 'output'
     lp_out.mkdir(parents=True, exist_ok=True)
 
+    lp_env = dict(os.environ)
+    lp_env['PYTHONIOENCODING'] = 'utf-8'
+    lp_env['LC_ALL'] = 'C.UTF-8'
+
     run(
         sys.executable, 'inference.py',
         '-s', str(singer_image),
         '-d', str(driving_template),
         '-o', str(lp_out),
-        cwd=lp_repo
+        cwd=lp_repo,
+        env=lp_env
     )
 
     candidates = [f for f in lp_out.glob('*.mp4') if not f.name.endswith('_concat.mp4')]
