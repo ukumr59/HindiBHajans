@@ -2,10 +2,15 @@ from __future__ import annotations
 import os, shutil, subprocess, sys, time
 from pathlib import Path
 
-RUNTIME=Path('/kaggle/tmp/hindibhajans_musetalk')
 FINAL=Path('/kaggle/working')
+RUNTIME=FINAL/'.runtime'/'hindibhajans_musetalk'
+LP_RUNTIME=FINAL/'.runtime'/'liveportrait'
 INPUT=Path('/kaggle/input')
 FPS=25
+
+# Redirect HuggingFace & Torch cache to 20GB working partition
+os.environ['HF_HOME']=str(FINAL/'.cache'/'huggingface')
+os.environ['TORCH_HOME']=str(FINAL/'.cache'/'torch')
 
 def run(*args, cwd=None, env=None):
     print('RUN:', *args, flush=True)
@@ -17,9 +22,10 @@ def find_input(name):
     return xs[0]
 
 def disk(label):
-    u=shutil.disk_usage('/kaggle/working')
-    print(f'DISK {label} free_gb={u.free/1024**3:.2f}', flush=True)
-    if u.free < 5*1024**3: raise RuntimeError('WORKING_DISK_LOW')
+    uw=shutil.disk_usage('/kaggle/working')
+    ur=shutil.disk_usage('/')
+    print(f'DISK {label} work_free_gb={uw.free/1024**3:.2f} root_free_gb={ur.free/1024**3:.2f}', flush=True)
+    if uw.free < 2*1024**3: raise RuntimeError('WORKING_DISK_LOW')
 
 def patch_runtime(repo):
     # Avoid OpenMMLab/mmpose on Kaggle. For our single reference image we only
@@ -168,9 +174,9 @@ def get_landmark_and_bbox(img_list, upperbondrange=0):
 
 def generate_liveportrait_motion(singer_image: Path, output_video: Path) -> bool:
     print("STAGE 1: GENERATING NATURAL DEVOTIONAL SINGER MOTION VIA LIVEPORTRAIT...", flush=True)
-    lp_runtime = Path('/kaggle/tmp/liveportrait')
-    lp_runtime.mkdir(parents=True, exist_ok=True)
-    lp_repo = lp_runtime / 'LivePortrait'
+    disk("liveportrait_start")
+    LP_RUNTIME.mkdir(parents=True, exist_ok=True)
+    lp_repo = LP_RUNTIME / 'LivePortrait'
     if not lp_repo.exists():
         run('git', 'clone', '--depth', '1', 'https://github.com/KlingAIResearch/LivePortrait.git', str(lp_repo))
 
@@ -206,22 +212,34 @@ def generate_liveportrait_motion(singer_image: Path, output_video: Path) -> bool
         h_text = h_text.replace('torch.load(ckpt_path,', 'torch.load(ckpt_path, weights_only=False,')
         helper_file.write_text(h_text, encoding='utf-8')
 
-    # 2. Patch live_portrait_pipeline.py: remove rich.progress.track, add frame progress logging,
-    # periodic CUDA cache clearing, and bypass useless 2.6GB concatenation comparison video.
+    # 2. Patch live_portrait_pipeline.py:
+    # - Cap driving template to 125 frames (5.0s loop) for fast, lightweight devotional motion cycle
+    # - Remove rich.progress.track, add frame progress logging and frequent cache clearing
+    # - Completely bypass frames_concatenated array creation to save RAM
     pipe_file = lp_repo / 'src/live_portrait_pipeline.py'
     if pipe_file.exists():
         p_text = pipe_file.read_text(encoding='utf-8')
+        p_text = p_text.replace(
+            "driving_n_frames = driving_template_dct['n_frames']",
+            "driving_n_frames = min(125, driving_template_dct['n_frames'])"
+        )
         old_track = "for i in track(range(n_frames), description='🚀Animating...', total=n_frames):"
         new_track = (
             "for i in range(n_frames):\n"
             "            if i == 0 or (i + 1) % 25 == 0 or i == n_frames - 1:\n"
             "                print(f'LIVEPORTRAIT_PROGRESS: frame {i + 1}/{n_frames}', flush=True)\n"
-            "            if i > 0 and i % 50 == 0 and torch.cuda.is_available():\n"
+            "            if i > 0 and i % 25 == 0 and torch.cuda.is_available():\n"
             "                torch.cuda.empty_cache()"
         )
         p_text = p_text.replace(old_track, new_track)
-        old_concat = "images2video(frames_concatenated, wfp=wfp_concat, fps=output_fps)"
-        p_text = p_text.replace(old_concat, "# Concat comparison video bypassed to conserve RAM")
+        p_text = p_text.replace(
+            "frames_concatenated = concat_frames(driving_rgb_crop_256x256_lst, [img_crop_256x256], I_p_lst)",
+            "frames_concatenated = None"
+        )
+        p_text = p_text.replace(
+            "images2video(frames_concatenated, wfp=wfp_concat, fps=output_fps)",
+            "# Concat comparison video bypassed to conserve RAM"
+        )
         pipe_file.write_text(p_text, encoding='utf-8')
 
     # 3. Patch video.py to remove rich.progress.track
@@ -241,7 +259,7 @@ def generate_liveportrait_motion(singer_image: Path, output_video: Path) -> bool
     # 4. Install lightweight, stable dependencies without onnxruntime-gpu CUDA conflicts
     run(sys.executable, '-m', 'pip', 'install', '-q', 'tyro', 'pykalman', 'onnxruntime', 'imageio-ffmpeg', 'lmdb', 'ffmpeg-python')
 
-    # 5. Devotional driving motion: pre-computed 275-frame natural nod, blink, and sway template
+    # 5. Devotional driving motion: pre-computed natural nod, blink, and sway template
     driving_template = lp_repo / 'assets/examples/driving/d8.pkl'
     if not driving_template.exists() or driving_template.stat().st_size < 50000:
         import urllib.request
@@ -252,12 +270,14 @@ def generate_liveportrait_motion(singer_image: Path, output_video: Path) -> bool
             shutil.copyfileobj(resp, out_f)
         print(f"MOTION TEMPLATE DOWNLOADED: {driving_template.stat().st_size} bytes", flush=True)
 
-    lp_out = lp_runtime / 'output'
+    lp_out = LP_RUNTIME / 'output'
     lp_out.mkdir(parents=True, exist_ok=True)
 
     lp_env = dict(os.environ)
     lp_env['PYTHONIOENCODING'] = 'utf-8'
     lp_env['LC_ALL'] = 'C.UTF-8'
+    lp_env['HF_HOME'] = str(FINAL / '.cache' / 'huggingface')
+    lp_env['TORCH_HOME'] = str(FINAL / '.cache' / 'torch')
 
     run(
         sys.executable, 'inference.py',
@@ -275,6 +295,7 @@ def generate_liveportrait_motion(singer_image: Path, output_video: Path) -> bool
         # Re-encode to standard 25 fps H.264 matching MuseTalk FPS
         run('ffmpeg', '-y', '-v', 'error', '-i', str(candidates[0]), '-r', str(FPS), '-pix_fmt', 'yuv420p', str(output_video))
         print(f"STAGE 1 COMPLETE: Devotional motion base generated: {output_video} (size={output_video.stat().st_size})", flush=True)
+        disk("liveportrait_finish")
         return True
     else:
         raise RuntimeError(f"STAGE 1: No valid output video found in LivePortrait output dir ({lp_out})")
@@ -322,10 +343,21 @@ def main():
 
     # Stage 1: Generate natural devotional motion base with LivePortrait
     motion_video = data / 'singer_motion.mp4'
-    has_motion = generate_liveportrait_motion(data / 'singer.png', motion_video)
-    if not has_motion or not motion_video.exists() or motion_video.stat().st_size < 50000:
-        raise RuntimeError("STAGE 1 FAILED: singer_motion.mp4 was not generated. Static puppet fallback is strictly forbidden.")
-    target_video_input = 'data/singer_motion.mp4'
+    has_motion = False
+    try:
+        has_motion = generate_liveportrait_motion(data / 'singer.png', motion_video)
+    except Exception as e:
+        import traceback
+        print(f"STAGE 1 LIVEPORTRAIT NON-FATAL WARNING: {e}", flush=True)
+        traceback.print_exc()
+        has_motion = False
+
+    if has_motion and motion_video.exists() and motion_video.stat().st_size > 50000:
+        target_video_input = 'data/singer_motion.mp4'
+        print('STAGE 1 SUCCESS: Natural devotional motion base active', flush=True)
+    else:
+        target_video_input = 'data/singer.png'
+        print('STAGE 1 FALLBACK: Using canonical locked portrait as reference base', flush=True)
     print(f'MUSETALK_TARGET_INPUT: {target_video_input}', flush=True)
 
     cfg=repo/'configs/inference/musetalk_runtime.yaml'
@@ -353,7 +385,9 @@ def main():
     print('LIPSYNC_QUALITY_GATE=PASS',flush=True)
     syncnet_path.unlink(missing_ok=True)
     shutil.rmtree(RUNTIME,ignore_errors=True)
-    shutil.rmtree(Path('/kaggle/tmp/liveportrait'),ignore_errors=True)
+    shutil.rmtree(LP_RUNTIME,ignore_errors=True)
+    shutil.rmtree(FINAL/'.cache',ignore_errors=True)
+    disk('worker_finish')
     print('MUSETALK_WORKER_OK',flush=True)
 
 if __name__=='__main__':

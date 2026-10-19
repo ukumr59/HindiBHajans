@@ -109,7 +109,7 @@ def main(seconds):
     run_id=os.getenv('GITHUB_RUN_ID','manual')
     print('Waiting 60s for Kaggle GPU worker slot to cleanly release from previous audio step...', flush=True)
     time.sleep(60)
-    for attempt in (1,2,3):
+    for attempt in (1, 2):
         kernel=f'{KERNEL_PREFIX}-{run_id}-{attempt}'.lower()
         print(f'MUSETALK_KERNEL={kernel}',flush=True)
         ok,detail=run_kernel(env,kernel)
@@ -133,7 +133,7 @@ def main(seconds):
         non_retryable=('traceback','importerror','modulenotfounderror','dependency_smoke_failed','lipsync_quality_gate_failed','syncnet_model_sha256_mismatch','out of memory','cuda out of memory')
         if any(x in detail_low for x in non_retryable):
             raise RuntimeError('KAGGLE_MUSETALK_WORKER_NONRETRYABLE_FAILURE: '+detail)
-        if attempt < 3:
+        if attempt < 2:
             print(f'MUSETALK_AUTO_RETRY={attempt} terminal Kaggle state; waiting 90s before fresh kernel slug',flush=True)
             time.sleep(90)
     raise RuntimeError('KAGGLE_MUSETALK_KERNEL_FAILED_AFTER_RETRY')
