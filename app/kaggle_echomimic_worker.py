@@ -40,13 +40,15 @@ def disk(label):
 
 def install_dependencies():
     print('=== STEP 1: INSTALLING ECHOMIMIC DEPENDENCIES ===', flush=True)
-    run(sys.executable, '-m', 'pip', 'install', '-q', '--upgrade', 'pip')
+    # Use --prefer-binary to ensure pre-compiled wheels (e.g. Pillow) are pulled from PyPI
     run(
         sys.executable,
         '-m',
         'pip',
         'install',
         '-q',
+        '--prefer-binary',
+        'pillow',
         'diffusers==0.24.0',
         'transformers==4.38.2',
         'accelerate==0.27.2',
@@ -54,7 +56,7 @@ def install_dependencies():
         'librosa==0.10.1',
         'soundfile==0.12.1',
         'decord',
-        'moviepy',
+        'moviepy==1.0.3',
         'facenet-pytorch',
         'huggingface_hub',
         'einops',
