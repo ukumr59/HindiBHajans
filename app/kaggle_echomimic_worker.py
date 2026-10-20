@@ -40,7 +40,9 @@ def disk(label):
 
 def install_dependencies():
     print('=== STEP 1: INSTALLING ECHOMIMIC DEPENDENCIES ===', flush=True)
-    # Use --prefer-binary to ensure pre-compiled wheels (e.g. Pillow) are pulled from PyPI
+    # EchoMimic runtime packages: all have pre-compiled wheels.
+    # Note: decord, librosa, and soundfile are NOT needed by EchoMimic.
+    # moviepy is bypassed via native ffmpeg below.
     run(
         sys.executable,
         '-m',
@@ -48,20 +50,14 @@ def install_dependencies():
         'install',
         '-q',
         '--prefer-binary',
-        'pillow',
         'diffusers==0.24.0',
-        'transformers==4.38.2',
-        'accelerate==0.27.2',
         'omegaconf==2.3.0',
-        'librosa==0.10.1',
-        'soundfile==0.12.1',
-        'decord',
-        'moviepy==1.0.3',
-        'facenet-pytorch',
-        'huggingface_hub',
         'einops',
         'av',
+        'ffmpeg-python==0.2.0',
     )
+    # facenet-pytorch installs MTCNN without compiling Pillow or touching PyTorch
+    run(sys.executable, '-m', 'pip', 'install', '-q', '--no-deps', 'facenet-pytorch')
     print('=== ECHOMIMIC DEPENDENCIES INSTALLED ===', flush=True)
 
 
@@ -83,6 +79,26 @@ def setup_echomimic_repo(repo: Path):
             src_text = src_text.replace('video = video.cpu().float().numpy()', 'video = video.float().numpy()', 1)
             pipe_file.write_text(src_text, encoding='utf-8')
             print('ECHOMIMIC_CPU_DECODE_PATCH=APPLIED', flush=True)
+
+    # Patch infer_audio2vid_acc.py to bypass moviepy with instantaneous ffmpeg remux
+    infer_file = repo / 'infer_audio2vid_acc.py'
+    if infer_file.exists():
+        txt = infer_file.read_text(encoding='utf-8')
+        txt = txt.replace('from moviepy.editor import VideoFileClip, AudioFileClip', '# moviepy bypassed')
+        target_block = (
+            '            video_clip = VideoFileClip(f"{save_dir}/{ref_name}_{audio_name}_{args.H}x{args.W}_{int(args.cfg)}_{time_str}.mp4")\n'
+            '            audio_clip = AudioFileClip(audio_path)\n'
+            '            video_clip = video_clip.set_audio(audio_clip)\n'
+            '            video_clip.write_videofile(f"{save_dir}/{ref_name}_{audio_name}_{args.H}x{args.W}_{int(args.cfg)}_{time_str}_withaudio.mp4", codec="libx264", audio_codec="aac")'
+        )
+        replacement_block = (
+            '            raw_mp4 = f"{save_dir}/{ref_name}_{audio_name}_{args.H}x{args.W}_{int(args.cfg)}_{time_str}.mp4"\n'
+            '            mux_mp4 = f"{save_dir}/{ref_name}_{audio_name}_{args.H}x{args.W}_{int(args.cfg)}_{time_str}_withaudio.mp4"\n'
+            '            subprocess.run([\'ffmpeg\', \'-y\', \'-v\', \'error\', \'-i\', raw_mp4, \'-i\', audio_path, \'-c:v\', \'copy\', \'-c:a\', \'aac\', mux_mp4], check=True)'
+        )
+        txt = txt.replace('\r\n', '\n').replace(target_block.replace('\r\n', '\n'), replacement_block)
+        infer_file.write_text(txt, encoding='utf-8')
+        print('ECHOMIMIC_MOVIEPY_BYPASS_PATCH=APPLIED', flush=True)
 
     print('=== STEP 3: DOWNLOADING ECHOMIMIC WEIGHTS ===', flush=True)
     weights_dir = repo / 'pretrained_weights'
