@@ -48,7 +48,7 @@ def publish_inputs(env,image,audio,seconds):
 def wait_kernel(env,kernel):
     deadline=time.time()+45*60
     queued_since = None
-    MAX_QUEUE_WAIT = 15 * 60
+    MAX_QUEUE_WAIT = 25 * 60
     while time.time()<deadline:
         p=subprocess.run(['kaggle','kernels','status',kernel],cwd=ROOT,env=env,capture_output=True,text=True)
         status=(p.stdout+p.stderr).strip(); print(status,flush=True); low=status.lower()

@@ -170,10 +170,12 @@ def dispatch(seconds: int) -> None:
     )
     (KDIR/'kernel-metadata.json').write_text(json.dumps({'id':KAGGLE_KERNEL,'title':'hindibhajans-ace-step','code_file':'worker.py','language':'python','kernel_type':'script','is_private':True,'enable_gpu':True,'enable_internet':True,'machine_shape':'NvidiaTeslaT4','dataset_sources':[],'competition_sources':[],'kernel_sources':[],'model_sources':[]},indent=2),encoding='utf-8')
     env=dict(os.environ); env['KAGGLE_API_TOKEN']=token
-    run('kaggle','kernels','push','-p',str(KDIR),'--accelerator','NvidiaTeslaT4','--timeout',str(11*60*60),cwd=ROOT,env=env)
-    deadline=time.time()+35*60
+    diag=subprocess.run(['kaggle','kernels','list','--mine','--page-size','5'],cwd=ROOT,env=env,capture_output=True,text=True)
+    print('KAGGLE_MY_KERNELS:', (diag.stdout or diag.stderr or '').strip(), flush=True)
+    run('kaggle','kernels','push','-p',str(KDIR),'--accelerator','NvidiaTeslaT4','--timeout',str(1800),cwd=ROOT,env=env)
+    deadline=time.time()+40*60
     queued_since = None
-    MAX_QUEUE_WAIT = 15 * 60  # 15 min maximum in QUEUED before failing fast
+    MAX_QUEUE_WAIT = 25 * 60  # 25 min maximum in QUEUED during peak hours
     while time.time()<deadline:
         p=subprocess.run(['kaggle','kernels','status',KAGGLE_KERNEL],capture_output=True,text=True,env=env)
         status_text=p.stdout or p.stderr
@@ -184,7 +186,7 @@ def dispatch(seconds: int) -> None:
             if queued_since is None:
                 queued_since = time.time()
             elif time.time() - queued_since > MAX_QUEUE_WAIT:
-                raise RuntimeError('KAGGLE_GPU_QUEUE_TIMEOUT: Kernel remained in QUEUED status for >15 minutes. Kaggle GPU pool is congested or an old session is blocking the queue.')
+                raise RuntimeError('KAGGLE_GPU_QUEUE_TIMEOUT: Kernel remained in QUEUED status for >25 minutes. Kaggle GPU pool is congested.')
         else:
             queued_since = None
         if any(x in t for x in ('error','failed','cancelled','canceled')):
