@@ -171,13 +171,22 @@ def dispatch(seconds: int) -> None:
     (KDIR/'kernel-metadata.json').write_text(json.dumps({'id':KAGGLE_KERNEL,'title':'hindibhajans-ace-step','code_file':'worker.py','language':'python','kernel_type':'script','is_private':True,'enable_gpu':True,'enable_internet':True,'machine_shape':'NvidiaTeslaT4','dataset_sources':[],'competition_sources':[],'kernel_sources':[],'model_sources':[]},indent=2),encoding='utf-8')
     env=dict(os.environ); env['KAGGLE_API_TOKEN']=token
     run('kaggle','kernels','push','-p',str(KDIR),'--accelerator','NvidiaTeslaT4','--timeout',str(11*60*60),cwd=ROOT,env=env)
-    deadline=time.time()+11*60*60
+    deadline=time.time()+35*60
+    queued_since = None
+    MAX_QUEUE_WAIT = 15 * 60  # 15 min maximum in QUEUED before failing fast
     while time.time()<deadline:
         p=subprocess.run(['kaggle','kernels','status',KAGGLE_KERNEL],capture_output=True,text=True,env=env)
         status_text=p.stdout or p.stderr
         print(status_text,flush=True)
         t=(p.stdout+p.stderr).lower()
         if 'complete' in t: break
+        if 'queued' in t:
+            if queued_since is None:
+                queued_since = time.time()
+            elif time.time() - queued_since > MAX_QUEUE_WAIT:
+                raise RuntimeError('KAGGLE_GPU_QUEUE_TIMEOUT: Kernel remained in QUEUED status for >15 minutes. Kaggle GPU pool is congested or an old session is blocking the queue.')
+        else:
+            queued_since = None
         if any(x in t for x in ('error','failed','cancelled','canceled')):
             print('KAGGLE_ACE_STEP_FETCHING_ERROR_LOGS=START', flush=True)
             lp=subprocess.run(['kaggle','kernels','logs',KAGGLE_KERNEL],capture_output=True,text=True,env=env)
