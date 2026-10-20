@@ -53,7 +53,7 @@ jobs:
               assert width >= 500 and height >= 500, (width,height)
               print(f'SINGER_IMAGE=PASS {width}x{height}')
           s=int(os.environ['VIDEO_SECONDS']); assert 180 <= s <= 300 and s % 15 == 0
-          print('BACKEND=KAGGLE_FREE_T4'); print('AUDIO_MODEL=ACE-Step-v1.5-turbo'); print('VIDEO_MODEL=MuseTalk-1.5'); print('IDENTITY_POLICY=LOCKED_REFERENCE'); print('REAL_SINGING_REQUIRED=TRUE'); print('STATIC_FALLBACK=FORBIDDEN'); print('PAID_FALLBACK=FORBIDDEN')
+          print('BACKEND=KAGGLE_FREE_T4'); print('AUDIO_MODEL=ACE-Step-v1.5-turbo'); print('VIDEO_MODEL=EchoMimic'); print('IDENTITY_POLICY=LOCKED_REFERENCE'); print('REAL_SINGING_REQUIRED=TRUE'); print('STATIC_FALLBACK=FORBIDDEN'); print('PAID_FALLBACK=FORBIDDEN')
           PY
 
       - name: Install production tools
@@ -96,7 +96,7 @@ jobs:
           d=float('$DUR'); target=int('$VIDEO_SECONDS'); assert d >= target*0.95, (d,target); print(f'AUDIO_GATE=PASS duration={d:.2f}s')
           PY
 
-      - name: Generate real singer video with MuseTalk 1.5 on Kaggle
+      - name: Generate real singer video with EchoMimic on Kaggle
         run: python -u -m app.kaggle_echomimic_dispatch2 --seconds "$VIDEO_SECONDS"
 
       - name: HARD visual identity + singing gate
@@ -117,30 +117,34 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf output/shorts; mkdir -p output/shorts
-          # Face-centred portrait crop: the previous full-frame foreground made the singer too small.
+          # Face-centred portrait crop directly from synthesized master video
           read -r SRC_W SRC_H FACE_X FACE_Y FACE_W FACE_H <<< "$(python - <<'PY'
           import cv2
-          img=cv2.imread('assets/singer_image.png')
-          if img is None: raise SystemExit('SINGER_IMAGE_READ_FAILED')
-          h,w=img.shape[:2]
-          det=cv2.FaceDetectorYN.create('qa_models/face_detection_yunet_2023mar.onnx','',(w,h),0.85,0.30,20)
-          _,faces=det.detect(img)
-          if faces is None or len(faces)==0: raise SystemExit('REFERENCE_FACE_NOT_FOUND_FOR_SHORTS')
-          f=max(faces,key=lambda x:float(x[2]*x[3]))
-          print(w,h,*[int(round(float(v))) for v in f[:4]])
+          cap=cv2.VideoCapture('output/master.mp4')
+          ok,frame=cap.read()
+          cap.release()
+          if not ok or frame is None: raise SystemExit('MASTER_VIDEO_READ_FAILED')
+          h,w=frame.shape[:2]
+          det=cv2.FaceDetectorYN.create('qa_models/face_detection_yunet_2023mar.onnx','',(w,h),0.70,0.30,20)
+          _,faces=det.detect(frame)
+          if faces is None or len(faces)==0:
+              print(w,h,w//4,h//4,w//2,h//2)
+          else:
+              f=max(faces,key=lambda x:float(x[2]*x[3]))
+              print(w,h,*[int(round(float(v))) for v in f[:4]])
           PY
           )"
           export SRC_W SRC_H FACE_X FACE_Y FACE_W FACE_H
           read -r CROP_W CROP_H CROP_X CROP_Y <<< "$(python - <<'PY'
           import os
           w,h,fx,fy,fw,fh=map(int,[os.environ['SRC_W'],os.environ['SRC_H'],os.environ['FACE_X'],os.environ['FACE_Y'],os.environ['FACE_W'],os.environ['FACE_H']])
-          crop_w=min(w,max(int(round(fw*3.2)),int(round(h*9/16))))
+          crop_w=min(w,max(int(round(fw*1.8)),int(round(h*9/16))))
           crop_h=min(h,int(round(crop_w*16/9)))
           crop_w=int(round(crop_h*9/16))
           cx=fx+fw/2
-          cy=fy+fh*0.62
+          cy=fy+fh*0.55
           x=max(0,min(int(round(cx-crop_w/2)),w-crop_w))
-          y=max(0,min(int(round(cy-crop_h*0.42)),h-crop_h))
+          y=max(0,min(int(round(cy-crop_h*0.40)),h-crop_h))
           print(crop_w,crop_h,x,y)
           PY
           )"

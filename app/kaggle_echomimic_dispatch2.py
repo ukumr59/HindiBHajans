@@ -7,7 +7,7 @@ OUT=ROOT/'output'
 KDIR=ROOT/'.kaggle_worker'
 DDIR=ROOT/'.kaggle_dataset'
 INPUT_DATASET='bhajanaabha/hindibhajans-echomimic-inputs'
-KERNEL_PREFIX='bhajanaabha/hindibhajans-musetalk'
+KERNEL_PREFIX='bhajanaabha/hindibhajans-echomimic'
 
 def run(cmd,env):
     print('RUN:',*cmd,flush=True)
@@ -40,17 +40,26 @@ def publish_inputs(env,image,audio,seconds):
         'licenses':[{'name':'other'}]},indent=2))
     st=subprocess.run(['kaggle','datasets','status',INPUT_DATASET,'--format','json'],cwd=ROOT,env=env,capture_output=True,text=True)
     if st.returncode==0:
-        run(['kaggle','datasets','version','-p',str(DDIR),'-m',f'MuseTalk runtime inputs {seconds}s','-d'],env)
+        run(['kaggle','datasets','version','-p',str(DDIR),'-m',f'EchoMimic runtime inputs {seconds}s','-d'],env)
     else:
         run(['kaggle','datasets','create','-p',str(DDIR)],env)
     wait_dataset(env)
 
 def wait_kernel(env,kernel):
-    deadline=time.time()+12*60*60
+    deadline=time.time()+45*60
+    queued_since = None
+    MAX_QUEUE_WAIT = 15 * 60
     while time.time()<deadline:
         p=subprocess.run(['kaggle','kernels','status',kernel],cwd=ROOT,env=env,capture_output=True,text=True)
         status=(p.stdout+p.stderr).strip(); print(status,flush=True); low=status.lower()
         if 'complete' in low and not any(x in low for x in ('incomplete','not complete')): return True,status
+        if 'queued' in low:
+            if queued_since is None:
+                queued_since = time.time()
+            elif time.time() - queued_since > MAX_QUEUE_WAIT:
+                return False, 'KAGGLE_GPU_QUEUE_TIMEOUT: Kernel remained in QUEUED status for >15 minutes.'
+        else:
+            queued_since = None
         if any(x in low for x in ('error','failed','cancelled','canceled','cancel_acknowledged','cancel acknowledged')):
             log=subprocess.run(['kaggle','kernels','logs',kernel],cwd=ROOT,env=env,capture_output=True,text=True)
             log_text = log.stdout or log.stderr or ''
@@ -80,7 +89,7 @@ def run_kernel(env,kernel):
                f"Path('/kaggle/working/lipsync_quality_gate.py').write_bytes(base64.b64decode({gate_b64!r}))\n")
     marker="from __future__ import annotations\n"
     if marker not in worker_src:
-        raise RuntimeError('MuseTalk worker missing future-import marker')
+        raise RuntimeError('EchoMimic worker missing future-import marker')
     worker_src=worker_src.replace(marker,marker+bootstrap,1)
     (KDIR/'worker.py').write_text(worker_src,encoding='utf-8')
     (KDIR/'lipsync_quality_gate.py').write_bytes(gate_src)
@@ -89,11 +98,11 @@ def run_kernel(env,kernel):
           'dataset_sources':[INPUT_DATASET],'competition_sources':[],'kernel_sources':[],'model_sources':[]}
     (KDIR/'kernel-metadata.json').write_text(json.dumps(meta,indent=2))
     run([sys.executable,'-m','py_compile',str(KDIR/'worker.py'),str(KDIR/'lipsync_quality_gate.py')],env)
-    push=run(['kaggle','kernels','push','-p',str(KDIR),'--accelerator','NvidiaTeslaT4','--timeout',str(12*60*60)],env)
+    push=run(['kaggle','kernels','push','-p',str(KDIR),'--accelerator','NvidiaTeslaT4','--timeout',str(3600)],env)
     push_text=(push.stdout or '')+'\n'+(push.stderr or '')
     low=push_text.lower()
     if 'maximum weekly gpu quota' in low or ('gpu quota' in low and 'reached' in low):
-        raise RuntimeError('KAGGLE_GPU_QUOTA_EXHAUSTED: Kaggle refused GPU allocation before the MuseTalk kernel was created. Do not retry; wait for quota reset.')
+        raise RuntimeError('KAGGLE_GPU_QUOTA_EXHAUSTED: Kaggle refused GPU allocation before the EchoMimic kernel was created. Do not retry; wait for quota reset.')
     if push.returncode != 0:
         raise RuntimeError(f'KAGGLE_KERNEL_PUSH_FAILED: {push_text.strip()}')
     return wait_kernel(env,kernel)
@@ -111,7 +120,7 @@ def main(seconds):
     time.sleep(60)
     for attempt in (1, 2):
         kernel=f'{KERNEL_PREFIX}-{run_id}-{attempt}'.lower()
-        print(f'MUSETALK_KERNEL={kernel}',flush=True)
+        print(f'ECHOMIMIC_KERNEL={kernel}',flush=True)
         ok,detail=run_kernel(env,kernel)
         if ok:
             dest=OUT/'kaggle_output'; shutil.rmtree(dest,ignore_errors=True); dest.mkdir(parents=True)
@@ -122,7 +131,7 @@ def main(seconds):
             if not qa: raise RuntimeError('KAGGLE_COMPLETED_BUT_LIPSYNC_QA_MISSING')
             shutil.copy2(files[0],OUT/'master.mp4')
             shutil.copy2(qa[0],OUT/'lipsync_qa.json')
-            print('KAGGLE_MUSETALK_MASTER_READY',flush=True)
+            print('KAGGLE_ECHOMIMIC_MASTER_READY',flush=True)
             print('KAGGLE_LIPSYNC_QA_READY',flush=True)
             return
         print(detail,flush=True)
@@ -132,11 +141,11 @@ def main(seconds):
         detail_low=detail.lower()
         non_retryable=('traceback','importerror','modulenotfounderror','dependency_smoke_failed','lipsync_quality_gate_failed','syncnet_model_sha256_mismatch','out of memory','cuda out of memory')
         if any(x in detail_low for x in non_retryable):
-            raise RuntimeError('KAGGLE_MUSETALK_WORKER_NONRETRYABLE_FAILURE: '+detail)
+            raise RuntimeError('KAGGLE_ECHOMIMIC_WORKER_NONRETRYABLE_FAILURE: '+detail)
         if attempt < 2:
-            print(f'MUSETALK_AUTO_RETRY={attempt} terminal Kaggle state; waiting 90s before fresh kernel slug',flush=True)
+            print(f'ECHOMIMIC_AUTO_RETRY={attempt} terminal Kaggle state; waiting 90s before fresh kernel slug',flush=True)
             time.sleep(90)
-    raise RuntimeError('KAGGLE_MUSETALK_KERNEL_FAILED_AFTER_RETRY')
+    raise RuntimeError('KAGGLE_ECHOMIMIC_KERNEL_FAILED_AFTER_RETRY')
 
 if __name__=='__main__':
     import argparse
