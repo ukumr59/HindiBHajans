@@ -17,7 +17,7 @@ os.environ['HF_HOME'] = '/tmp/.cache/huggingface'
 os.environ['TORCH_HOME'] = '/tmp/.cache/torch'
 os.environ['PYTHONUNBUFFERED'] = '1'
 
-# Compatibility shim for diffusers on modern huggingface_hub
+# Compatibility shim for diffusers on modern huggingface_hub & transformers
 try:
     import huggingface_hub
     from huggingface_hub import constants
@@ -27,6 +27,18 @@ try:
         huggingface_hub.HfFolder = type('HfFolder', (), {'get_token': staticmethod(lambda: None)})
     if not hasattr(huggingface_hub, 'cached_download'):
         huggingface_hub.cached_download = getattr(huggingface_hub, 'hf_hub_download', None)
+except Exception:
+    pass
+
+try:
+    import transformers
+    import transformers.utils as _tu
+    if not hasattr(_tu, 'FLAX_WEIGHTS_NAME'):
+        _tu.FLAX_WEIGHTS_NAME = 'flax_model.msgpack'
+    if not hasattr(_tu, 'SAFE_WEIGHTS_NAME'):
+        _tu.SAFE_WEIGHTS_NAME = 'model.safetensors'
+    if not hasattr(_tu, 'WEIGHTS_NAME'):
+        _tu.WEIGHTS_NAME = 'pytorch_model.bin'
 except Exception:
     pass
 
@@ -71,6 +83,27 @@ def install_dependencies():
     )
     # facenet-pytorch installs MTCNN without compiling Pillow or touching PyTorch
     run(sys.executable, '-m', 'pip', 'install', '-q', '--no-deps', 'facenet-pytorch')
+
+    # Patch diffusers 0.24.0 pipeline_utils.py directly for compatibility with modern transformers
+    try:
+        import diffusers
+        p = Path(diffusers.__file__).parent / 'pipelines' / 'pipeline_utils.py'
+        if p.exists():
+            t = p.read_text(encoding='utf-8')
+            old_import = 'from transformers.utils import FLAX_WEIGHTS_NAME as TRANSFORMERS_FLAX_WEIGHTS_NAME'
+            new_import = (
+                'try:\n'
+                '        from transformers.utils import FLAX_WEIGHTS_NAME as TRANSFORMERS_FLAX_WEIGHTS_NAME\n'
+                '    except ImportError:\n'
+                '        TRANSFORMERS_FLAX_WEIGHTS_NAME = "flax_model.msgpack"'
+            )
+            if old_import in t:
+                t = t.replace(old_import, new_import, 1)
+                p.write_text(t, encoding='utf-8')
+                print('DIFFUSERS_FLAX_WEIGHTS_PATCH=APPLIED', flush=True)
+    except Exception as e:
+        print(f'DIFFUSERS_FLAX_WEIGHTS_PATCH_WARN: {e}', flush=True)
+
     print('=== ECHOMIMIC DEPENDENCIES INSTALLED ===', flush=True)
 
 
@@ -106,6 +139,14 @@ def setup_echomimic_repo(repo: Path):
             "    huggingface_hub.HfFolder = type('HfFolder', (), {'get_token': staticmethod(lambda: None)})\n"
             "if not hasattr(huggingface_hub, 'cached_download'):\n"
             "    huggingface_hub.cached_download = getattr(huggingface_hub, 'hf_hub_download', None)\n"
+            "try:\n"
+            "    import transformers\n"
+            "    import transformers.utils as _tu\n"
+            "    if not hasattr(_tu, 'FLAX_WEIGHTS_NAME'): _tu.FLAX_WEIGHTS_NAME = 'flax_model.msgpack'\n"
+            "    if not hasattr(_tu, 'SAFE_WEIGHTS_NAME'): _tu.SAFE_WEIGHTS_NAME = 'model.safetensors'\n"
+            "    if not hasattr(_tu, 'WEIGHTS_NAME'): _tu.WEIGHTS_NAME = 'pytorch_model.bin'\n"
+            "except Exception:\n"
+            "    pass\n"
         )
         txt = compat_shim + txt
         txt = txt.replace('from moviepy.editor import VideoFileClip, AudioFileClip', '# moviepy bypassed')
