@@ -42,6 +42,18 @@ try:
 except Exception:
     pass
 
+try:
+    import numpy as np
+    _orig_np_round = np.round
+    def _safe_np_round(a, *args, **kwargs):
+        try:
+            return _orig_np_round(a, *args, **kwargs)
+        except (TypeError, AttributeError):
+            return _orig_np_round(np.asarray(a, dtype=float), *args, **kwargs)
+    np.round = _safe_np_round
+except Exception:
+    pass
+
 
 def run(*args, cwd=None, env=None):
     print('RUN:', *args, flush=True)
@@ -147,6 +159,17 @@ def setup_echomimic_repo(repo: Path):
             "    if not hasattr(_tu, 'WEIGHTS_NAME'): _tu.WEIGHTS_NAME = 'pytorch_model.bin'\n"
             "except Exception:\n"
             "    pass\n"
+            "try:\n"
+            "    import numpy as np\n"
+            "    _orig_np_round = np.round\n"
+            "    def _safe_np_round(a, *args, **kwargs):\n"
+            "        try:\n"
+            "            return _orig_np_round(a, *args, **kwargs)\n"
+            "        except (TypeError, AttributeError):\n"
+            "            return _orig_np_round(np.asarray(a, dtype=float), *args, **kwargs)\n"
+            "    np.round = _safe_np_round\n"
+            "except Exception:\n"
+            "    pass\n"
         )
         txt = compat_shim + txt
         txt = txt.replace('from moviepy.editor import VideoFileClip, AudioFileClip', '# moviepy bypassed')
@@ -164,6 +187,11 @@ def setup_echomimic_repo(repo: Path):
         txt = txt.replace('\r\n', '\n').replace(target_block.replace('\r\n', '\n'), replacement_block)
         infer_file.write_text(txt, encoding='utf-8')
         print('ECHOMIMIC_MOVIEPY_BYPASS_PATCH=APPLIED', flush=True)
+        # Patch numpy 2.x round compatibility in infer_audio2vid_acc.py
+        txt = txt.replace("xyxy = np.round(xyxy).astype('int')", "xyxy = [int(round(float(x))) for x in select_bbox[:4]]")
+        txt = txt.replace('xyxy = np.round(xyxy).astype(int)', "xyxy = [int(round(float(x))) for x in select_bbox[:4]]")
+        infer_file.write_text(txt, encoding='utf-8')
+        print('ECHOMIMIC_NUMPY_ROUND_PATCH=APPLIED', flush=True)
 
     print('=== STEP 3: DOWNLOADING ECHOMIMIC WEIGHTS ===', flush=True)
     weights_dir = repo / 'pretrained_weights'
