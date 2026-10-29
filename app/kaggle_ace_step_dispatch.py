@@ -162,67 +162,118 @@ def dispatch(seconds: int) -> None:
         ]
     }
     (OUT / "youtube_seo.json").write_text(json.dumps(seo_info, ensure_ascii=False, indent=2), encoding="utf-8")
-    
+
+    env = dict(os.environ); env['KAGGLE_API_TOKEN'] = token
+    target_mp3 = OUT / 'bhajan_source.mp3'
+    if target_mp3.exists() and target_mp3.stat().st_size > 100_000:
+        print('KAGGLE_ACE_STEP_MASTER_AUDIO_ALREADY_EXISTS', target_mp3, flush=True)
+        return
+
+    # Check previous static kernel output in case it completed right after runner timeout
+    check_kernels = [KAGGLE_KERNEL]
+    for prev_k in check_kernels:
+        st = subprocess.run(['kaggle', 'kernels', 'status', prev_k], capture_output=True, text=True, env=env)
+        st_low = (st.stdout or st.stderr or '').lower()
+        if 'complete' in st_low and not any(x in st_low for x in ('incomplete', 'not complete')):
+            print(f'Found completed kernel {prev_k}; checking for bhajan_source.mp3 output...', flush=True)
+            outdir = OUT / 'kaggle_audio_output'
+            shutil.rmtree(outdir, ignore_errors=True)
+            subprocess.run(['kaggle', 'kernels', 'output', prev_k, '-p', str(outdir), '--force'], cwd=ROOT, env=env, capture_output=True)
+            candidates = list(outdir.rglob('bhajan_source.mp3'))
+            if candidates and candidates[0].stat().st_size > 100_000:
+                shutil.copy2(candidates[0], target_mp3)
+                print('KAGGLE_ACE_STEP_REUSED_COMPLETED_AUDIO', target_mp3, flush=True)
+                return
+
+    run_id = os.getenv('GITHUB_RUN_ID', 'manual')
+    for attempt in (1, 2):
+        kernel = f"bhajanaabha/hindibhajans-ace-{run_id}-{attempt}".lower()
+        print(f'=== ATTEMPT {attempt}: LAUNCHING KAGGLE AUDIO KERNEL {kernel} ===', flush=True)
+        ok, detail = run_audio_kernel(env, kernel, seconds, daily_entry)
+        if ok:
+            outdir = OUT / 'kaggle_audio_output'
+            shutil.rmtree(outdir, ignore_errors=True)
+            output_cmd = ['kaggle', 'kernels', 'output', kernel, '-p', str(outdir), '--force']
+            print('RUN:', ' '.join(output_cmd), flush=True)
+            op = subprocess.run(output_cmd, cwd=ROOT, env=env, text=True, capture_output=True)
+            print(op.stdout, flush=True)
+            if op.stderr: print(op.stderr, flush=True)
+            candidates = list(outdir.rglob('bhajan_source.mp3'))
+            if not candidates:
+                raise RuntimeError(f'KAGGLE_ACE_STEP_OUTPUT_MISSING:output_rc={op.returncode}')
+            shutil.copy2(candidates[0], target_mp3)
+            print('KAGGLE_ACE_STEP_MASTER_AUDIO_READY', flush=True)
+            return
+        print(f'ATTEMPT {attempt} FAILED: {detail}', flush=True)
+        if 'exhausted' in detail.lower():
+            raise RuntimeError(detail)
+        if attempt < 2:
+            print('Waiting 60s before retrying with fresh kernel slug...', flush=True)
+            time.sleep(60)
+    raise RuntimeError('KAGGLE_ACE_STEP_FAILED_AFTER_RETRIES')
+
+
+def run_audio_kernel(env: dict[str, str], kernel: str, seconds: int, daily_entry: dict) -> tuple[bool, str]:
     shutil.rmtree(KDIR, ignore_errors=True); KDIR.mkdir(parents=True)
     (KDIR/'worker.py').write_text(
         worker_code(seconds, prompt=daily_entry['prompt'], lyrics=daily_entry['lyrics'], bpm=daily_entry.get('bpm', 128)),
         encoding='utf-8'
     )
-    (KDIR/'kernel-metadata.json').write_text(json.dumps({'id':KAGGLE_KERNEL,'title':'hindibhajans-ace-step','code_file':'worker.py','language':'python','kernel_type':'script','is_private':True,'enable_gpu':True,'enable_internet':True,'machine_shape':'NvidiaTeslaT4','dataset_sources':[],'competition_sources':[],'kernel_sources':[],'model_sources':[]},indent=2),encoding='utf-8')
-    env=dict(os.environ); env['KAGGLE_API_TOKEN']=token
-    diag=subprocess.run(['kaggle','kernels','list','--mine','--page-size','5'],cwd=ROOT,env=env,capture_output=True,text=True)
-    print('KAGGLE_MY_KERNELS:', (diag.stdout or diag.stderr or '').strip(), flush=True)
-    run('kaggle','kernels','push','-p',str(KDIR),'--accelerator','NvidiaTeslaT4','--timeout',str(1800),cwd=ROOT,env=env)
-    deadline=time.time()+40*60
+    kernel_title = kernel.rsplit('/', 1)[-1]
+    (KDIR/'kernel-metadata.json').write_text(
+        json.dumps({
+            'id': kernel,
+            'title': kernel_title,
+            'code_file': 'worker.py',
+            'language': 'python',
+            'kernel_type': 'script',
+            'is_private': True,
+            'enable_gpu': True,
+            'enable_internet': True,
+            'machine_shape': 'NvidiaTeslaT4',
+            'dataset_sources': [],
+            'competition_sources': [],
+            'kernel_sources': [],
+            'model_sources': []
+        }, indent=2),
+        encoding='utf-8'
+    )
+    push = subprocess.run(['kaggle', 'kernels', 'push', '-p', str(KDIR), '--accelerator', 'NvidiaTeslaT4', '--timeout', '1800'], cwd=ROOT, env=env, capture_output=True, text=True)
+    push_text = (push.stdout or '') + '\n' + (push.stderr or '')
+    print('KAGGLE_PUSH_OUTPUT:', push_text.strip(), flush=True)
+    low = push_text.lower()
+    if 'maximum weekly gpu quota' in low or ('gpu quota' in low and 'reached' in low):
+        raise RuntimeError('KAGGLE_GPU_QUOTA_EXHAUSTED: Kaggle refused GPU allocation.')
+    if push.returncode != 0:
+        raise RuntimeError(f'KAGGLE_KERNEL_PUSH_FAILED: {push_text.strip()}')
+
+    deadline = time.time() + 35 * 60
     queued_since = None
-    MAX_QUEUE_WAIT = 25 * 60  # 25 min maximum in QUEUED during peak hours
-    while time.time()<deadline:
-        p=subprocess.run(['kaggle','kernels','status',KAGGLE_KERNEL],capture_output=True,text=True,env=env)
-        status_text=p.stdout or p.stderr
-        print(status_text,flush=True)
-        t=(p.stdout+p.stderr).lower()
-        if 'complete' in t: break
+    MAX_QUEUE_WAIT = 15 * 60
+    while time.time() < deadline:
+        p = subprocess.run(['kaggle', 'kernels', 'status', kernel], capture_output=True, text=True, env=env)
+        status_text = (p.stdout or p.stderr).strip()
+        print(f'{kernel} STATUS: {status_text}', flush=True)
+        t = status_text.lower()
+        if 'complete' in t and not any(x in t for x in ('incomplete', 'not complete')):
+            return True, status_text
         if 'queued' in t:
             if queued_since is None:
                 queued_since = time.time()
             elif time.time() - queued_since > MAX_QUEUE_WAIT:
-                raise RuntimeError('KAGGLE_GPU_QUEUE_TIMEOUT: Kernel remained in QUEUED status for >25 minutes. Kaggle GPU pool is congested.')
+                return False, f'KAGGLE_GPU_QUEUE_TIMEOUT: {kernel} remained in QUEUED for >15 min.'
         else:
             queued_since = None
-        if any(x in t for x in ('error','failed','cancelled','canceled')):
-            print('KAGGLE_ACE_STEP_FETCHING_ERROR_LOGS=START', flush=True)
-            lp=subprocess.run(['kaggle','kernels','logs',KAGGLE_KERNEL],capture_output=True,text=True,env=env)
-            print(lp.stdout or lp.stderr,flush=True)
-            if lp.returncode != 0:
-                outdir=OUT/'kaggle_audio_error_output'; shutil.rmtree(outdir,ignore_errors=True)
-                op=subprocess.run(['kaggle','kernels','output',KAGGLE_KERNEL,'-p',str(outdir),'--force'],capture_output=True,text=True,env=env)
-                print(op.stdout or op.stderr,flush=True)
-                for f in sorted(outdir.rglob('*')):
-                    if f.is_file() and f.stat().st_size < 2_000_000:
-                        try: print(f'--- {f} ---\n{f.read_text(errors="replace")}',flush=True)
-                        except Exception: pass
-            print('KAGGLE_ACE_STEP_FETCHING_ERROR_LOGS=END', flush=True)
-            raise RuntimeError('KAGGLE_ACE_STEP_KERNEL_FAILED')
+        if any(x in t for x in ('error', 'failed', 'cancelled', 'canceled')):
+            lp = subprocess.run(['kaggle', 'kernels', 'logs', kernel], capture_output=True, text=True, env=env)
+            log_text = lp.stdout or lp.stderr or ''
+            return False, f'KAGGLE_KERNEL_ERROR: {status_text}\n{log_text}'
         time.sleep(30)
-    else: raise TimeoutError('KAGGLE_ACE_STEP_KERNEL_TIMEOUT')
-
-    outdir=OUT/'kaggle_audio_output'; shutil.rmtree(outdir,ignore_errors=True)
-    output_cmd=['kaggle','kernels','output',KAGGLE_KERNEL,'-p',str(outdir),'--force']
-    print('RUN:', ' '.join(output_cmd), flush=True)
-    # The CLI may report a non-zero status after partially downloading an
-    # output set. Do not discard a valid final MP3 merely because another
-    # server-side output entry failed.
-    op=subprocess.run(output_cmd,cwd=ROOT,env=env,text=True,capture_output=True)
-    print(op.stdout,flush=True)
-    if op.stderr: print(op.stderr,flush=True)
-    candidates=list(outdir.rglob('bhajan_source.mp3'))
-    if not candidates:
-        raise RuntimeError(f'KAGGLE_ACE_STEP_OUTPUT_MISSING:output_rc={op.returncode}')
-    shutil.copy2(candidates[0],OUT/'bhajan_source.mp3')
-    print('KAGGLE_ACE_STEP_MASTER_AUDIO_READY',flush=True)
+    return False, f'KAGGLE_KERNEL_TIMEOUT: {kernel}'
 
 
-if __name__=='__main__':
+if __name__ == '__main__':
     import argparse
-    ap=argparse.ArgumentParser(); ap.add_argument('--seconds',type=int,default=180)
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--seconds', type=int, default=180)
     dispatch(ap.parse_args().seconds)
