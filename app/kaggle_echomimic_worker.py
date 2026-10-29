@@ -13,8 +13,8 @@ INPUT = Path('/kaggle/input')
 FPS = 24
 
 # Redirect HuggingFace & Torch caches to 20GB working partition
-os.environ['HF_HOME'] = str(FINAL / '.cache' / 'huggingface')
-os.environ['TORCH_HOME'] = str(FINAL / '.cache' / 'torch')
+os.environ['HF_HOME'] = '/tmp/.cache/huggingface'
+os.environ['TORCH_HOME'] = '/tmp/.cache/torch'
 os.environ['PYTHONUNBUFFERED'] = '1'
 
 
@@ -50,6 +50,7 @@ def install_dependencies():
         'install',
         '-q',
         '--prefer-binary',
+        'huggingface_hub<0.25.0',
         'diffusers==0.24.0',
         'omegaconf==2.3.0',
         'einops',
@@ -80,10 +81,16 @@ def setup_echomimic_repo(repo: Path):
             pipe_file.write_text(src_text, encoding='utf-8')
             print('ECHOMIMIC_CPU_DECODE_PATCH=APPLIED', flush=True)
 
-    # Patch infer_audio2vid_acc.py to bypass moviepy with instantaneous ffmpeg remux
+    # Patch infer_audio2vid_acc.py to bypass moviepy and inject hf_cache_home compatibility shim
     infer_file = repo / 'infer_audio2vid_acc.py'
     if infer_file.exists():
         txt = infer_file.read_text(encoding='utf-8')
+        compat_shim = (
+            "import os, huggingface_hub.constants\n"
+            "if not hasattr(huggingface_hub.constants, 'hf_cache_home'):\n"
+            "    huggingface_hub.constants.hf_cache_home = os.path.expanduser(os.getenv('HF_HOME', os.path.join(os.getenv('XDG_CACHE_HOME', '~/.cache'), 'huggingface')))\n"
+        )
+        txt = compat_shim + txt
         txt = txt.replace('from moviepy.editor import VideoFileClip, AudioFileClip', '# moviepy bypassed')
         target_block = (
             '            video_clip = VideoFileClip(f"{save_dir}/{ref_name}_{audio_name}_{args.H}x{args.W}_{int(args.cfg)}_{time_str}.mp4")\n'
