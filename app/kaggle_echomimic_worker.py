@@ -17,6 +17,19 @@ os.environ['HF_HOME'] = '/tmp/.cache/huggingface'
 os.environ['TORCH_HOME'] = '/tmp/.cache/torch'
 os.environ['PYTHONUNBUFFERED'] = '1'
 
+# Compatibility shim for diffusers on modern huggingface_hub
+try:
+    import huggingface_hub
+    from huggingface_hub import constants
+    if not hasattr(constants, 'hf_cache_home'):
+        constants.hf_cache_home = getattr(constants, 'HF_HOME', '/tmp/.cache/huggingface')
+    if not hasattr(huggingface_hub, 'HfFolder'):
+        huggingface_hub.HfFolder = type('HfFolder', (), {'get_token': staticmethod(lambda: None)})
+    if not hasattr(huggingface_hub, 'cached_download'):
+        huggingface_hub.cached_download = getattr(huggingface_hub, 'hf_hub_download', None)
+except Exception:
+    pass
+
 
 def run(*args, cwd=None, env=None):
     print('RUN:', *args, flush=True)
@@ -50,7 +63,6 @@ def install_dependencies():
         'install',
         '-q',
         '--prefer-binary',
-        'huggingface_hub<0.25.0',
         'diffusers==0.24.0',
         'omegaconf==2.3.0',
         'einops',
@@ -86,9 +98,14 @@ def setup_echomimic_repo(repo: Path):
     if infer_file.exists():
         txt = infer_file.read_text(encoding='utf-8')
         compat_shim = (
-            "import os, huggingface_hub.constants\n"
-            "if not hasattr(huggingface_hub.constants, 'hf_cache_home'):\n"
-            "    huggingface_hub.constants.hf_cache_home = os.path.expanduser(os.getenv('HF_HOME', os.path.join(os.getenv('XDG_CACHE_HOME', '~/.cache'), 'huggingface')))\n"
+            "import os, huggingface_hub\n"
+            "from huggingface_hub import constants\n"
+            "if not hasattr(constants, 'hf_cache_home'):\n"
+            "    constants.hf_cache_home = getattr(constants, 'HF_HOME', os.path.expanduser('~/.cache/huggingface'))\n"
+            "if not hasattr(huggingface_hub, 'HfFolder'):\n"
+            "    huggingface_hub.HfFolder = type('HfFolder', (), {'get_token': staticmethod(lambda: None)})\n"
+            "if not hasattr(huggingface_hub, 'cached_download'):\n"
+            "    huggingface_hub.cached_download = getattr(huggingface_hub, 'hf_hub_download', None)\n"
         )
         txt = compat_shim + txt
         txt = txt.replace('from moviepy.editor import VideoFileClip, AudioFileClip', '# moviepy bypassed')
