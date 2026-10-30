@@ -297,6 +297,10 @@ test_cases:
         str(FPS),
         '--cfg',
         '1.0',
+        '--context_frames',
+        '16',
+        '--context_overlap',
+        '2',
     ]
     run(*infer_cmd, cwd=repo, env=infer_env)
     elapsed = time.time() - started

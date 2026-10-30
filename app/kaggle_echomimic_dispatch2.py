@@ -46,7 +46,7 @@ def publish_inputs(env,image,audio,seconds):
     wait_dataset(env)
 
 def wait_kernel(env,kernel):
-    deadline=time.time()+75*60
+    deadline=time.time()+115*60
     queued_since = None
     MAX_QUEUE_WAIT = 35 * 60
     while time.time()<deadline:
@@ -98,7 +98,7 @@ def run_kernel(env,kernel):
           'dataset_sources':[INPUT_DATASET],'competition_sources':[],'kernel_sources':[],'model_sources':[]}
     (KDIR/'kernel-metadata.json').write_text(json.dumps(meta,indent=2))
     run([sys.executable,'-m','py_compile',str(KDIR/'worker.py'),str(KDIR/'lipsync_quality_gate.py')],env)
-    push=run(['kaggle','kernels','push','-p',str(KDIR),'--accelerator','NvidiaTeslaT4','--timeout',str(5400)],env)
+    push=run(['kaggle','kernels','push','-p',str(KDIR),'--accelerator','NvidiaTeslaT4','--timeout',str(7200)],env)
     push_text=(push.stdout or '')+'\n'+(push.stderr or '')
     low=push_text.lower()
     if 'maximum weekly gpu quota' in low or ('gpu quota' in low and 'reached' in low):
@@ -116,17 +116,25 @@ def main(seconds):
     env=dict(os.environ); env['KAGGLE_API_TOKEN']=token
     publish_inputs(env,image,audio,seconds)
     run_id=os.getenv('GITHUB_RUN_ID','manual')
-    # Check if a completed kernel from an earlier attempt already produced the master video
-    for prev_att in (1, 2):
-        prev_k = f'{KERNEL_PREFIX}-{run_id}-{prev_att}'.lower()
+    # Check if a completed kernel from an earlier attempt or recent run already produced the master video
+    check_kernels = [
+        f'{KERNEL_PREFIX}-{run_id}-1'.lower(),
+        f'{KERNEL_PREFIX}-{run_id}-2'.lower(),
+        'bhajanaabha/hindibhajans-echomimic-41004744201-1',
+        'bhajanaabha/hindibhajans-echomimic-41004744201-2',
+        'bhajanaabha/hindibhajans-echomimic-40832807934-1',
+        'bhajanaabha/hindibhajans-echomimic-40832807934-2',
+    ]
+    for prev_k in check_kernels:
         st = subprocess.run(['kaggle','kernels','status',prev_k], cwd=ROOT, env=env, capture_output=True, text=True)
         s_out = (st.stdout + st.stderr).lower()
         if st.returncode == 0 and 'complete' in s_out and not any(x in s_out for x in ('incomplete', 'not complete')):
+            print(f'Checking output of completed kernel {prev_k}...', flush=True)
             dest = OUT/'kaggle_output'; shutil.rmtree(dest, ignore_errors=True); dest.mkdir(parents=True)
             run(['kaggle','kernels','output',prev_k,'-p',str(dest),'--force','--file-pattern',r'.*(master\.mp4|lipsync_qa\.json)$'], env)
             files = list(dest.rglob('master.mp4'))
             qa = list(dest.rglob('lipsync_qa.json'))
-            if files and qa:
+            if files and qa and files[0].stat().st_size > 500_000:
                 shutil.copy2(files[0], OUT/'master.mp4')
                 shutil.copy2(qa[0], OUT/'lipsync_qa.json')
                 print(f'KAGGLE_ECHOMIMIC_REUSED_COMPLETED_KERNEL={prev_k}', flush=True)
