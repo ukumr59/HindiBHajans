@@ -170,6 +170,13 @@ def setup_echomimic_repo(repo: Path):
             "    np.round = _safe_np_round\n"
             "except Exception:\n"
             "    pass\n"
+            "try:\n"
+            "    import torch\n"
+            "    torch.backends.cudnn.benchmark = True\n"
+            "    if hasattr(torch.backends.cuda.matmul, 'allow_tf32'): torch.backends.cuda.matmul.allow_tf32 = True\n"
+            "    if hasattr(torch.backends.cudnn, 'allow_tf32'): torch.backends.cudnn.allow_tf32 = True\n"
+            "except Exception:\n"
+            "    pass\n"
         )
         txt = compat_shim + txt
         txt = txt.replace('from moviepy.editor import VideoFileClip, AudioFileClip', '# moviepy bypassed')
