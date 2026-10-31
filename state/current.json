@@ -1,10 +1,10 @@
 {
-  "workflow_run_id": "41130931881",
+  "workflow_run_id": "41178246470",
   "workflow": "bhajan-daily-production",
   "model": "EchoMimicV3-Flash",
   "gpu_provider": "Kaggle-free-T4",
   "shorts": 3,
-  "publishing": "not_run",
+  "publishing": "youtube+facebook+instagram",
   "audio_model": "ACE-Step-v1.5-turbo",
   "audio_gpu_provider": "Kaggle-free-T4",
   "video_model": "MuseTalk-1.5",
