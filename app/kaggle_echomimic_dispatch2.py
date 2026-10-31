@@ -120,6 +120,7 @@ def main(seconds):
     check_kernels = [
         f'{KERNEL_PREFIX}-{run_id}-1'.lower(),
         f'{KERNEL_PREFIX}-{run_id}-2'.lower(),
+        'bhajanaabha/hindibhajans-echomimic-41130931881-1',
         'bhajanaabha/hindibhajans-echomimic-41004744201-1',
         'bhajanaabha/hindibhajans-echomimic-41004744201-2',
         'bhajanaabha/hindibhajans-echomimic-40832807934-1',
