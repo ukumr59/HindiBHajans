@@ -17,11 +17,28 @@ MIN_MOTION_RATIO = 0.20
 
 def detect(detector, frame):
     h, w = frame.shape[:2]
-    detector.setInputSize((w, h))
-    _, faces = detector.detect(frame)
-    if faces is None:
-        return []
-    valid = [f for f in faces if float(f[-1]) >= 0.75]
+    max_dim = max(h, w)
+    if max_dim > 640:
+        scale = 640.0 / max_dim
+        dw, dh = int(round(w * scale)), int(round(h * scale))
+        resized = cv2.resize(frame, (dw, dh), interpolation=cv2.INTER_AREA)
+        detector.setInputSize((dw, dh))
+        _, faces = detector.detect(resized)
+        if faces is None:
+            return []
+        scaled_faces = []
+        for f in faces:
+            sf = f.copy().astype(np.float32)
+            sf[:4] = sf[:4] / scale
+            sf[4:14] = sf[4:14] / scale
+            scaled_faces.append(sf)
+        faces = scaled_faces
+    else:
+        detector.setInputSize((w, h))
+        _, faces = detector.detect(frame)
+        if faces is None:
+            return []
+    valid = [f for f in faces if float(f[-1]) >= 0.70]
     valid.sort(key=lambda f: float(f[-1]), reverse=True)
     dedup = []
     for f in valid:
