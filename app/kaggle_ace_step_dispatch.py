@@ -83,7 +83,11 @@ def main():
     lines = (REPO / 'requirements.txt').read_text().splitlines()
     req.write_text('\n'.join(x for x in lines if not x.strip().startswith(('flash-attn','triton'))) + '\n')
     run(sys.executable, '-m', 'pip', 'install', '-q', '-r', str(req))
-    run(sys.executable, '-m', 'pip', 'install', '-q', '--no-deps', '-e', str(REPO))
+    # Patch Python 3.13 constraint if present in pyproject.toml
+    for f in [REPO / 'pyproject.toml', REPO / 'setup.py']:
+        if f.exists():
+            f.write_text(f.read_text().replace('<3.13,', '').replace('<3.13', ''))
+    # Load pure-python package directly via sys.path without pip python-version blocker
     os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
     os.environ['ACESTEP_SAVE_MEMORY'] = '1'
     os.environ['ACESTEP_DTYPE'] = 'float32'
