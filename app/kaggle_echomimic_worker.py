@@ -199,6 +199,23 @@ def setup_echomimic_repo(repo: Path):
         txt = txt.replace('xyxy = np.round(xyxy).astype(int)', "xyxy = [int(round(float(x))) for x in select_bbox[:4]]")
         infer_file.write_text(txt, encoding='utf-8')
         print('ECHOMIMIC_NUMPY_ROUND_PATCH=APPLIED', flush=True)
+        # Preserve full devotional scene and 3D deity idol (prevent aggressive face-crop zoom-in)
+        old_crop = (
+            "                face_img, _ = crop_and_pad(face_img, crop_rect)\n"
+            "                face_mask, _ = crop_and_pad(face_mask, crop_rect)\n"
+            "                face_img = cv2.resize(face_img, (args.W, args.H))\n"
+            "                face_mask = cv2.resize(face_mask, (args.W, args.H))"
+        )
+        new_crop = (
+            "                if getattr(args, 'facecrop_dilation_ratio', 0.5) > 0:\n"
+            "                    face_img, _ = crop_and_pad(face_img, crop_rect)\n"
+            "                    face_mask, _ = crop_and_pad(face_mask, crop_rect)\n"
+            "                face_img = cv2.resize(face_img, (args.W, args.H))\n"
+            "                face_mask = cv2.resize(face_mask, (args.W, args.H))"
+        )
+        txt = txt.replace(old_crop, new_crop)
+        infer_file.write_text(txt, encoding='utf-8')
+        print('ECHOMIMIC_FULL_SCENE_NO_ZOOM_PATCH=APPLIED', flush=True)
 
     print('=== STEP 3: DOWNLOADING ECHOMIMIC WEIGHTS ===', flush=True)
     weights_dir = repo / 'pretrained_weights'
@@ -292,11 +309,15 @@ test_cases:
         '-L',
         str(target_frames),
         '--steps',
-        '6',
+        '8',
         '--fps',
         str(FPS),
         '--cfg',
-        '1.0',
+        '1.8',
+        '--facecrop_dilation_ratio',
+        '-1.0',
+        '--facemusk_dilation_ratio',
+        '0.2',
         '--context_frames',
         '16',
         '--context_overlap',

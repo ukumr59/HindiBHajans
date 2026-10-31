@@ -1,4 +1,4 @@
-"""Daily Hindu Deity and Mythological Bhajan Catalog.
+"""Daily Hindu Deity and Mythological Classic Hit Bhajan Catalog.
 
 Covers:
 - Lord Shiva (Mahadev, Rudra, Bholenath)
@@ -8,9 +8,9 @@ Covers:
 - Goddess Durga (Bhavani, Mahishasura Mardini, Sherawali)
 - Goddess Kali (Maha Kali, Kaalratri, Adishakti)
 
-Music style: High-energy modern devotional, 128-132 BPM, powerful DJ-friendly drops,
-punchy dholak/dhol, nagada, temple bells, shankha, and modern bassline synthesis.
-Zero-cost, fully autonomous generation for Bhajan Aabha.
+Music style: High-energy modern DJ devotional remixes (128-132 BPM), punchy electronic dhol,
+deep 808 sub bass, melodic temple bells, shankha, synthesizer leads, and pristine Hindi/Sanskrit
+mantra pronunciation using phonetic syllable transliteration.
 """
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from typing import TypedDict
 
 class BhajanThematicEntry(TypedDict):
     deity: str
+    scene_file: str
     title_hi: str
     title_en: str
     short_caption: str
@@ -31,281 +32,291 @@ class BhajanThematicEntry(TypedDict):
 CATALOG: list[BhajanThematicEntry] = [
     {
         "deity": "Lord Shiva",
-        "title_hi": "हे महाकाल शम्भू | तांडव स्तोत्रम भाव",
-        "title_en": "Hey Mahakal Shambhu | Shiva Tandav Devotional EDM Bhajan",
-        "short_caption": "हर हर महादेव! भस्म आरती और तांडव भाव का शक्तिशाली शिव भजन 🙏 #Mahadev #Shiva #BhajanAabha",
+        "scene_file": "shiva_scene.png",
+        "title_hi": "नमो नमो जी शंकरा | हर हर शम्भू डीजे भजन",
+        "title_en": "Namo Namo Ji Shankara | Har Har Shambhu Modern DJ Devotional Remix",
+        "short_caption": "हर हर महादेव! नमो नमो जी शंकरा और हर हर शम्भू का ऊर्जावान डीजे रीमिक्स 🙏 #Mahadev #Shiva #BhajanAabha",
         "bpm": 128,
         "prompt": (
-            "Modern high-energy Hindi devotional Shiva bhajan, 128 BPM, 4/4, powerful dynamic male devotional vocal, "
-            "deep punchy dhol, intense temple bells, resonant shankha horn, electronic bass drops, melodic damru rhythms, "
-            "catchy anthem chorus, polished club and DJ production, crisp and clean Hindi pronunciation. "
-            "NOT ambient, NOT low energy, NOT slow meditation."
+            "Modern high-energy Indian DJ devotional dance remix, 128 BPM, 4/4, "
+            "deep punchy electronic dhol, rolling 808 sub-bass drops, intense temple bells, resonant shankha horn, "
+            "catchy festival anthem lead synths, clear melodic studio devotional singing, "
+            "flawless authentic Hindi pronunciation of Om Namah Shivaya and Shiva mantras. "
+            "NOT low energy, NOT slow ambient."
         ),
         "lyrics": """[Intro]
-ॐ नमः शिवाय... हर हर महादेव...
-जय शम्भू... जय महाकाल...
+Om Namah Shivaya... Om Namah Shivaya...
+Har Har Mahadev! Jai Bholenath!
 
 [Verse 1]
-जटा कटा हसंभ्रम भ्रमन्निलिम्पनिर्झरी
-माथे पर चंदा विराजे, त्रिशूल धरे त्रिपुरारी
-डमरू बाजे घनघनाए, डम डम डम डम डमरू बोले
-भक्तों के संकट को हरने, शिव शंकर का डमरू डोले
+Namo Namo Ji Shankara, Bholenath Shankara
+Hey Triloknath Shambhu, Hey Shivay Shankara
+Chandrama Bhaale Viraje, Ganga Jata Mein Sajayi
+Damru Baaje Dam Dam Dam, Mahima Tribhuvan Chhayi
 
 [Chorus]
-हर हर शम्भू, जय जय शम्भू
-हे त्रिपुरारी, संकटहारी शम्भू
-हर हर शम्भू, जय जय शम्भू
-मेरे मन में बसते भोले शम्भू
+Har Har Shambhu, Har Har Shambhu
+Shiv Mahadeva Shambhu
+Har Har Shambhu, Har Har Shambhu
+Bhole Bhandari Shambhu
 
 [Verse 2]
-गंगा की पावन धारा बहती, नीलकंठ विषधारी
-भस्म रमाए बैठे नंदी, महिमा त्रिभुवन भारी
-कैलाशी अविनाशी स्वामी, तू ही अंत अरु आदि
-तेरी शरण में आया जो भी, बिगड़ी बात बना दी
+Neelkanth Vishdhaari Swami, Bhakti Teri Paayi
+Bhasma Aarti Karke Bhole, Sabki Vipda Mitayi
+Kailashi Avinashi Bhole, Tu Hi Ant Aur Aadi
+Sharan Mein Jo Bhi Aaya Prabhu Ke, Bigdi Baat Banadi
 
 [Chorus]
-हर हर शम्भू, जय जय शम्भू
-हे त्रिपुरारी, संकटहारी शम्भू
-हर हर शम्भू, जय जय शम्भू
-मेरे मन में बसते भोले शम्भू
+Har Har Shambhu, Har Har Shambhu
+Shiv Mahadeva Shambhu
+Har Har Shambhu, Har Har Shambhu
+Bhole Bhandari Shambhu
 
 [Drop]
-ॐ नमः शिवाय... बम बम भोले...
+Har Har Mahadev... Om Namah Shivaya!
 
 [Outro]
-हर हर महादेव... शम्भू... ॐ नमः शिवाय...""",
-    },
-    {
-        "deity": "Lord Hanuman",
-        "title_hi": "बजरंग बाण गूंजे | संकटमोचन हनुमान भजन",
-        "title_en": "Bajrangbali Jai Jai Hanuman | High Energy DJ Devotional Bhajan",
-        "short_caption": "जय वीर बजरंगी! संकटमोचन श्री हनुमान का ऊर्जावान भजन 🙏 #Hanuman #Bajrangbali #BhajanAabha",
-        "bpm": 130,
-        "prompt": (
-            "Modern energetic Hindi devotional Hanuman bhajan, 130 BPM, 4/4, heroic and thunderous male devotional vocals, "
-            "thundering nagada and punjabi dhol, temple bells, brass horns, driving rhythmic synthesizer bass, "
-            "soaring anthem chorus, stadium energy, perfect Hindi pronunciation. "
-            "NOT low energy, NOT acoustic-only."
-        ),
-        "lyrics": """[Intro]
-जय बजरंगबली... जय श्री राम...
-पवनसुत हनुमान की जय...
-
-[Verse 1]
-अतुलित बलधामा हे स्वामी, अंजनी के नंदन प्यारे
-राम काज संवारने वाले, भक्तों के कष्ट निवारे
-सिंदूरी चोला तन सोहे, गदा हाथ विकराली
-लंका जलाई पल भर में, सुर-असुर सब बलिहारी
-
-[Chorus]
-जय बजरंगी, संकट भंजन
-हे महावीर, हे राम दुलारे
-जय बजरंगी, संकट भंजन
-काटो कष्ट हमारे प्यारे
-
-[Verse 2]
-लक्ष्मण के प्राण बचाए, बूटी ले आए संजीवन
-राम नाम उर में जो ध्याए, पावन हो जाए जीवन
-भूत पिसाच निकट नहिं आवै, महावीर जब नाम सुनावै
-तेरी कृपा से राम मिलेंगे, हर संकट कट जावै
-
-[Chorus]
-जय बजरंगी, संकट भंजन
-हे महावीर, हे राम दुलारे
-जय बजरंगी, संकट भंजन
-काटो कष्ट हमारे प्यारे
-
-[Drop]
-जय श्री राम... जय वीर हनुमान...
-
-[Outro]
-सियापति रामचंद्र की जय... पवनसुत हनुमान की जय...""",
+Om Namah Shivaya... Har Har Shambhu...""",
     },
     {
         "deity": "Lord Krishna",
-        "title_hi": "गोविंदा गोपाला | बाँसुरी और ढोल रस भजन",
-        "title_en": "Govinda Gopala | Modern Melodic Krishna Bhajan",
-        "short_caption": "राधे कृष्णा! बाल गोपाल और मुरली मनोहर का मधुर ऊर्जावान भजन 🙏 #Krishna #RadheKrishna #BhajanAabha",
-        "bpm": 128,
+        "scene_file": "krishna_scene.png",
+        "title_hi": "अच्युतम केशवम | राधे राधे बरसाने वाली डीजे भजन",
+        "title_en": "Achyutam Keshavam | Radhe Radhe Barsane Wali DJ Devotional Remix",
+        "short_caption": "जय श्री कृष्णा! अच्युतम केशवम और राधे राधे का मनमोहक डीजे भक्ति रीमिक्स 🙏 #Krishna #RadhaKrishna #BhajanAabha",
+        "bpm": 130,
         "prompt": (
-            "Modern upbeat Hindi devotional Krishna bhajan, 128 BPM, 4/4, joyous uplifting male vocal, "
-            "enchanting bansuri flute hooks, energetic groovy dholak and tabla, modern dance synths, "
-            "euphoric festive chorus, rhythmic claps, clean and soulful Hindi singing. "
-            "NOT mournful, NOT slow."
+            "Modern vibrant Indian DJ devotional dance remix, 130 BPM, 4/4, "
+            "infectious electronic dholak groove, melodic bansuri flute leads, thumping bass drops, "
+            "uplifting stadium chorus, clear melodic vocal enunciation, "
+            "crystal clear Sanskrit-Hindi pronunciation of Achyutam Keshavam and Hare Krishna. "
+            "NOT acoustic only, NOT mournful."
         ),
         "lyrics": """[Intro]
-श्री कृष्ण गोविंद हरे मुरारी...
-हे नाथ नारायण वासुदेवा...
-राधे राधे... बोलो राधे राधे...
+Hare Krishna Hare Rama... Radhe Radhe!
+Govind Bolo Hari Gopal Bolo...
 
 [Verse 1]
-माखन चोर नंद किशोरा, मोर मुकुट बनवारी
-तेरी मुरली की मधुर तान पे, झूमे दुनिया सारी
-यमुना तीरे धेनु चरावे, गोपियों संग मुस्काए
-जो भी ध्यावे मन से तुझको, भवसागर तर जाए
+Achyutam Keshavam Krishna Damodaram
+Rama Narayanam Janaki Vallabham
+Kaun Kehte Hain Bhagwan Aate Nahin
+Gopiyon Ki Tarah Hum Bulate Nahin
 
 [Chorus]
-गोविंदा गोपाला, मुरलीधर कान्हा
-मन मंदिर में आजा, मेरे नटवर कान्हा
-गोविंदा गोपाला, मुरलीधर कान्हा
-राधे राधे बोलो, मेरे सांवरिया कान्हा
+Radhe Radhe, Radhe Radhe
+Radhe Barsane Wali Radhe
+Shyam Se Milade Radhe
+Mere Krishna Murari Radhe
 
 [Verse 2]
-सुदामा की प्रीत निभाई, अर्जुन का रथ हांका
-धर्म की रक्षा करने आए, रूप अनुपम झांकी
-चरण कमल में नमन हमारा, हे करुणा के सागर
-तेरी लगन में खो जाए ये, मन का सूना गागर
+Makhan Chor Murari Mohan, Bansuri Bajaye
+Yamuna Ke Teere Prabhu Ji, Sabka Mann Harshaye
+Choti Choti Gaiya Chote Chote Gwal
+Choto So Mero Madan Gopal
 
 [Chorus]
-गोविंदा गोपाला, मुरलीधर कान्हा
-मन मंदिर में आजा, मेरे नटवर कान्हा
-गोविंदा गोपाला, मुरलीधर कान्हा
-राधे राधे बोलो, मेरे सांवरिया कान्हा
+Radhe Radhe, Radhe Radhe
+Radhe Barsane Wali Radhe
+Shyam Se Milade Radhe
+Mere Krishna Murari Radhe
 
 [Drop]
-हरे कृष्णा हरे रामा... राधे राधे...
+Hare Krishna Hare Krishna, Krishna Krishna Hare Hare...
+Hare Rama Hare Rama, Rama Rama Hare Hare...
 
 [Outro]
-जय श्री कृष्णा... राधे राधे...""",
+Radhe Radhe... Jai Shri Krishna!""",
+    },
+    {
+        "deity": "Lord Hanuman",
+        "scene_file": "hanuman_scene.png",
+        "title_hi": "दुनिया चले ना श्री राम के बिना | जय बजरंगबली डीजे भजन",
+        "title_en": "Duniya Chale Na Shri Ram Ke Bina | Jai Bajrangbali Power DJ Bhajan",
+        "short_caption": "जय वीर बजरंगी! संकटमोचन श्री हनुमान का शक्तिशाली डीजे भक्ति गान 🙏 #Hanuman #Bajrangbali #BhajanAabha",
+        "bpm": 132,
+        "prompt": (
+            "High-octane stadium-energy Indian DJ devotional remix, 132 BPM, 4/4, "
+            "thunderous nagada and punjabi dhol, brass fanfare drops, heavy driving synth sub-bass, "
+            "heroic triumphant devotional vocals, "
+            "flawless Hindi pronunciation of Jai Bajrangbali and Hanuman mantras. "
+            "NOT dull, NOT quiet."
+        ),
+        "lyrics": """[Intro]
+Jai Shri Ram! Jai Veer Bajrangi!
+Pawansut Hanuman Ki Jai!
+
+[Verse 1]
+Duniya Chale Na Shri Ram Ke Bina
+Ram Ji Chale Na Hanuman Ke Bina
+Sindoor Chola Tan Par Sohe, Gada Haath Mein Dhari
+Sankat Harne Wale Swami, Kripa Karo Kripakari
+
+[Chorus]
+Jai Bajrangbali, Jai Jai Bajrangbali
+Sankat Mochan Naam Tiharo, Jai Bajrangbali
+Jai Bajrangbali, Jai Jai Bajrangbali
+Ram Bhakt Shiromani, Jai Bajrangbali
+
+[Verse 2]
+Lanka Jalai Pal Mein Prabhu Ne, Sur Asur Balihari
+Sanjivani Booti Laye Swami, Lakshman Praan Ubari
+Jahan Jahan Kirtan Ram Ka Hove, Wahan Wahan Tum Padhare
+Haath Jodkar Kare Vandana, Bhakton Ke Sankat Taare
+
+[Chorus]
+Jai Bajrangbali, Jai Jai Bajrangbali
+Sankat Mochan Naam Tiharo, Jai Bajrangbali
+Jai Bajrangbali, Jai Jai Bajrangbali
+Ram Bhakt Shiromani, Jai Bajrangbali
+
+[Drop]
+Jai Jai Shri Ram... Bolo Bajrangbali Ki Jai!
+
+[Outro]
+Om Hanumate Namah... Jai Bajrangbali!""",
     },
     {
         "deity": "Lord Rama",
-        "title_hi": "अयोध्या के राजा राम | मर्यादा पुरुषोत्तम भजन",
-        "title_en": "Raghunandan Raja Ram | Royal Devotional DJ Bhajan",
-        "short_caption": "श्री राम जय राम जय जय राम! मर्यादा पुरुषोत्तम राजा राम का पावन भजन 🙏 #JaiShreeRam #Ayodhya #BhajanAabha",
+        "scene_file": "rama_scene.png",
+        "title_hi": "रघुपति राघव राजा राम | राम आएंगे डीजे भजन",
+        "title_en": "Raghupati Raghav Raja Ram | Ram Aayenge Majestic DJ Bhajan",
+        "short_caption": "जय श्री राम! रघुपति राघव राजा राम और राम आएंगे का दिव्य डीजे रीमिक्स 🙏 #ShriRam #Ayodhya #BhajanAabha",
         "bpm": 128,
         "prompt": (
-            "Modern high-energy Hindi devotional Rama bhajan, 128 BPM, 4/4, majestic and powerful male vocal, "
-            "traditional dholak, celebratory nagada beats, temple bells, shehnai and synth brass layers, "
-            "grand anthemic devotional chorus, pristine Hindi vocal diction and emotion. "
-            "NOT low tempo, NOT silent."
+            "Majestic modern Indian DJ devotional anthem, 128 BPM, 4/4, "
+            "ceremonial dhol beats, soaring brass horns, electronic pumping bassline, "
+            "uplifting stadium devotional chorus, "
+            "pristine clear pronunciation of Raghupati Raghav and Shri Ram. "
+            "NOT slow, NOT ambient."
         ),
         "lyrics": """[Intro]
-श्री राम... श्री राम... जय जय राम...
-मंगल भवन अमंगल हारी...
+Shri Ram Jai Ram Jai Jai Ram...
+Siyavar Ramchandra Ki Jai!
 
 [Verse 1]
-अयोध्या नगरी चमकी न्यारी, लौटे रघुकुल नंदन
-चरण धूलि माथे पर धारे, करते प्रभु वंदन
-धनुष बाण कर में सोहे, मुख पर दिव्य उजाला
-भक्तों के संकट को काटे, कौशल्या का लाला
+Raghupati Raghav Raja Ram
+Patit Pavan Sita Ram
+Sundar Chhabi Man Bhavani
+Ayodhya Ke Raj Dulare
 
 [Chorus]
-श्री राम जय राम, जय जय राम
-मेरे मन के दीप में, बसते श्री राम
-श्री राम जय राम, जय जय राम
-रघुनंदन राघव, राजा राम
+Ram Aayenge, Ram Aayenge
+Mere Ram Lalla Aayenge
+Raghupati Raghav Raja Ram
+Patit Pavan Sita Ram
 
 [Verse 2]
-मर्यादा की मूरत स्वामी, करुणा के अवतार
-दीन दयाल कृपा सिंधु प्रभु, जग के पालनहार
-तेरा नाम ही नौका प्रभु जी, तेरा नाम किनारा
-राम नाम के सुमिरन से ही, संवरे जीवन सारा
+Mangal Bhavan Amangal Hari
+Dravahu Su Dasharath Ajir Bihari
+Maryada Purushottam Swami, Karuna Ke Sagar
+Charan Kamal Mein Sheesh Nawate, Jai Kripa Ke Aagar
 
 [Chorus]
-श्री राम जय राम, जय जय राम
-मेरे मन के दीप में, बसते श्री राम
-श्री राम जय राम, जय जय राम
-रघुनंदन राघव, राजा राम
+Ram Aayenge, Ram Aayenge
+Mere Ram Lalla Aayenge
+Raghupati Raghav Raja Ram
+Patit Pavan Sita Ram
 
 [Drop]
-जय श्री राम... सियावर रामचंद्र की जय...
+Jai Shri Ram! Ayodhya Pati Ramchandra Ki Jai!
 
 [Outro]
-श्री राम जय राम जय जय राम... जय श्री राम...""",
+Shri Ram Jai Ram Jai Jai Ram... Jai Shri Ram!""",
     },
     {
         "deity": "Goddess Durga",
-        "title_hi": "जय माँ भवानी | महिषासुर मर्दिनी शक्ति भजन",
-        "title_en": "Maa Durga Bhavani | Powerful Electronic Devotional Bhajan",
-        "short_caption": "जय माता दी! महिषासुर मर्दिनी माँ भवानी की शक्ति उपासना 🙏 #MaaDurga #Navratri #BhajanAabha",
+        "scene_file": "durga_scene.png",
+        "title_hi": "चलो बुलावा आया है | जय माँ दुर्गे डीजे भजन",
+        "title_en": "Chalo Bulawa Aaya Hai | Jai Maa Durge Navratri DJ Dance Bhajan",
+        "short_caption": "जय माता दी! माँ दुर्गा का सबसे प्रसिद्ध भक्ति डीजे गान 🙏 #MaaDurga #Navratri #BhajanAabha",
         "bpm": 130,
         "prompt": (
-            "Modern high-energy Hindi devotional Durga bhajan, 130 BPM, 4/4, fierce inspiring male devotional lead, "
-            "pounding dhak and war drums, temple gongs, trishul resonant chiming, heavy EDM sub bass drops, "
-            "soaring triumphant chorus, crisp Sanskrit-Hindi diction, dynamic festival atmosphere. "
-            "NOT timid, NOT whispery."
+            "Electrifying festive DJ Navratri devotional remix, 130 BPM, 4/4, "
+            "energetic dhak and dhol drums, resonant trishul chimes, pumping electronic dance drops, "
+            "celebratory festive vocals, crisp Sanskrit-Hindi diction of Jai Mata Di and Maa Durge. "
+            "NOT soft, NOT timid."
         ),
         "lyrics": """[Intro]
-या देवी सर्वभूतेषु शक्तिरूपेण संस्थिता...
-नमस्तस्यै नमस्तस्यै नमस्तस्यै नमो नमः...
-जय माता दी! जय माँ भवानी!
+Jai Mata Di! Jai Maa Jagdambe!
+Sarva Mangala Mangalye Shive Sarvartha Sadhike...
 
 [Verse 1]
-सिंह सवारी कर के आई, माँ जगदम्बे भवानी
-अष्टभुजा में अस्त्र सजे हैं, महिमा अमर पुरानी
-दुष्ट दलन संहारन मैया, भक्तों की रखवाली
-तेरी कृपा से रोशन होती, जग की डाली डाली
+Chalo Bulawa Aaya Hai, Mata Ne Bulaya Hai
+Unche Parvat Par Baithe Hai, Sherawali Maiya
+Ashta Bhuja Mein Astra Saje Hain, Karti Sabki Bhalayi
+Laal Chunariya Sheesh Pe Sohe, Jagat Kalyani Aayi
 
 [Chorus]
-जय माँ अंबे, जय माँ दुर्गे
-हे कल्याणी, जय माँ दुर्गे
-जय माँ अंबे, जय माँ दुर्गे
-सबकी झोली भरती मैया
+Jai Maa Ambe, Jai Maa Durge
+Jai Jai Bhavani, Jai Maa Durge
+Jai Maa Ambe, Jai Maa Durge
+Bhakton Ki Rakshak, Jai Maa Durge
 
 [Verse 2]
-महिषासुर को पल में मारा, देवों का मान बढ़ाया
-जब भी विपदा आई जग पर, तेने हाथ उठाया
-लाल चुनरिया शीश पे सोहे, नयनों में अमृत धारा
-माँ की भक्ति में तर जाए, सारा जगत पसारा
+Mahishasur Mardini Maiya, Asur Nikandan Haari
+Teri Kripa Se Roshan Hoti, Yeh Duniya Sari
+Jholi Bhar De Sabki Mata, Dware Tere Aaye
+Jo Bhi Teri Sharan Mein Aaye, Bhav Se Paar Ho Jaye
 
 [Chorus]
-जय माँ अंबे, जय माँ दुर्गे
-हे कल्याणी, जय माँ दुर्गे
-जय माँ अंबे, जय माँ दुर्गे
-सबकी झोली भरती मैया
+Jai Maa Ambe, Jai Maa Durge
+Jai Jai Bhavani, Jai Maa Durge
+Jai Maa Ambe, Jai Maa Durge
+Bhakton Ki Rakshak, Jai Maa Durge
 
 [Drop]
-जय दुर्गे... जय भवानी... जय माता दी!
+Bolo Saanche Darbar Ki Jai... Jai Mata Di!
 
 [Outro]
-बोलो सांचे दरबार की जय... जय माँ दुर्गे...""",
+Jai Mata Di... Jai Maa Durge...""",
     },
     {
         "deity": "Goddess Kali",
-        "title_hi": "महाकाली खप्पर वाली | रणचंडी शक्ति भजन",
-        "title_en": "Mahakali Kaalratri | Thundering Devotional Bass Bhajan",
-        "short_caption": "जय माँ महाकाली! दुष्ट विनाशिनी माँ कालरात्रि का प्रचंड स्तुति भजन 🙏 #MahaKali #Kaalratri #BhajanAabha",
+        "scene_file": "kali_scene.png",
+        "title_hi": "महाकाली खप्पर वाली | ॐ जयंती मंगला काली डीजे भजन",
+        "title_en": "Mahakali Khappar Wali | Om Jayanti Mangala Kali EDM Bass Bhajan",
+        "short_caption": "जय माँ महाकाली! माँ कालरात्रि का प्रचंड स्तुति डीजे भक्ति गान 🙏 #MahaKali #Kaalratri #BhajanAabha",
         "bpm": 132,
         "prompt": (
-            "Modern intense Hindi devotional Kali bhajan, 132 BPM, 4/4, commanding reverberant male vocal, "
-            "thunderous damru and war drums, deep hypnotic basslines, sharp crash cymbals, fast dholak tempo, "
-            "electrifying energetic chorus, pristine authentic Hindi devotional pronunciation. "
+            "Thunderous intense Indian EDM bass devotional track, 132 BPM, 4/4, "
+            "rapid war dholak, deep sub-bass vibrations, sharp temple bells, "
+            "hypnotic energetic vocals, immaculate mantra enunciation of Om Kreem Kalikayai Namah. "
             "NOT slow, NOT dull."
         ),
         "lyrics": """[Intro]
-ॐ क्रीं कालिकायै नमः...
-जय माँ काली... जय महाकाली...
+Om Kreem Kalikayai Namah...
+Om Jayanti Mangala Kali Bhadrakali Kapalini...
 
 [Verse 1]
-खप्पर वाली खड्ग विधारिणी, विकराल रूप तुम्हारा
-मुंडमाल गल सोहे मैया, तू ही सत्य सहारा
-काल का भी काल तू माता, भय को भगाने वाली
-भक्तों के संकट को हरने, रण में आई काली
+Khappar Wali Khadga Viraje, Kaalratri Mata
+Dusht Damani Shaktishali, Tu Hi Bhagya Vidhata
+Mundmal Gale Mein Sohe, Cham Cham Chamkanta
+Bhakton Ke Dukh Harne Wali, Mahima Ananta
 
 [Chorus]
-जय महाकाली, भद्रकाली
-जय कल्याणी, खप्पर वाली
-जय महाकाली, भद्रकाली
-मात हमारी, संकटहारी
+Jai Mahakali, Jai Bhadrakali
+Sankat Harini, Khappar Wali
+Jai Mahakali, Jai Bhadrakali
+Adishakti Mata Hamari
 
 [Verse 2]
-रक्तबीज का मान मिटाया, चंड मुंड संहारे
-तेरी शक्ति का कोई न पावे, पार हे जग उजियारे
-शिव के उर पर पांव धरंती, शांत हुई महामाया
-तेरी शरण में जो भी आया, निर्भय जीवन पाया
+Raktbeej Ka Maan Mitaya, Chund Mund Sanhare
+Maa Ke Krodh Se Doli Dharti, Sur Aur Asur Hare
+Shiv Ji Ke Urr Par Paon Dhari, Shant Hui Mahamaya
+Teri Sharan Mein Aakar Humne, Amrit Jeevan Paya
 
 [Chorus]
-जय महाकाली, भद्रकाली
-जय कल्याणी, खप्पर वाली
-जय महाकाली, भद्रकाली
-मात हमारी, संकटहारी
+Jai Mahakali, Jai Bhadrakali
+Sankat Harini, Khappar Wali
+Jai Mahakali, Jai Bhadrakali
+Adishakti Mata Hamari
 
 [Drop]
-ॐ जयंती मंगला काली भद्रकाली कपालिनी...
+Om Jayanti Mangala Kali Bhadrakali Kapalini...
+Durga Kshama Shiva Dhatri Swaha Swadha Namostute!
 
 [Outro]
-जय माँ काली... जय माँ आदिशक्ति...""",
+Jai Maa Kali... Jai Mahakali!""",
     },
 ]
 

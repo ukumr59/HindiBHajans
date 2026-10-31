@@ -110,21 +110,21 @@ def run_kernel(env,kernel):
 def main(seconds):
     token=os.getenv('KAGGLE_API_TOKEN') or os.getenv('KAGGLE_API_TOKEN3')
     if not token: raise RuntimeError('KAGGLE_API_TOKEN missing')
-    image=ROOT/'assets'/'singer_image.png'; audio=OUT/'bhajan_source.mp3'
+    from app.deity_catalog import get_daily_bhajan
+    daily_entry = get_daily_bhajan()
+    deity_scene = ROOT / 'assets' / 'deities' / daily_entry.get('scene_file', '')
+    image = deity_scene if deity_scene.exists() else (ROOT / 'assets' / 'singer_image.png')
+    audio = OUT / 'bhajan_source.mp3'
     if not image.exists() or not audio.exists(): raise RuntimeError('canonical inputs missing')
     if not 180<=seconds<=300 or seconds%15: raise RuntimeError(f'invalid duration {seconds}')
+    print(f'ECHOMIMIC_INPUT_SCENE={image.name} DEITY={daily_entry["deity"]}', flush=True)
     env=dict(os.environ); env['KAGGLE_API_TOKEN']=token
     publish_inputs(env,image,audio,seconds)
     run_id=os.getenv('GITHUB_RUN_ID','manual')
-    # Check if a completed kernel from an earlier attempt or recent run already produced the master video
+    # Check if a completed kernel from an earlier attempt of this run already produced the master video
     check_kernels = [
         f'{KERNEL_PREFIX}-{run_id}-1'.lower(),
         f'{KERNEL_PREFIX}-{run_id}-2'.lower(),
-        'bhajanaabha/hindibhajans-echomimic-41130931881-1',
-        'bhajanaabha/hindibhajans-echomimic-41004744201-1',
-        'bhajanaabha/hindibhajans-echomimic-41004744201-2',
-        'bhajanaabha/hindibhajans-echomimic-40832807934-1',
-        'bhajanaabha/hindibhajans-echomimic-40832807934-2',
     ]
     for prev_k in check_kernels:
         st = subprocess.run(['kaggle','kernels','status',prev_k], cwd=ROOT, env=env, capture_output=True, text=True)

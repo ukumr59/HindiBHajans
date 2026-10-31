@@ -169,8 +169,9 @@ def dispatch(seconds: int) -> None:
         print('KAGGLE_ACE_STEP_MASTER_AUDIO_ALREADY_EXISTS', target_mp3, flush=True)
         return
 
-    # Check previous static kernel output in case it completed right after runner timeout
-    check_kernels = [KAGGLE_KERNEL]
+    run_id = os.getenv('GITHUB_RUN_ID', 'manual')
+    # Check if an earlier attempt of the current run already produced the audio
+    check_kernels = [f"bhajanaabha/hindibhajans-ace-{run_id}-1".lower()]
     for prev_k in check_kernels:
         st = subprocess.run(['kaggle', 'kernels', 'status', prev_k], capture_output=True, text=True, env=env)
         st_low = (st.stdout or st.stderr or '').lower()
