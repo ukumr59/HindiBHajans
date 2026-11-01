@@ -46,7 +46,7 @@ def publish_inputs(env,image,audio,seconds):
     wait_dataset(env)
 
 def wait_kernel(env,kernel):
-    deadline=time.time()+115*60
+    deadline=time.time()+125*60
     queued_since = None
     MAX_QUEUE_WAIT = 35 * 60
     while time.time()<deadline:
@@ -98,7 +98,7 @@ def run_kernel(env,kernel):
           'dataset_sources':[INPUT_DATASET],'competition_sources':[],'kernel_sources':[],'model_sources':[]}
     (KDIR/'kernel-metadata.json').write_text(json.dumps(meta,indent=2))
     run([sys.executable,'-m','py_compile',str(KDIR/'worker.py'),str(KDIR/'lipsync_quality_gate.py')],env)
-    push=run(['kaggle','kernels','push','-p',str(KDIR),'--accelerator','NvidiaTeslaT4','--timeout',str(7200)],env)
+    push=run(['kaggle','kernels','push','-p',str(KDIR),'--accelerator','NvidiaTeslaT4','--timeout',str(9000)],env)
     push_text=(push.stdout or '')+'\n'+(push.stderr or '')
     low=push_text.lower()
     if 'maximum weekly gpu quota' in low or ('gpu quota' in low and 'reached' in low):
@@ -114,6 +114,8 @@ def main(seconds):
     daily_entry = get_daily_bhajan()
     deity_scene = ROOT / 'assets' / 'deities' / daily_entry.get('scene_file', '')
     image = deity_scene if deity_scene.exists() else (ROOT / 'assets' / 'singer_image.png')
+    shutil.copy2(image, ROOT / 'assets' / 'singer_image.png')
+    shutil.copy2(image, OUT / 'reference_scene.png')
     audio = OUT / 'bhajan_source.mp3'
     if not image.exists() or not audio.exists(): raise RuntimeError('canonical inputs missing')
     if not 180<=seconds<=300 or seconds%15: raise RuntimeError(f'invalid duration {seconds}')

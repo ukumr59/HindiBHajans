@@ -116,41 +116,12 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf output/shorts; mkdir -p output/shorts
-          # Face-centred portrait crop directly from synthesized master video
-          read -r SRC_W SRC_H FACE_X FACE_Y FACE_W FACE_H <<< "$(python - <<'PY'
-          import cv2
-          cap=cv2.VideoCapture('output/master.mp4')
-          ok,frame=cap.read()
-          cap.release()
-          if not ok or frame is None: raise SystemExit('MASTER_VIDEO_READ_FAILED')
-          h,w=frame.shape[:2]
-          det=cv2.FaceDetectorYN.create('qa_models/face_detection_yunet_2023mar.onnx','',(w,h),0.70,0.30,20)
-          _,faces=det.detect(frame)
-          if faces is None or len(faces)==0:
-              print(w,h,w//4,h//4,w//2,h//2)
-          else:
-              f=max(faces,key=lambda x:float(x[2]*x[3]))
-              print(w,h,*[int(round(float(v))) for v in f[:4]])
-          PY
-          )"
-          export SRC_W SRC_H FACE_X FACE_Y FACE_W FACE_H
-          read -r CROP_W CROP_H CROP_X CROP_Y <<< "$(python - <<'PY'
-          import os
-          w,h,fx,fy,fw,fh=map(int,[os.environ['SRC_W'],os.environ['SRC_H'],os.environ['FACE_X'],os.environ['FACE_Y'],os.environ['FACE_W'],os.environ['FACE_H']])
-          crop_w=min(w,max(int(round(fw*1.8)),int(round(h*9/16))))
-          crop_h=min(h,int(round(crop_w*16/9)))
-          crop_w=int(round(crop_h*9/16))
-          cx=fx+fw/2
-          cy=fy+fh*0.55
-          x=max(0,min(int(round(cx-crop_w/2)),w-crop_w))
-          y=max(0,min(int(round(cy-crop_h*0.40)),h-crop_h))
-          print(crop_w,crop_h,x,y)
-          PY
-          )"
-          export CROP_W CROP_H CROP_X CROP_Y
+          # 9:16 vertical shorts preserving entire 3D deity idol and singer framing
           for n in 0 1 2; do
             start=$((n*45))
-            ffmpeg -y -v error -ss "$start" -i output/master.mp4 -t 45               -filter_complex "[0:v]crop=${CROP_W}:${CROP_H}:${CROP_X}:${CROP_Y},scale=1080:1920:flags=lanczos[v]"               -map "[v]" -map 0:a:0 -c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart "output/shorts/short-$((n+1)).mp4"
+            ffmpeg -y -v error -ss "$start" -i output/master.mp4 -t 45 \
+              -filter_complex "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=25:5[bg];[0:v]scale=1080:1080:flags=lanczos[fg];[bg][fg]overlay=0:420[v]" \
+              -map "[v]" -map 0:a:0 -c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart "output/shorts/short-$((n+1)).mp4"
           done
 
       - name: HARD visual gate on every Short

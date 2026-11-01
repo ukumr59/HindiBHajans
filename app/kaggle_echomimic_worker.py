@@ -309,7 +309,7 @@ test_cases:
         '-L',
         str(target_frames),
         '--steps',
-        '8',
+        '6',
         '--fps',
         str(FPS),
         '--cfg',
