@@ -127,6 +127,8 @@ def main(seconds):
     check_kernels = [
         f'{KERNEL_PREFIX}-{run_id}-1'.lower(),
         f'{KERNEL_PREFIX}-{run_id}-2'.lower(),
+        'bhajanaabha/hindibhajans-echomimic-41278060393-1',
+        'bhajanaabha/hindibhajans-echomimic-41278060393-2',
     ]
     for prev_k in check_kernels:
         st = subprocess.run(['kaggle','kernels','status',prev_k], cwd=ROOT, env=env, capture_output=True, text=True)

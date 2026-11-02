@@ -313,7 +313,7 @@ test_cases:
         '--fps',
         str(FPS),
         '--cfg',
-        '1.8',
+        '1.0',
         '--facecrop_dilation_ratio',
         '-1.0',
         '--facemusk_dilation_ratio',
