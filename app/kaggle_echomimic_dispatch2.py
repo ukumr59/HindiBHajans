@@ -112,9 +112,7 @@ def main(seconds):
     if not token: raise RuntimeError('KAGGLE_API_TOKEN missing')
     from app.deity_catalog import get_daily_bhajan
     daily_entry = get_daily_bhajan()
-    deity_scene = ROOT / 'assets' / 'deities' / daily_entry.get('scene_file', '')
-    image = deity_scene if deity_scene.exists() else (ROOT / 'assets' / 'singer_image.png')
-    shutil.copy2(image, ROOT / 'assets' / 'singer_image.png')
+    image = ROOT / 'assets' / 'singer_image.png'
     shutil.copy2(image, OUT / 'reference_scene.png')
     audio = OUT / 'bhajan_source.mp3'
     if not image.exists() or not audio.exists(): raise RuntimeError('canonical inputs missing')
@@ -127,8 +125,6 @@ def main(seconds):
     check_kernels = [
         f'{KERNEL_PREFIX}-{run_id}-1'.lower(),
         f'{KERNEL_PREFIX}-{run_id}-2'.lower(),
-        'bhajanaabha/hindibhajans-echomimic-41278060393-1',
-        'bhajanaabha/hindibhajans-echomimic-41278060393-2',
     ]
     for prev_k in check_kernels:
         st = subprocess.run(['kaggle','kernels','status',prev_k], cwd=ROOT, env=env, capture_output=True, text=True)
