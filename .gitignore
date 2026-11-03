@@ -5,3 +5,6 @@ __pycache__/
 *.pyc
 output/
 qa_models/
+test_inspect/
+canonical_original.png
+app/musetalk_worker_ref.py
