@@ -36,8 +36,8 @@ OUT = ROOT / 'outputs'
 REPO = ROOT / 'ACE-Step-1.5'
 SECONDS = ''' + str(seconds) + r'''
 ACE_STEP_COMMIT = ''' + repr(ACE_STEP_COMMIT) + r'''
-LYRICS = r''' + repr(lyrics) + r'''
-PROMPT = r''' + repr(prompt) + r'''
+LYRICS = ''' + repr(lyrics) + r'''
+PROMPT = ''' + repr(prompt) + r'''
 BPM = ''' + str(bpm) + r'''
 
 

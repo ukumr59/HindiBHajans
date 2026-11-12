@@ -271,11 +271,12 @@ def extract_portrait_crop(image_path: Path, output_crop_path: Path) -> tuple[int
     # Face bounding box for canonical 512x512 singer image is centered around [191, 45, 100, 136]
     # To be fully robust, search with YuNet if available, else use fallback geometry
     cx, cy = w // 2, int(h * 0.22)
-    crop_size = int(max(w, h) * 0.58)  # ~299x299 crop
-    x0 = max(0, int(cx - crop_size // 2))
+    cw = int(w * 0.586)  # 300 for 512
+    ch = int(h * 0.550)  # 282 for 512 (fingertips at y=285)
+    x0 = max(0, (w - cw) // 2)
     y0 = 0
-    x1 = min(w, x0 + crop_size)
-    y1 = min(h, y0 + crop_size)
+    x1 = min(w, x0 + cw)
+    y1 = min(h, y0 + ch)
 
     crop = img[y0:y1, x0:x1]
     crop_512 = cv2.resize(crop, (512, 512), interpolation=cv2.INTER_LANCZOS4)

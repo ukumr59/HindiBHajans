@@ -73,12 +73,24 @@ jobs:
           api=KaggleApi(); api.authenticate(); print('KAGGLE_AUTH_SMOKE_TEST=PASS')
           PY
 
+      - name: Cache visual-QA models
+        id: cache-qa-models
+        uses: actions/cache@v4
+        with:
+          path: qa_models
+          key: qa-models-${{ runner.os }}-v1
+
       - name: Download pinned visual-QA models
+        if: steps.cache-qa-models.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           mkdir -p qa_models
-          curl -L --fail --retry 3 -o qa_models/face_detection_yunet_2023mar.onnx https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx
-          curl -L --fail --retry 3 -o qa_models/face_recognition_sface_2021dec.onnx https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx
+          curl -L --fail --retry 5 --retry-all-errors --http1.1 -o qa_models/face_detection_yunet_2023mar.onnx https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx
+          curl -L --fail --retry 5 --retry-all-errors --http1.1 -o qa_models/face_recognition_sface_2021dec.onnx https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx
+
+      - name: Verify visual-QA models
+        run: |
+          set -euo pipefail
           test "$(stat -c%s qa_models/face_detection_yunet_2023mar.onnx)" -gt 100000
           test "$(stat -c%s qa_models/face_recognition_sface_2021dec.onnx)" -gt 10000000
 
@@ -208,7 +220,7 @@ jobs:
           import json,os
           from pathlib import Path
           p=Path('state/current.json'); d=json.loads(p.read_text()) if p.exists() else {}
-          d.update({'workflow_run_id':os.environ['GITHUB_RUN_ID'],'workflow':'bhajan-daily-production','audio_model':'ACE-Step-v1.5-turbo','audio_backend':'KAGGLE_FREE_T4','video_backend':'KAGGLE_FREE_T4_MUSETALK','video_model':'MuseTalk-1.5','shorts':3,'publishing':'youtube+facebook+instagram' if os.environ.get('RELEASE_TAG') else 'not_run'})
+          d.update({'workflow_run_id':os.environ['GITHUB_RUN_ID'],'workflow':'bhajan-daily-production','audio_model':'ACE-Step-v1.5-turbo','audio_backend':'KAGGLE_FREE_T4','video_backend':'KAGGLE_FREE_T4_ECHOMIMIC','video_model':'EchoMimic-Acc-Composite','shorts':3,'publishing':'youtube+facebook+instagram' if os.environ.get('RELEASE_TAG') else 'not_run'})
           p.write_text(json.dumps(d,ensure_ascii=False,indent=2))
           PY
           git config user.name github-actions[bot]
