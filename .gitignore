@@ -13,3 +13,9 @@ run_log.txt
 
 crop_*.png
 composite_*.png
+
+comp_*.png
+diff_*.png
+mask_*.png
+neck_*.png
+run_*_verify/
