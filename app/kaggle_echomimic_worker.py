@@ -232,6 +232,11 @@ def setup_echomimic_repo(repo: Path):
         txt = txt.replace('\r\n', '\n').replace(target_block.replace('\r\n', '\n'), replacement_block)
         txt = txt.replace("xyxy = np.round(xyxy).astype('int')", "xyxy = [int(round(float(x))) for x in select_bbox[:4]]")
         txt = txt.replace('xyxy = np.round(xyxy).astype(int)', "xyxy = [int(round(float(x))) for x in select_bbox[:4]]")
+                # Record EchoMimic native crop_rect so compositor can paste back with 100% pixel-perfect alignment
+        txt = txt.replace(
+            'face_img, _ = crop_and_pad(face_img, crop_rect)',
+            'face_img, _ = crop_and_pad(face_img, crop_rect); import json; open("./data/crop_rect.json", "w").write(json.dumps([int(x) for x in crop_rect])); print("RECORDED_CROP_RECT", crop_rect, flush=True)'
+        )
         infer_file.write_text(txt, encoding='utf-8')
         print('ECHOMIMIC_INFER_PATCHES=APPLIED', flush=True)
 
@@ -285,29 +290,34 @@ def extract_portrait_crop(image_path: Path, output_crop_path: Path) -> tuple[int
     return (x0, y0, x1, y1)
 
 
-def create_feather_mask(cw: int, ch: int, x0: int, y0: int) -> np.ndarray:
-    """Create an anatomical soft feathered mask centered on face/head and extending down through the collar opening.
+def create_feather_mask(cw: int, ch: int) -> np.ndarray:
+    """Create an anatomical soft feathered mask centered on face/head and extending down to upper neck.
     Guarantees:
     - 0% background flicker (temple, deity, diyas remain 100% frozen and pristine)
     - 0 visible seams or rectangular window halos (mask follows natural head/jaw/neck contours)
     - Shoulders, folded hands in pranam, and temple background remain 100% untouched
     - Natural living face (blinking, head movement, authentic singing)
     """
-    crop_mask = np.zeros((ch, cw), dtype=np.float32)
-    cx = 256 - x0
-    cy = 115
-    cv2.ellipse(crop_mask, (cx, cy), (86, 100), 0, 0, 360, 1.0, -1)
+    mask = np.zeros((ch, cw), dtype=np.float32)
+    cx = cw // 2
+    cy = int(ch * 0.48)
+    rx = int(cw * 0.44)
+    ry = int(ch * 0.44)
+    cv2.ellipse(mask, (cx, cy), (rx, ry), 0, 0, 360, 1.0, -1)
+
     neck_pts = np.array([
-        [210 - x0, 160],
-        [302 - x0, 160],
-        [290 - x0, 205],
-        [268 - x0, 250],
-        [256 - x0, 265],
-        [244 - x0, 250],
-        [222 - x0, 205]
+        [cx - int(cw * 0.22), cy + int(ry * 0.6)],
+        [cx + int(cw * 0.22), cy + int(ry * 0.6)],
+        [cx + int(cw * 0.16), ch - 1],
+        [cx - int(cw * 0.16), ch - 1]
     ], dtype=np.int32)
-    cv2.fillPoly(crop_mask, [neck_pts], 1.0)
-    return cv2.GaussianBlur(crop_mask, (17, 17), 0)
+    cv2.fillPoly(mask, [neck_pts], 1.0)
+
+    fade_len = max(5, int(ch * 0.15))
+    for i in range(fade_len):
+        mask[-(i + 1), :] *= (i / fade_len)
+
+    return cv2.GaussianBlur(mask, (21, 21), 0)
 
 
 def composite_portrait_to_master(
@@ -332,7 +342,7 @@ def composite_portrait_to_master(
     x0, y0, x1, y1 = crop_box
     cw, ch = x1 - x0, y1 - y0
 
-    mask = create_feather_mask(cw, ch, x0, y0)
+    mask = create_feather_mask(cw, ch)
     mask_3ch = np.dstack([mask] * 3)
     bg_crop_region = bg_img[y0:y1, x0:x1].astype(np.float32)
 
@@ -418,9 +428,8 @@ def main():
     data_dir = repo / 'data'
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    # Extract portrait crop for high-resolution expressive face animation
-    portrait_crop_path = data_dir / 'singer_portrait.png'
-    crop_box = extract_portrait_crop(singer_image, portrait_crop_path)
+    # Pass canonical 512x512 singer image directly into EchoMimic (zero pre-crop, zero double-crop distortion)
+    shutil.copy2(singer_image, data_dir / 'singer.png')
 
     # Convert audio to 16kHz mono WAV for EchoMimic Whisper processor
     wav_path = data_dir / 'bhajan.wav'
@@ -444,7 +453,7 @@ weight_dtype: 'fp16'
 
 ## test cases
 test_cases:
-  "data/singer_portrait.png":
+  "data/singer.png":
     - "data/bhajan.wav"
 """
     configs_dir = repo / 'configs' / 'prompts'
@@ -470,8 +479,8 @@ test_cases:
         '--steps', '6',
         '--fps', str(FPS),
         '--cfg', '1.0',
-        '--facecrop_dilation_ratio', '0.6',
-        '--facemusk_dilation_ratio', '0.2',
+        '--facecrop_dilation_ratio', '0.5',
+        '--facemusk_dilation_ratio', '0.1',
         '--context_frames', '16',
         '--context_overlap', '2',
     ]
@@ -489,6 +498,16 @@ test_cases:
     candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     raw_animated_video = candidates[0]
     print(f'ECHOMIMIC_RAW_VIDEO={raw_animated_video} size={raw_animated_video.stat().st_size}', flush=True)
+
+    # Read EchoMimic's native crop_rect for 100% pixel-perfect zero-distortion compositing
+    crop_rect_file = repo / 'data' / 'crop_rect.json'
+    if crop_rect_file.exists():
+        import json
+        crop_box = tuple(json.loads(crop_rect_file.read_text()))
+        print(f'ECHOMIMIC_NATIVE_CROP_BOX={crop_box}', flush=True)
+    else:
+        crop_box = (141, 0, 341, 247)
+        print(f'FALLBACK_CROP_BOX={crop_box}', flush=True)
 
     # Seamlessly composite animated portrait onto the rock-solid canonical background
     final_master = FINAL / 'master.mp4'

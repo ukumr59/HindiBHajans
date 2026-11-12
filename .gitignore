@@ -19,3 +19,6 @@ diff_*.png
 mask_*.png
 neck_*.png
 run_*_verify/
+
+echomimic_native_crop.png
+native_composite_test.png
